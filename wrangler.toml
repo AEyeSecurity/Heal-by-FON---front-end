@@ -1,0 +1,2 @@
+name = "heal-vcf-upload"
+pages_build_output_dir = "dist"
