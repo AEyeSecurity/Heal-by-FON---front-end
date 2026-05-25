@@ -233,7 +233,7 @@ function ModeSelector({ mode, setMode, t }) {
   );
 }
 
-function TurnstileBox({ siteKey, language, onToken, t }) {
+function TurnstileBox({ siteKey, language, onToken, resetKey, t }) {
   const containerRef = useRef(null);
 
   useEffect(() => {
@@ -268,7 +268,7 @@ function TurnstileBox({ siteKey, language, onToken, t }) {
         window.turnstile.remove(widgetId);
       }
     };
-  }, [siteKey, language, onToken]);
+  }, [siteKey, language, onToken, resetKey]);
 
   if (!siteKey) return null;
 
@@ -398,6 +398,7 @@ function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileResetKey, setTurnstileResetKey] = useState(0);
 
   const t = COPY[language];
   const locale = language === "es" ? "es-AR" : "en-US";
@@ -412,6 +413,8 @@ function App() {
     setError(null);
     setPhase("idle");
     setCustomMessage("");
+    setTurnstileToken("");
+    setTurnstileResetKey((current) => current + 1);
     setMessageKey(nextFile ? "fileReady" : "initialMessage");
   }
 
@@ -527,12 +530,14 @@ function App() {
       setCustomMessage("");
       setValidationProgress(100);
       setTurnstileToken("");
+      setTurnstileResetKey((current) => current + 1);
     } catch (caught) {
       setPhase("error");
       setError(caught.message || String(caught));
       setMessageKey("processFailed");
       setCustomMessage("");
       setTurnstileToken("");
+      setTurnstileResetKey((current) => current + 1);
     }
   }
 
@@ -602,6 +607,7 @@ function App() {
           siteKey={TURNSTILE_SITE_KEY}
           language={language}
           onToken={setTurnstileToken}
+          resetKey={turnstileResetKey}
           t={t}
         />
 
