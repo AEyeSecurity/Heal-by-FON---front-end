@@ -43,6 +43,12 @@ const COPY = {
     securityCheck: "Verificacion de seguridad",
     securityCheckHelp: "Protege el backend antes de aceptar VCFs grandes.",
     securityRequired: "Completa la verificacion de seguridad antes de subir el archivo.",
+    duplicateTitle: "VCF ya disponible",
+    duplicateMessage: "Este VCF ya fue subido el {date}. Podes reutilizarlo para validar de nuevo sin cargarlo otra vez.",
+    duplicateUseExisting: "Usar VCF existente",
+    duplicateUploadAgain: "Subir de todos modos",
+    duplicateCancel: "Cancelar",
+    reusingUpload: "Usando el VCF ya subido e iniciando validacion...",
     uploading: "Subiendo el archivo en partes a un espacio aislado...",
     validationStarting: "Iniciando validacion por streaming...",
     validating: "Validando",
@@ -102,6 +108,12 @@ const COPY = {
     securityCheck: "Security check",
     securityCheckHelp: "Protects the backend before accepting large VCF files.",
     securityRequired: "Complete the security check before uploading the file.",
+    duplicateTitle: "VCF already available",
+    duplicateMessage: "This VCF was already uploaded on {date}. You can reuse it to validate again without uploading it.",
+    duplicateUseExisting: "Use existing VCF",
+    duplicateUploadAgain: "Upload anyway",
+    duplicateCancel: "Cancel",
+    reusingUpload: "Using the existing VCF and starting validation...",
     uploading: "Uploading the file in chunks into an isolated workspace...",
     validationStarting: "Starting streaming validation...",
     validating: "Validating",
@@ -283,6 +295,38 @@ function TurnstileBox({ siteKey, language, onToken, resetKey, t }) {
   );
 }
 
+function DuplicateUploadModal({ candidate, locale, onUseExisting, onUploadAgain, onCancel, t }) {
+  if (!candidate) return null;
+  const uploadedAt = new Intl.DateTimeFormat(locale, {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(new Date(candidate.updatedAt || candidate.createdAt));
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="duplicate-title">
+      <section className="duplicate-modal">
+        <h2 id="duplicate-title">{t.duplicateTitle}</h2>
+        <p>{t.duplicateMessage.replace("{date}", uploadedAt)}</p>
+        <div className="duplicate-file">
+          <strong>{candidate.fileName}</strong>
+          <span>{formatBytes(candidate.sizeBytes, locale)}</span>
+        </div>
+        <div className="modal-actions">
+          <button className="secondary-button" type="button" onClick={onCancel}>
+            {t.duplicateCancel}
+          </button>
+          <button className="secondary-button" type="button" onClick={onUploadAgain}>
+            {t.duplicateUploadAgain}
+          </button>
+          <button className="primary-button compact" type="button" onClick={onUseExisting}>
+            {t.duplicateUseExisting}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function ResultPanel({ result, analysisMode, locale, t }) {
   if (!result) return null;
 
@@ -400,6 +444,7 @@ function App() {
   const [error, setError] = useState(null);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileResetKey, setTurnstileResetKey] = useState(0);
+  const [duplicateCandidate, setDuplicateCandidate] = useState(null);
 
   const t = COPY[language];
   const locale = language === "es" ? "es-AR" : "en-US";
@@ -412,6 +457,7 @@ function App() {
     setValidationProgress(0);
     setResult(null);
     setError(null);
+    setDuplicateCandidate(null);
     setPhase("idle");
     setCustomMessage("");
     setTurnstileToken("");
@@ -472,6 +518,20 @@ function App() {
     return completeUpload;
   }
 
+  async function lookupExistingUpload(selectedFile) {
+    const response = await fetch(`${API_BASE}/api/uploads/lookup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fileName: selectedFile.name,
+        sizeBytes: selectedFile.size,
+      }),
+    });
+    const lookup = await readJsonResponse(response);
+    if (!response.ok) return null;
+    return lookup.match || null;
+  }
+
   async function pollValidation(jobId) {
     for (;;) {
       const response = await fetch(`${API_BASE}/api/validations/${jobId}`);
@@ -486,7 +546,7 @@ function App() {
     }
   }
 
-  async function submit() {
+  async function submit({ skipDuplicateCheck = false, reuseUpload = null } = {}) {
     if (!file) return;
     if (TURNSTILE_SITE_KEY && !turnstileToken) {
       setError(t.securityRequired);
@@ -502,9 +562,27 @@ function App() {
     setCustomMessage("");
     setUploadProgress(0);
     setValidationProgress(0);
+    setDuplicateCandidate(null);
 
     try {
-      const upload = await uploadFile(file);
+      let upload = reuseUpload;
+      if (upload) {
+        setUploadProgress(100);
+        setCustomMessage(t.reusingUpload);
+      } else {
+        if (!skipDuplicateCheck) {
+          const existingUpload = await lookupExistingUpload(file);
+          if (existingUpload) {
+            setPhase("idle");
+            setUploadProgress(0);
+            setValidationProgress(0);
+            setDuplicateCandidate(existingUpload);
+            setMessageKey("fileReady");
+            return;
+          }
+        }
+        upload = await uploadFile(file);
+      }
       setPhase("validating");
       setMessageKey("validationStarting");
       setValidationProgress(5);
@@ -634,6 +712,22 @@ function App() {
       </section>
 
       <ResultPanel result={result} analysisMode={analysisMode} locale={locale} t={t} />
+      <DuplicateUploadModal
+        candidate={duplicateCandidate}
+        locale={locale}
+        onCancel={() => setDuplicateCandidate(null)}
+        onUploadAgain={() => {
+          const candidate = duplicateCandidate;
+          setDuplicateCandidate(null);
+          submit({ skipDuplicateCheck: true, reuseUpload: null, ignoredCandidate: candidate });
+        }}
+        onUseExisting={() => {
+          const candidate = duplicateCandidate;
+          setDuplicateCandidate(null);
+          submit({ skipDuplicateCheck: true, reuseUpload: candidate });
+        }}
+        t={t}
+      />
     </main>
   );
 }

@@ -190,6 +190,34 @@ async function loadUpload(uploadId) {
   return upload;
 }
 
+async function findReusableUpload(fileName, sizeBytes, fingerprint) {
+  await mkdir(UPLOAD_ROOT, { recursive: true });
+  const resolvedUploadRoot = path.resolve(UPLOAD_ROOT);
+  const entries = await readdir(resolvedUploadRoot, { withFileTypes: true });
+  const matches = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const uploadDir = path.join(resolvedUploadRoot, entry.name);
+    const resolvedUploadDir = path.resolve(uploadDir);
+    if (!isPathInside(resolvedUploadRoot, resolvedUploadDir)) continue;
+    const raw = await readFile(manifestPath(resolvedUploadDir), "utf8").catch(() => null);
+    if (!raw) continue;
+    const upload = JSON.parse(raw);
+    if (
+      upload.status === "complete" &&
+      upload.fileName === fileName &&
+      Number(upload.sizeBytes) === Number(sizeBytes) &&
+      upload.clientFingerprint === fingerprint
+    ) {
+      matches.push(upload);
+    }
+  }
+
+  matches.sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
+  return matches[0] || null;
+}
+
 async function cleanupStaleUploads() {
   await mkdir(UPLOAD_ROOT, { recursive: true });
   const resolvedUploadRoot = path.resolve(UPLOAD_ROOT);
@@ -308,8 +336,8 @@ async function notifyN8nValidation(job, upload) {
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
-    uploadRoot: UPLOAD_ROOT,
-    validatorScript: VALIDATOR_SCRIPT,
+    storageConfigured: Boolean(UPLOAD_ROOT),
+    validatorConfigured: Boolean(VALIDATOR_SCRIPT),
     maxUploads: MAX_UPLOADS,
     uploadTtlHours: Math.round(UPLOAD_TTL_MS / 60 / 60 / 1000),
     chunkSizeBytes: CHUNK_SIZE_BYTES,
@@ -321,6 +349,34 @@ app.get("/api/health", (_req, res) => {
     turnstileAllowedHostnames: TURNSTILE_SECRET ? TURNSTILE_ALLOWED_HOSTNAMES : [],
     n8nUploadWebhookConfigured: Boolean(N8N_UPLOAD_WEBHOOK_URL),
     n8nValidationWebhookConfigured: Boolean(N8N_VALIDATION_WEBHOOK_URL),
+  });
+});
+
+app.post("/api/uploads/lookup", async (req, res) => {
+  await cleanupStaleUploads();
+
+  const { fileName: rawFileName, sizeBytes: rawSizeBytes } = req.body || {};
+  const fileName = safeFileName(rawFileName);
+  const sizeBytes = Number(rawSizeBytes);
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0 || !isAllowedVcfName(fileName)) {
+    res.json({ match: null });
+    return;
+  }
+
+  const upload = await findReusableUpload(fileName, sizeBytes, clientFingerprint(req));
+  if (!upload) {
+    res.json({ match: null });
+    return;
+  }
+
+  res.json({
+    match: {
+      uploadId: upload.uploadId,
+      fileName: upload.fileName,
+      sizeBytes: upload.sizeBytes,
+      createdAt: upload.createdAt,
+      updatedAt: upload.updatedAt,
+    },
   });
 });
 

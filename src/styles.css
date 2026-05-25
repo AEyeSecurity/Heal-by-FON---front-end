@@ -255,6 +255,12 @@ h1 {
   color: #ffffff;
 }
 
+.primary-button.compact {
+  width: auto;
+  min-width: 180px;
+  margin-top: 0;
+}
+
 .primary-button:disabled {
   cursor: not-allowed;
   background: #b9c1b5;
@@ -559,6 +565,61 @@ h1 {
   color: #7a4d00;
 }
 
+.modal-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(18, 22, 19, 0.45);
+}
+
+.duplicate-modal {
+  width: min(520px, 100%);
+  padding: 22px;
+  border: 1px solid #d9e0d4;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(18, 22, 19, 0.2);
+}
+
+.duplicate-modal h2 {
+  margin-bottom: 8px;
+  font-size: 1.35rem;
+}
+
+.duplicate-modal p {
+  margin-bottom: 16px;
+  color: #425348;
+  line-height: 1.5;
+}
+
+.duplicate-file {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 18px;
+  padding: 12px;
+  border: 1px solid #dfe7d8;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.duplicate-file strong {
+  overflow-wrap: anywhere;
+}
+
+.duplicate-file span {
+  color: #617069;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 @media (max-width: 820px) {
   .metrics-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -635,6 +696,12 @@ h1 {
 
   .mode-options {
     grid-template-columns: 1fr;
+  }
+
+  .modal-actions,
+  .modal-actions button,
+  .primary-button.compact {
+    width: 100%;
   }
 
   .action-panel,
