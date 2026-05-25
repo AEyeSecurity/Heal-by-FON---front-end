@@ -292,6 +292,7 @@ function ResultPanel({ result, analysisMode, locale, t }) {
   const stats = result.variant_stats?.counts || {};
   const topChromosomes = result.variant_stats?.top_chromosomes || [];
   const hasFullStats = analysisMode === "complete" && result.variant_stats?.status === "calculated";
+  const resultFileLabel = result.metadata?.file_name || result.metadata?.upload_id || "";
 
   const basicCards = [
     [t.format, result.metadata?.detected_format || "-"],
@@ -327,7 +328,7 @@ function ResultPanel({ result, analysisMode, locale, t }) {
         <Icon size={22} />
         <div>
           <h2>{isValid ? t.resultValid : isWarning ? t.resultWarning : t.resultInvalid}</h2>
-          <p>{result.metadata?.path}</p>
+          {resultFileLabel && <p>{resultFileLabel}</p>}
         </div>
       </div>
 

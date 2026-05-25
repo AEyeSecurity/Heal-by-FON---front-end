@@ -34,6 +34,7 @@ const INIT_RATE_LIMIT_PER_HOUR = Math.max(
   Number.parseInt(process.env.HEAL_INIT_RATE_LIMIT_PER_HOUR || "10", 10) || 10,
 );
 const TURNSTILE_SECRET = process.env.HEAL_TURNSTILE_SECRET || "";
+const REQUIRE_ORIGIN = process.env.HEAL_REQUIRE_ORIGIN !== "false";
 const N8N_UPLOAD_WEBHOOK_URL = process.env.HEAL_N8N_UPLOAD_WEBHOOK_URL || "";
 const N8N_VALIDATION_WEBHOOK_URL =
   process.env.HEAL_N8N_VALIDATION_WEBHOOK_URL || process.env.HEAL_N8N_WEBHOOK_URL || "";
@@ -43,6 +44,17 @@ const ALLOWED_ORIGINS = (process.env.HEAL_ALLOWED_ORIGINS ||
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+const TURNSTILE_ALLOWED_HOSTNAMES = (process.env.HEAL_TURNSTILE_ALLOWED_HOSTNAMES ||
+  ALLOWED_ORIGINS.map((origin) => {
+    try {
+      return new URL(origin).hostname;
+    } catch {
+      return "";
+    }
+  }).join(","))
+  .split(",")
+  .map((hostname) => hostname.trim().toLowerCase())
+  .filter(Boolean);
 
 const jobs = new Map();
 const uploads = new Map();
@@ -50,7 +62,15 @@ const initRateLimits = new Map();
 
 app.use((req, res, next) => {
   const requestOrigin = req.headers.origin;
-  if (requestOrigin && ALLOWED_ORIGINS.includes(requestOrigin)) {
+  if (requestOrigin && !ALLOWED_ORIGINS.includes(requestOrigin)) {
+    res.status(403).json({ error: "Origin is not allowed." });
+    return;
+  }
+  if (REQUIRE_ORIGIN && !requestOrigin && !["GET", "OPTIONS"].includes(req.method)) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+  if (requestOrigin) {
     res.setHeader("Access-Control-Allow-Origin", requestOrigin);
     res.setHeader("Vary", "Origin");
   }
@@ -141,6 +161,15 @@ function publicUpload(upload) {
   };
 }
 
+function sanitizeValidationResult(result, upload) {
+  const publicResult = JSON.parse(JSON.stringify(result || {}));
+  publicResult.metadata = publicResult.metadata || {};
+  delete publicResult.metadata.path;
+  publicResult.metadata.file_name = upload.fileName;
+  publicResult.metadata.upload_id = upload.uploadId;
+  return publicResult;
+}
+
 async function saveUpload(upload) {
   upload.updatedAt = new Date().toISOString();
   uploads.set(upload.uploadId, upload);
@@ -210,6 +239,10 @@ async function verifyTurnstile(token, remoteIp) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.success) {
     return { ok: false, error: "Turnstile verification failed." };
+  }
+  const hostname = String(result.hostname || "").toLowerCase();
+  if (TURNSTILE_ALLOWED_HOSTNAMES.length > 0 && !TURNSTILE_ALLOWED_HOSTNAMES.includes(hostname)) {
+    return { ok: false, error: "Turnstile hostname is not allowed." };
   }
   return { ok: true };
 }
@@ -283,7 +316,9 @@ app.get("/api/health", (_req, res) => {
     maxFileSizeBytes: MAX_FILE_SIZE_BYTES,
     maxActiveUploadsPerClient: MAX_ACTIVE_UPLOADS_PER_CLIENT,
     initRateLimitPerHour: INIT_RATE_LIMIT_PER_HOUR,
+    requireOrigin: REQUIRE_ORIGIN,
     turnstileRequired: Boolean(TURNSTILE_SECRET),
+    turnstileAllowedHostnames: TURNSTILE_SECRET ? TURNSTILE_ALLOWED_HOSTNAMES : [],
     n8nUploadWebhookConfigured: Boolean(N8N_UPLOAD_WEBHOOK_URL),
     n8nValidationWebhookConfigured: Boolean(N8N_VALIDATION_WEBHOOK_URL),
   });
@@ -559,7 +594,7 @@ app.post("/api/validations", async (req, res) => {
       child.on("close", async () => {
         clearInterval(timer);
         try {
-          const result = JSON.parse(stdout.trim());
+          const result = sanitizeValidationResult(JSON.parse(stdout.trim()), upload);
           job.result = result;
           job.status = "complete";
           job.progress = 100;
