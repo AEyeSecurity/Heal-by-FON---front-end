@@ -107,6 +107,8 @@ VITE_API_BASE=https://your-api.example.com
 VITE_TURNSTILE_SITE_KEY=your-public-turnstile-site-key
 ```
 
+This repository includes `.env.production` with the current public production values for Cloudflare Pages. These are not secrets: Vite exposes every `VITE_*` value to the browser bundle.
+
 Also add the deployed Pages origin to:
 
 ```text
