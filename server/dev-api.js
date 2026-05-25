@@ -21,6 +21,19 @@ const CHUNK_SIZE_BYTES = Math.min(
   24 * 1024 * 1024,
   Math.max(1024 * 1024, Number.parseInt(process.env.HEAL_UPLOAD_CHUNK_SIZE_BYTES || `${8 * 1024 * 1024}`, 10)),
 );
+const MAX_FILE_SIZE_BYTES = Math.max(
+  1024 * 1024,
+  Number.parseInt(process.env.HEAL_MAX_FILE_SIZE_BYTES || `${6 * 1024 * 1024 * 1024}`, 10),
+);
+const MAX_ACTIVE_UPLOADS_PER_CLIENT = Math.max(
+  1,
+  Number.parseInt(process.env.HEAL_MAX_ACTIVE_UPLOADS_PER_CLIENT || "2", 10) || 2,
+);
+const INIT_RATE_LIMIT_PER_HOUR = Math.max(
+  1,
+  Number.parseInt(process.env.HEAL_INIT_RATE_LIMIT_PER_HOUR || "10", 10) || 10,
+);
+const TURNSTILE_SECRET = process.env.HEAL_TURNSTILE_SECRET || "";
 const N8N_UPLOAD_WEBHOOK_URL = process.env.HEAL_N8N_UPLOAD_WEBHOOK_URL || "";
 const N8N_VALIDATION_WEBHOOK_URL =
   process.env.HEAL_N8N_VALIDATION_WEBHOOK_URL || process.env.HEAL_N8N_WEBHOOK_URL || "";
@@ -33,6 +46,7 @@ const ALLOWED_ORIGINS = (process.env.HEAL_ALLOWED_ORIGINS ||
 
 const jobs = new Map();
 const uploads = new Map();
+const initRateLimits = new Map();
 
 app.use((req, res, next) => {
   const requestOrigin = req.headers.origin;
@@ -54,6 +68,51 @@ app.use(express.json({ limit: "1mb" }));
 function safeFileName(name) {
   const parsed = path.basename(String(name || "upload.vcf"));
   return parsed.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 180) || "upload.vcf";
+}
+
+function isAllowedVcfName(fileName) {
+  const normalized = fileName.toLowerCase();
+  return normalized.endsWith(".vcf") || normalized.endsWith(".vcf.gz") || normalized.endsWith(".gz");
+}
+
+function clientIp(req) {
+  const forwarded = req.headers["cf-connecting-ip"] || req.headers["x-forwarded-for"];
+  if (Array.isArray(forwarded)) return forwarded[0];
+  if (forwarded) return String(forwarded).split(",")[0].trim();
+  return req.socket.remoteAddress || "unknown";
+}
+
+function clientFingerprint(req) {
+  const source = `${clientIp(req)}|${req.headers["user-agent"] || ""}`;
+  return crypto.createHash("sha256").update(source).digest("hex");
+}
+
+function checkInitRateLimit(req) {
+  const ip = clientIp(req);
+  const now = Date.now();
+  const windowMs = 60 * 60 * 1000;
+  const current = initRateLimits.get(ip) || [];
+  const fresh = current.filter((timestamp) => now - timestamp < windowMs);
+  if (fresh.length >= INIT_RATE_LIMIT_PER_HOUR) {
+    initRateLimits.set(ip, fresh);
+    return false;
+  }
+  fresh.push(now);
+  initRateLimits.set(ip, fresh);
+  return true;
+}
+
+function activeUploadsForClient(fingerprint) {
+  let count = 0;
+  for (const upload of uploads.values()) {
+    if (
+      upload.clientFingerprint === fingerprint &&
+      ["initialized", "uploading", "assembled"].includes(upload.status)
+    ) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function isPathInside(parent, target) {
@@ -135,6 +194,26 @@ async function cleanupStaleUploads() {
   );
 }
 
+async function verifyTurnstile(token, remoteIp) {
+  if (!TURNSTILE_SECRET) return { ok: true, skipped: true };
+  if (!token) return { ok: false, error: "Missing Turnstile token." };
+
+  const body = new URLSearchParams();
+  body.set("secret", TURNSTILE_SECRET);
+  body.set("response", token);
+  if (remoteIp && remoteIp !== "unknown") body.set("remoteip", remoteIp);
+
+  const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+    method: "POST",
+    body,
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.success) {
+    return { ok: false, error: "Turnstile verification failed." };
+  }
+  return { ok: true };
+}
+
 function publicJob(job) {
   return {
     id: job.id,
@@ -201,6 +280,10 @@ app.get("/api/health", (_req, res) => {
     maxUploads: MAX_UPLOADS,
     uploadTtlHours: Math.round(UPLOAD_TTL_MS / 60 / 60 / 1000),
     chunkSizeBytes: CHUNK_SIZE_BYTES,
+    maxFileSizeBytes: MAX_FILE_SIZE_BYTES,
+    maxActiveUploadsPerClient: MAX_ACTIVE_UPLOADS_PER_CLIENT,
+    initRateLimitPerHour: INIT_RATE_LIMIT_PER_HOUR,
+    turnstileRequired: Boolean(TURNSTILE_SECRET),
     n8nUploadWebhookConfigured: Boolean(N8N_UPLOAD_WEBHOOK_URL),
     n8nValidationWebhookConfigured: Boolean(N8N_VALIDATION_WEBHOOK_URL),
   });
@@ -209,14 +292,42 @@ app.get("/api/health", (_req, res) => {
 app.post("/api/uploads/init", async (req, res) => {
   await cleanupStaleUploads();
 
-  const { fileName: rawFileName, sizeBytes: rawSizeBytes, contentType = "application/octet-stream" } = req.body || {};
+  const {
+    fileName: rawFileName,
+    sizeBytes: rawSizeBytes,
+    contentType = "application/octet-stream",
+    turnstileToken = "",
+  } = req.body || {};
+  const fingerprint = clientFingerprint(req);
+  if (!checkInitRateLimit(req)) {
+    res.status(429).json({ error: "Too many upload attempts. Try again later." });
+    return;
+  }
+  if (activeUploadsForClient(fingerprint) >= MAX_ACTIVE_UPLOADS_PER_CLIENT) {
+    res.status(429).json({ error: "Too many active uploads for this client." });
+    return;
+  }
+  const turnstile = await verifyTurnstile(turnstileToken, clientIp(req));
+  if (!turnstile.ok) {
+    res.status(403).json({ error: turnstile.error });
+    return;
+  }
+
   const sizeBytes = Number(rawSizeBytes);
   if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
     res.status(400).json({ error: "sizeBytes must be greater than zero." });
     return;
   }
+  if (sizeBytes > MAX_FILE_SIZE_BYTES) {
+    res.status(413).json({ error: "File exceeds the configured maximum size." });
+    return;
+  }
 
   const fileName = safeFileName(rawFileName);
+  if (!isAllowedVcfName(fileName)) {
+    res.status(400).json({ error: "Only .vcf and .vcf.gz files are accepted." });
+    return;
+  }
   const uploadId = crypto.randomUUID();
   const resolvedUploadRoot = path.resolve(UPLOAD_ROOT);
   const uploadDir = path.join(resolvedUploadRoot, uploadId);
@@ -241,6 +352,7 @@ app.post("/api/uploads/init", async (req, res) => {
     chunkSizeBytes: CHUNK_SIZE_BYTES,
     totalChunks,
     receivedChunks: Array(totalChunks).fill(false),
+    clientFingerprint: fingerprint,
     uploadDir,
     storedPath,
     status: "initialized",
@@ -255,6 +367,10 @@ app.put("/api/uploads/:uploadId/chunks/:chunkIndex", async (req, res) => {
   const upload = await loadUpload(req.params.uploadId);
   if (!upload) {
     res.status(404).json({ error: "Upload not found." });
+    return;
+  }
+  if (upload.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+    res.status(403).json({ error: "Upload belongs to a different client." });
     return;
   }
   if (upload.status === "complete") {
@@ -306,6 +422,10 @@ app.post("/api/uploads/:uploadId/complete", async (req, res) => {
     res.status(404).json({ error: "Upload not found." });
     return;
   }
+  if (upload.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+    res.status(403).json({ error: "Upload belongs to a different client." });
+    return;
+  }
   if (!upload.receivedChunks.every(Boolean)) {
     res.status(409).json({ error: "Upload still has missing chunks.", upload: publicUpload(upload) });
     return;
@@ -329,6 +449,10 @@ app.get("/api/uploads/:uploadId", async (req, res) => {
     res.status(404).json({ error: "Upload not found." });
     return;
   }
+  if (upload.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+    res.status(403).json({ error: "Upload belongs to a different client." });
+    return;
+  }
   res.json(publicUpload(upload));
 });
 
@@ -348,6 +472,10 @@ app.post("/api/validations", async (req, res) => {
   const upload = await loadUpload(uploadId);
   if (!upload) {
     res.status(404).json({ error: "Upload not found." });
+    return;
+  }
+  if (upload.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+    res.status(403).json({ error: "Upload belongs to a different client." });
     return;
   }
   if (upload.status !== "complete") {

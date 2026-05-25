@@ -81,6 +81,21 @@ HEAL_N8N_WEBHOOK_TOKEN
 
 Do not commit secrets.
 
+## Security Controls
+
+The backend has server-side controls because CORS alone does not protect a public API from direct scripted traffic.
+
+Configured controls:
+
+- allowed file names: `.vcf`, `.vcf.gz`, `.gz`
+- max file size: `HEAL_MAX_FILE_SIZE_BYTES`, default 6 GiB
+- upload workspace retention: `HEAL_MAX_UPLOADS` and `HEAL_UPLOAD_TTL_HOURS`
+- max active uploads per browser/client fingerprint: `HEAL_MAX_ACTIVE_UPLOADS_PER_CLIENT`
+- init rate limit per IP/hour: `HEAL_INIT_RATE_LIMIT_PER_HOUR`
+- optional Cloudflare Turnstile verification on upload init: `HEAL_TURNSTILE_SECRET`
+
+For production, create a Cloudflare Turnstile widget for the Pages hostname and API hostname. Put the public site key in Pages as `VITE_TURNSTILE_SITE_KEY`, and put the secret key only on the backend host as `HEAL_TURNSTILE_SECRET`.
+
 ## Environment
 
 Copy `.env.example` to `.env` when you need to override local settings.
@@ -89,6 +104,7 @@ For a deployed frontend, set:
 
 ```text
 VITE_API_BASE=https://your-api.example.com
+VITE_TURNSTILE_SITE_KEY=your-public-turnstile-site-key
 ```
 
 Also add the deployed Pages origin to:
@@ -125,8 +141,9 @@ Recommended first production deployment:
 1. Deploy this React app to Cloudflare Pages.
 2. Run `npm run api:prod` on the HEAL server behind HTTPS.
 3. Set `VITE_API_BASE` in Pages to the public API origin.
-4. Add the Pages origin to `HEAL_ALLOWED_ORIGINS` on the API server.
-5. Set the n8n webhook variables on the API server, not in the frontend.
+4. Set `VITE_TURNSTILE_SITE_KEY` in Pages if Turnstile is enabled.
+5. Add the Pages origin to `HEAL_ALLOWED_ORIGINS` on the API server.
+6. Set `HEAL_TURNSTILE_SECRET` and the n8n webhook variables on the API server, not in the frontend.
 
 R2 remains a good later option if the file must land in object storage first. In that version, the API should issue presigned multipart upload instructions and n8n should receive the R2 object key instead of a local path.
 

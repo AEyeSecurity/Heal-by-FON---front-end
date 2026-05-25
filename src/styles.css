@@ -331,6 +331,38 @@ h1 {
   line-height: 1.35;
 }
 
+.security-check {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding: 14px;
+  border: 1px solid #dfe7d8;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.security-check strong,
+.security-check span {
+  display: block;
+}
+
+.security-check strong {
+  margin-bottom: 4px;
+  color: #27352c;
+}
+
+.security-check span {
+  color: #617069;
+  font-size: 0.86rem;
+}
+
+.turnstile-box {
+  min-width: 300px;
+  min-height: 65px;
+}
+
 .variant-control {
   display: flex;
   align-items: center;
@@ -589,6 +621,16 @@ h1 {
   .variant-control {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .security-check {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .turnstile-box {
+    min-width: 0;
+    width: 100%;
   }
 
   .mode-options {

@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   BarChart3,
@@ -14,6 +14,7 @@ import forceLogo from "./assets/forceofnature-logo.svg";
 import "./styles.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8787";
+const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || "";
 
 const COPY = {
   es: {
@@ -39,6 +40,9 @@ const COPY = {
     uploadProgress: "Carga del archivo",
     validationProgress: "Validacion del VCF",
     submit: "Enviar y validar",
+    securityCheck: "Verificacion de seguridad",
+    securityCheckHelp: "Protege el backend antes de aceptar VCFs grandes.",
+    securityRequired: "Completa la verificacion de seguridad antes de subir el archivo.",
     uploading: "Subiendo el archivo en partes a un espacio aislado...",
     validationStarting: "Iniciando validacion por streaming...",
     validating: "Validando",
@@ -95,6 +99,9 @@ const COPY = {
     uploadProgress: "File upload",
     validationProgress: "VCF validation",
     submit: "Send and validate",
+    securityCheck: "Security check",
+    securityCheckHelp: "Protects the backend before accepting large VCF files.",
+    securityRequired: "Complete the security check before uploading the file.",
     uploading: "Uploading the file in chunks into an isolated workspace...",
     validationStarting: "Starting streaming validation...",
     validating: "Validating",
@@ -226,6 +233,56 @@ function ModeSelector({ mode, setMode, t }) {
   );
 }
 
+function TurnstileBox({ siteKey, language, onToken, t }) {
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (!siteKey || !containerRef.current) return undefined;
+    let cancelled = false;
+    let widgetId = null;
+
+    if (!document.querySelector('script[src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"]')) {
+      const script = document.createElement("script");
+      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+
+    const timer = window.setInterval(() => {
+      if (cancelled || !window.turnstile || !containerRef.current || widgetId !== null) return;
+      containerRef.current.innerHTML = "";
+      widgetId = window.turnstile.render(containerRef.current, {
+        sitekey: siteKey,
+        language: language === "es" ? "es" : "en",
+        callback: (token) => onToken(token),
+        "expired-callback": () => onToken(""),
+        "error-callback": () => onToken(""),
+      });
+    }, 150);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      if (window.turnstile && widgetId !== null) {
+        window.turnstile.remove(widgetId);
+      }
+    };
+  }, [siteKey, language, onToken]);
+
+  if (!siteKey) return null;
+
+  return (
+    <section className="security-check">
+      <div>
+        <strong>{t.securityCheck}</strong>
+        <span>{t.securityCheckHelp}</span>
+      </div>
+      <div className="turnstile-box" ref={containerRef} />
+    </section>
+  );
+}
+
 function ResultPanel({ result, analysisMode, locale, t }) {
   if (!result) return null;
 
@@ -340,6 +397,7 @@ function App() {
   const [customMessage, setCustomMessage] = useState("");
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [turnstileToken, setTurnstileToken] = useState("");
 
   const t = COPY[language];
   const locale = language === "es" ? "es-AR" : "en-US";
@@ -374,6 +432,7 @@ function App() {
         fileName: selectedFile.name,
         sizeBytes: selectedFile.size,
         contentType: selectedFile.type || "application/octet-stream",
+        turnstileToken,
       }),
     });
     const initUpload = await readJsonResponse(initResponse);
@@ -425,6 +484,10 @@ function App() {
 
   async function submit() {
     if (!file) return;
+    if (TURNSTILE_SITE_KEY && !turnstileToken) {
+      setError(t.securityRequired);
+      return;
+    }
     const variantLimit = clampVariantCount(maxVariants);
     const shouldCalculateStats = analysisMode === "complete";
     setMaxVariants(variantLimit);
@@ -463,11 +526,13 @@ function App() {
       setMessageKey("complete");
       setCustomMessage("");
       setValidationProgress(100);
+      setTurnstileToken("");
     } catch (caught) {
       setPhase("error");
       setError(caught.message || String(caught));
       setMessageKey("processFailed");
       setCustomMessage("");
+      setTurnstileToken("");
     }
   }
 
@@ -533,6 +598,12 @@ function App() {
         </div>
 
         <ModeSelector mode={analysisMode} setMode={setAnalysisMode} t={t} />
+        <TurnstileBox
+          siteKey={TURNSTILE_SITE_KEY}
+          language={language}
+          onToken={setTurnstileToken}
+          t={t}
+        />
 
         <label className="variant-control">
           <span>{t.variantLimit}</span>
