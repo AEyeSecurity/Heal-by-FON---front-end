@@ -2,6 +2,13 @@
 
 Local React prototype for uploading a VCF file and running the HEAL by FON VCF integrity validator.
 
+## Documentation
+
+- [Technical architecture](docs/technical-architecture.md)
+- [Operations runbook](docs/operations-runbook.md)
+- [Security notes](docs/security-notes.md)
+- [Implementation log](docs/implementation-log.md)
+
 ## Local Run
 
 ```powershell
