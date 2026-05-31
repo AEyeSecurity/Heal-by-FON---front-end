@@ -54,6 +54,14 @@ select {
   font-weight: 800;
 }
 
+.topbar-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .language-control svg {
   color: #4b8f2f;
 }
@@ -241,9 +249,16 @@ h1 {
 }
 
 .secondary-button {
+  gap: 8px;
   padding: 0 18px;
   background: #e9f4e4;
   color: #17351f;
+}
+
+.secondary-button.small {
+  min-height: 40px;
+  padding: 0 14px;
+  font-size: 0.9rem;
 }
 
 .primary-button {
@@ -620,6 +635,141 @@ h1 {
   flex-wrap: wrap;
 }
 
+.canon-modal {
+  display: grid;
+  gap: 16px;
+  width: min(980px, 100%);
+  max-height: min(92vh, 920px);
+  overflow: auto;
+  padding: 22px;
+  border: 1px solid #d9e0d4;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(18, 22, 19, 0.2);
+}
+
+.modal-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.modal-heading h2 {
+  margin-bottom: 0;
+  font-size: 1.45rem;
+}
+
+.icon-button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid #d9e0d4;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #253329;
+  cursor: pointer;
+}
+
+.canon-current,
+.canon-upload,
+.canon-preview {
+  padding: 14px;
+  border: 1px solid #dfe7d8;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.canon-current > div:first-child {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.canon-current strong {
+  color: #27352c;
+}
+
+.canon-current span,
+.canon-upload p,
+.canon-upload-row span {
+  color: #617069;
+  font-size: 0.9rem;
+}
+
+.canon-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.canon-upload {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.canon-upload p {
+  margin-bottom: 0;
+}
+
+.canon-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.canon-preview h3 {
+  margin: 0 0 10px;
+  color: #27352c;
+  font-size: 1rem;
+}
+
+.canon-upload .primary-button {
+  flex-wrap: wrap;
+  min-width: 0;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.table-wrap {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid #dfe7d8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.table-wrap table {
+  width: 100%;
+  min-width: 820px;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.table-wrap th,
+.table-wrap td {
+  padding: 9px 10px;
+  border-bottom: 1px solid #e7ede2;
+  text-align: left;
+  vertical-align: top;
+}
+
+.table-wrap th {
+  position: sticky;
+  top: 0;
+  background: #eef4ea;
+  color: #27352c;
+  font-weight: 800;
+}
+
+.table-wrap td {
+  color: #344239;
+}
+
 @media (max-width: 820px) {
   .metrics-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -646,6 +796,11 @@ h1 {
     flex-direction: column;
   }
 
+  .topbar-actions {
+    width: 100%;
+  }
+
+  .topbar-actions .secondary-button,
   .language-control {
     width: 100%;
     justify-content: space-between;
@@ -710,7 +865,8 @@ h1 {
   }
 
   .metrics-grid,
-  .chrom-card div {
+  .chrom-card div,
+  .canon-mini-grid {
     grid-template-columns: 1fr;
   }
 }

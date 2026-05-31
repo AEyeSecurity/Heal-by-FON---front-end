@@ -3,11 +3,14 @@ import { createRoot } from "react-dom/client";
 import {
   BarChart3,
   CheckCircle2,
+  FileSpreadsheet,
   FileUp,
   Globe2,
   Loader2,
   Send,
   ShieldCheck,
+  UploadCloud,
+  X,
   XCircle,
 } from "lucide-react";
 import forceLogo from "./assets/forceofnature-logo.svg";
@@ -81,6 +84,21 @@ const COPY = {
     notCalculated: "No calculado",
     topChromosomes: "Top cromosomas/contigs",
     checksum: "SHA-256",
+    changeCanon: "Cambiar canon",
+    canonTitle: "Canon de interpretacion",
+    canonCurrent: "Canon actual",
+    canonNone: "Todavia no hay canon cargado.",
+    canonUploadHelp: "Carga un canon nuevo en formato CSV o XLSX. Se procesara y quedara como version activa.",
+    canonSelect: "Seleccionar canon",
+    canonUpload: "Subir y limpiar canon",
+    canonUploading: "Procesando canon...",
+    canonLoaded: "Canon cargado",
+    canonRows: "Filas no vacias",
+    canonUniqueRsids: "rsIDs unicos",
+    canonRepeatedRsids: "rsIDs repetidos",
+    canonManualReview: "Revision manual",
+    canonPreview: "Vista previa limpia",
+    close: "Cerrar",
   },
   en: {
     languageLabel: "Language",
@@ -146,6 +164,21 @@ const COPY = {
     notCalculated: "Not calculated",
     topChromosomes: "Top chromosomes/contigs",
     checksum: "SHA-256",
+    changeCanon: "Change canon",
+    canonTitle: "Interpretation canon",
+    canonCurrent: "Current canon",
+    canonNone: "No canon has been loaded yet.",
+    canonUploadHelp: "Upload a new canon as CSV or XLSX. It will be processed and set as the active version.",
+    canonSelect: "Select canon",
+    canonUpload: "Upload and clean canon",
+    canonUploading: "Processing canon...",
+    canonLoaded: "Canon loaded",
+    canonRows: "Non-empty rows",
+    canonUniqueRsids: "Unique rsIDs",
+    canonRepeatedRsids: "Repeated rsIDs",
+    canonManualReview: "Manual review",
+    canonPreview: "Clean preview",
+    close: "Close",
   },
 };
 
@@ -327,6 +360,195 @@ function DuplicateUploadModal({ candidate, locale, onUseExisting, onUploadAgain,
   );
 }
 
+function CanonModal({ open, onClose, language, locale, t }) {
+  const fileInputRef = useRef(null);
+  const [canonState, setCanonState] = useState(null);
+  const [canonFile, setCanonFile] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState(null);
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileResetKey, setTurnstileResetKey] = useState(0);
+
+  async function readJsonResponse(response) {
+    const text = await response.text();
+    try {
+      return text ? JSON.parse(text) : {};
+    } catch {
+      return { error: text };
+    }
+  }
+
+  async function loadCanon() {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/canon/current`);
+      const payload = await readJsonResponse(response);
+      if (!response.ok) throw new Error(payload.error || "Could not load canon.");
+      setCanonState(payload);
+    } catch (caught) {
+      setError(caught.message || String(caught));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (open) {
+      loadCanon();
+      setCanonFile(null);
+      setTurnstileToken("");
+      setTurnstileResetKey((current) => current + 1);
+    }
+  }, [open]);
+
+  async function uploadCanon() {
+    if (!canonFile) return;
+    if (TURNSTILE_SITE_KEY && !turnstileToken) {
+      setError(t.securityRequired);
+      return;
+    }
+    setUploading(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/canon/upload`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "X-Canon-File-Name": encodeURIComponent(canonFile.name),
+          "X-Turnstile-Token": turnstileToken,
+        },
+        body: canonFile,
+      });
+      const payload = await readJsonResponse(response);
+      if (!response.ok) throw new Error(payload.error || "Could not upload canon.");
+      setCanonState(payload);
+      setCanonFile(null);
+      setTurnstileToken("");
+      setTurnstileResetKey((current) => current + 1);
+    } catch (caught) {
+      setError(caught.message || String(caught));
+      setTurnstileToken("");
+      setTurnstileResetKey((current) => current + 1);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  if (!open) return null;
+
+  const current = canonState?.current;
+  const rows = canonState?.preview?.rows || [];
+  const sourceGroups = current?.metadata?.source_group_counts || {};
+  const loadedAt = current?.createdAt || current?.timestamps?.completedAt;
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="canon-title">
+      <section className="canon-modal">
+        <div className="modal-heading">
+          <div>
+            <p className="eyebrow">{t.eyebrow}</p>
+            <h2 id="canon-title">{t.canonTitle}</h2>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} aria-label={t.close}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="canon-current">
+          <div>
+            <strong>{t.canonCurrent}</strong>
+            {loading ? (
+              <span>{t.canonUploading}</span>
+            ) : current ? (
+              <span>
+                {current.sourceFileName}
+                {loadedAt ? ` - ${new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" }).format(new Date(loadedAt))}` : ""}
+              </span>
+            ) : (
+              <span>{t.canonNone}</span>
+            )}
+          </div>
+          {current && (
+            <div className="canon-mini-grid">
+              <MetricCard label={t.canonRows} value={formatNumber(current.metadata?.rows_nonempty, locale)} />
+              <MetricCard label={t.canonUniqueRsids} value={formatNumber(current.metadata?.unique_rsids, locale)} />
+              <MetricCard label={t.canonRepeatedRsids} value={formatNumber(current.metadata?.duplicate_rsids, locale)} />
+              <MetricCard label={t.canonManualReview} value={formatNumber(sourceGroups.revision_manual || 0, locale)} />
+            </div>
+          )}
+        </div>
+
+        <div className="canon-upload">
+          <p>{t.canonUploadHelp}</p>
+          <input
+            ref={fileInputRef}
+            className="file-input"
+            type="file"
+            accept=".csv,.xlsx"
+            onChange={(event) => setCanonFile(event.target.files?.[0] || null)}
+          />
+          <div className="canon-upload-row">
+            <button className="secondary-button" type="button" onClick={() => fileInputRef.current?.click()}>
+              <FileSpreadsheet size={17} />
+              {t.canonSelect}
+            </button>
+            <span>{canonFile ? `${canonFile.name} - ${formatBytes(canonFile.size, locale)}` : ""}</span>
+          </div>
+          <TurnstileBox
+            siteKey={TURNSTILE_SITE_KEY}
+            language={language}
+            onToken={setTurnstileToken}
+            resetKey={turnstileResetKey}
+            t={t}
+          />
+          {error && <p className="error-message">{error}</p>}
+          <button className="primary-button" type="button" disabled={!canonFile || uploading} onClick={uploadCanon}>
+            {uploading ? <Loader2 className="spin" size={18} /> : <UploadCloud size={18} />}
+            {uploading ? t.canonUploading : t.canonUpload}
+          </button>
+        </div>
+
+        <div className="canon-preview">
+          <h3>{t.canonPreview}</h3>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>row_id</th>
+                  <th>source_group</th>
+                  <th>category</th>
+                  <th>gene</th>
+                  <th>rsid</th>
+                  <th>effect</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.slice(0, 60).map((row) => (
+                  <tr key={row.row_id}>
+                    <td>{row.row_id}</td>
+                    <td>{row.source_group}</td>
+                    <td>{row.category || "-"}</td>
+                    <td>{row.gene || "-"}</td>
+                    <td>{row.rsid || "-"}</td>
+                    <td>{row.effect || "-"}</td>
+                  </tr>
+                ))}
+                {rows.length === 0 && (
+                  <tr>
+                    <td colSpan="6">{t.canonNone}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function ResultPanel({ result, analysisMode, locale, t }) {
   if (!result) return null;
 
@@ -445,6 +667,7 @@ function App() {
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileResetKey, setTurnstileResetKey] = useState(0);
   const [duplicateCandidate, setDuplicateCandidate] = useState(null);
+  const [canonOpen, setCanonOpen] = useState(false);
 
   const t = COPY[language];
   const locale = language === "es" ? "es-AR" : "en-US";
@@ -624,14 +847,20 @@ function App() {
     <main className="app-shell">
       <header className="topbar">
         <img className="fon-logo" src={forceLogo} alt="Force of Nature" />
-        <label className="language-control">
-          <Globe2 size={17} />
-          <span>{t.languageLabel}</span>
-          <select value={language} onChange={(event) => setLanguage(event.target.value)}>
-            <option value="es">{t.langEs}</option>
-            <option value="en">{t.langEn}</option>
-          </select>
-        </label>
+        <div className="topbar-actions">
+          <button className="secondary-button small" type="button" onClick={() => setCanonOpen(true)}>
+            <FileSpreadsheet size={16} />
+            {t.changeCanon}
+          </button>
+          <label className="language-control">
+            <Globe2 size={17} />
+            <span>{t.languageLabel}</span>
+            <select value={language} onChange={(event) => setLanguage(event.target.value)}>
+              <option value="es">{t.langEs}</option>
+              <option value="en">{t.langEn}</option>
+            </select>
+          </label>
+        </div>
       </header>
 
       <section className="intro">
@@ -728,6 +957,7 @@ function App() {
         }}
         t={t}
       />
+      <CanonModal open={canonOpen} onClose={() => setCanonOpen(false)} language={language} locale={locale} t={t} />
     </main>
   );
 }

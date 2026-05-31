@@ -13,6 +13,12 @@ const UPLOAD_ROOT =
 const VALIDATOR_SCRIPT =
   process.env.HEAL_VALIDATOR_SCRIPT ||
   "C:\\ServerCIT\\services\\heal-vcf-integrity\\validate_vcf_integrity.py";
+const CANON_ROOT =
+  process.env.HEAL_CANON_ROOT ||
+  "C:\\ServerCIT\\services\\heal-canon-intake";
+const CANON_PROCESSOR_SCRIPT =
+  process.env.HEAL_CANON_PROCESSOR_SCRIPT ||
+  "C:\\ServerCIT\\services\\heal-canon-intake\\process_heal_canon.py";
 const PYTHON_EXE = process.env.HEAL_PYTHON_EXE || "python";
 const MAX_UPLOADS = Math.max(1, Number.parseInt(process.env.HEAL_MAX_UPLOADS || "12", 10) || 12);
 const UPLOAD_TTL_MS =
@@ -25,6 +31,11 @@ const MAX_FILE_SIZE_BYTES = Math.max(
   1024 * 1024,
   Number.parseInt(process.env.HEAL_MAX_FILE_SIZE_BYTES || `${6 * 1024 * 1024 * 1024}`, 10),
 );
+const MAX_CANON_FILE_SIZE_BYTES = Math.max(
+  64 * 1024,
+  Number.parseInt(process.env.HEAL_MAX_CANON_FILE_SIZE_BYTES || `${25 * 1024 * 1024}`, 10),
+);
+const MAX_CANONS = Math.max(1, Number.parseInt(process.env.HEAL_MAX_CANONS || "8", 10) || 8);
 const MAX_ACTIVE_UPLOADS_PER_CLIENT = Math.max(
   1,
   Number.parseInt(process.env.HEAL_MAX_ACTIVE_UPLOADS_PER_CLIENT || "2", 10) || 2,
@@ -38,6 +49,7 @@ const REQUIRE_ORIGIN = process.env.HEAL_REQUIRE_ORIGIN !== "false";
 const N8N_UPLOAD_WEBHOOK_URL = process.env.HEAL_N8N_UPLOAD_WEBHOOK_URL || "";
 const N8N_VALIDATION_WEBHOOK_URL =
   process.env.HEAL_N8N_VALIDATION_WEBHOOK_URL || process.env.HEAL_N8N_WEBHOOK_URL || "";
+const N8N_CANON_WEBHOOK_URL = process.env.HEAL_N8N_CANON_WEBHOOK_URL || "";
 const N8N_WEBHOOK_TOKEN = process.env.HEAL_N8N_WEBHOOK_TOKEN || "";
 const ALLOWED_ORIGINS = (process.env.HEAL_ALLOWED_ORIGINS ||
   "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173")
@@ -75,7 +87,10 @@ app.use((req, res, next) => {
     res.setHeader("Vary", "Origin");
   }
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Chunk-Index, X-Upload-Id");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, X-Chunk-Index, X-Upload-Id, X-Canon-File-Name, X-Turnstile-Token",
+  );
   if (req.method === "OPTIONS") {
     res.status(204).send();
     return;
@@ -93,6 +108,22 @@ function safeFileName(name) {
 function isAllowedVcfName(fileName) {
   const normalized = fileName.toLowerCase();
   return normalized.endsWith(".vcf") || normalized.endsWith(".vcf.gz") || normalized.endsWith(".gz");
+}
+
+function isAllowedCanonName(fileName) {
+  const normalized = fileName.toLowerCase();
+  return normalized.endsWith(".csv") || normalized.endsWith(".xlsx");
+}
+
+function canonPaths() {
+  const root = path.resolve(CANON_ROOT);
+  return {
+    root,
+    incoming: path.join(root, "incoming"),
+    runs: path.join(root, "runs"),
+    current: path.join(root, "current"),
+    currentManifest: path.join(root, "current", "current.json"),
+  };
 }
 
 function clientIp(req) {
@@ -158,6 +189,35 @@ function publicUpload(upload) {
     status: upload.status,
     createdAt: upload.createdAt,
     updatedAt: upload.updatedAt,
+  };
+}
+
+function publicCanon(summary, preview, manifest) {
+  if (!summary) {
+    return {
+      hasCanon: false,
+      current: null,
+      preview: { columns: [], rows: [] },
+    };
+  }
+
+  return {
+    hasCanon: true,
+    current: {
+      runId: manifest?.runId || null,
+      sourceFileName: summary.sourceFileName || manifest?.sourceFileName || null,
+      status: summary.status,
+      errors: summary.errors || [],
+      warnings: summary.warnings || [],
+      metadata: summary.metadata || {},
+      timestamps: summary.timestamps || {},
+      createdAt: manifest?.createdAt || summary.timestamps?.completedAt || null,
+    },
+    preview: {
+      columns: preview?.columns || [],
+      rows: preview?.rows || [],
+      generatedAt: preview?.generatedAt || null,
+    },
   };
 }
 
@@ -251,6 +311,116 @@ async function cleanupStaleUploads() {
   );
 }
 
+async function cleanupOldCanons() {
+  const paths = canonPaths();
+  await mkdir(paths.runs, { recursive: true });
+  const entries = await readdir(paths.runs, { withFileTypes: true }).catch(() => []);
+  const candidates = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const target = path.join(paths.runs, entry.name);
+    const targetStat = await stat(target).catch(() => null);
+    if (!targetStat) continue;
+    candidates.push({ name: entry.name, path: target, mtimeMs: targetStat.mtimeMs });
+  }
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  await Promise.all(candidates.slice(MAX_CANONS).map((entry) => rm(entry.path, { recursive: true, force: true })));
+}
+
+function runCanonProcessor(inputPath, outputDir, sourceFileName) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      PYTHON_EXE,
+      [
+        CANON_PROCESSOR_SCRIPT,
+        "--input",
+        inputPath,
+        "--output-dir",
+        outputDir,
+        "--source-file-name",
+        sourceFileName,
+      ],
+      { windowsHide: true },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+      const lastLine = lines[lines.length - 1] || "{}";
+      let result;
+      try {
+        result = JSON.parse(lastLine);
+      } catch (error) {
+        reject(new Error(`Canon processor returned invalid JSON. ${stderr || error.message}`));
+        return;
+      }
+      if (code !== 0 && result.status !== "warning") {
+        reject(new Error(result.errors?.[0] || stderr || `Canon processor exited with code ${code}.`));
+        return;
+      }
+      resolve(result);
+    });
+  });
+}
+
+async function processCanonWithN8n(payload) {
+  if (!N8N_CANON_WEBHOOK_URL) return null;
+  const headers = { "Content-Type": "application/json" };
+  if (N8N_WEBHOOK_TOKEN) headers.Authorization = `Bearer ${N8N_WEBHOOK_TOKEN}`;
+  const response = await fetch(N8N_CANON_WEBHOOK_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  });
+  const text = await response.text();
+  let body = {};
+  try {
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    body = { error: text };
+  }
+  if (!response.ok) {
+    throw new Error(body.error || body.message || `n8n canon intake failed with ${response.status}.`);
+  }
+  return body.summary || body.result || body;
+}
+
+async function loadCurrentCanon() {
+  const paths = canonPaths();
+  const raw = await readFile(paths.currentManifest, "utf8").catch(() => null);
+  if (!raw) return publicCanon(null, null, null);
+  const manifest = JSON.parse(raw);
+  const summaryPath = path.resolve(manifest.summaryPath || "");
+  const previewPath = path.resolve(manifest.previewPath || "");
+  if (!isPathInside(paths.root, summaryPath) || !isPathInside(paths.root, previewPath)) {
+    return publicCanon(null, null, null);
+  }
+  const summary = JSON.parse(await readFile(summaryPath, "utf8"));
+  const preview = JSON.parse(await readFile(previewPath, "utf8").catch(() => '{"columns":[],"rows":[]}'));
+  return publicCanon(summary, preview, manifest);
+}
+
+async function saveCurrentCanon(runId, sourceFileName, summary) {
+  const paths = canonPaths();
+  await mkdir(paths.current, { recursive: true });
+  const manifest = {
+    runId,
+    sourceFileName,
+    summaryPath: path.join(paths.runs, runId, "canon_summary.json"),
+    previewPath: path.join(paths.runs, runId, "canon_preview.json"),
+    createdAt: new Date().toISOString(),
+  };
+  await writeFile(paths.currentManifest, JSON.stringify(manifest, null, 2), "utf8");
+  return publicCanon(summary, JSON.parse(await readFile(manifest.previewPath, "utf8")), manifest);
+}
+
 async function verifyTurnstile(token, remoteIp) {
   if (!TURNSTILE_SECRET) return { ok: true, skipped: true };
   if (!token) return { ok: false, error: "Missing Turnstile token." };
@@ -338,6 +508,10 @@ app.get("/api/health", (_req, res) => {
     ok: true,
     storageConfigured: Boolean(UPLOAD_ROOT),
     validatorConfigured: Boolean(VALIDATOR_SCRIPT),
+    canonRoot: CANON_ROOT,
+    canonProcessorConfigured: Boolean(CANON_PROCESSOR_SCRIPT),
+    maxCanonFileSizeBytes: MAX_CANON_FILE_SIZE_BYTES,
+    maxCanons: MAX_CANONS,
     maxUploads: MAX_UPLOADS,
     uploadTtlHours: Math.round(UPLOAD_TTL_MS / 60 / 60 / 1000),
     chunkSizeBytes: CHUNK_SIZE_BYTES,
@@ -349,7 +523,80 @@ app.get("/api/health", (_req, res) => {
     turnstileAllowedHostnames: TURNSTILE_SECRET ? TURNSTILE_ALLOWED_HOSTNAMES : [],
     n8nUploadWebhookConfigured: Boolean(N8N_UPLOAD_WEBHOOK_URL),
     n8nValidationWebhookConfigured: Boolean(N8N_VALIDATION_WEBHOOK_URL),
+    n8nCanonWebhookConfigured: Boolean(N8N_CANON_WEBHOOK_URL),
   });
+});
+
+app.get("/api/canon/current", async (_req, res) => {
+  const current = await loadCurrentCanon().catch((error) => ({
+    hasCanon: false,
+    current: null,
+    preview: { columns: [], rows: [] },
+    error: error.message,
+  }));
+  res.json(current);
+});
+
+app.post("/api/canon/upload", express.raw({ type: "*/*", limit: MAX_CANON_FILE_SIZE_BYTES }), async (req, res) => {
+  const rawFileName = req.headers["x-canon-file-name"];
+  const encodedFileName = Array.isArray(rawFileName) ? rawFileName[0] : rawFileName;
+  const decodedFileName = (() => {
+    try {
+      return decodeURIComponent(String(encodedFileName || ""));
+    } catch {
+      return String(encodedFileName || "");
+    }
+  })();
+  const fileName = safeFileName(decodedFileName);
+  if (!isAllowedCanonName(fileName)) {
+    res.status(400).json({ error: "Only .csv and .xlsx canon files are accepted." });
+    return;
+  }
+  const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  if (body.length <= 0) {
+    res.status(400).json({ error: "Canon file is empty." });
+    return;
+  }
+  if (body.length > MAX_CANON_FILE_SIZE_BYTES) {
+    res.status(413).json({ error: "Canon file exceeds the configured maximum size." });
+    return;
+  }
+
+  const turnstileToken = String(req.headers["x-turnstile-token"] || "");
+  const turnstile = await verifyTurnstile(turnstileToken, clientIp(req));
+  if (!turnstile.ok) {
+    res.status(403).json({ error: turnstile.error });
+    return;
+  }
+
+  await cleanupOldCanons();
+  const paths = canonPaths();
+  await mkdir(paths.incoming, { recursive: true });
+  await mkdir(paths.runs, { recursive: true });
+  const runId = crypto.randomUUID();
+  const stagingDir = path.join(paths.incoming, runId);
+  const outputDir = path.join(paths.runs, runId);
+  const inputPath = path.join(stagingDir, fileName);
+  await mkdir(stagingDir, { recursive: true });
+  await mkdir(outputDir, { recursive: true });
+  await writeFile(inputPath, body);
+
+  try {
+    const payload = {
+      event: "heal.canon.sheet_intake.requested",
+      runId,
+      fileName,
+      sizeBytes: body.length,
+      inputPath,
+      outputDir,
+      requestedAt: new Date().toISOString(),
+    };
+    const summary = (await processCanonWithN8n(payload)) || (await runCanonProcessor(inputPath, outputDir, fileName));
+    const current = await saveCurrentCanon(runId, fileName, summary);
+    res.status(201).json(current);
+  } catch (error) {
+    res.status(422).json({ error: error.message || String(error), runId });
+  }
 });
 
 app.post("/api/uploads/lookup", async (req, res) => {
