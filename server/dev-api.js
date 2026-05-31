@@ -22,6 +22,9 @@ const CANON_PROCESSOR_SCRIPT =
 const RSID_RESOLUTION_ROOT =
   process.env.HEAL_RSID_RESOLUTION_ROOT ||
   "C:\\ServerCIT\\services\\heal-rsid-resolution";
+const VCF_CANON_MATCH_ROOT =
+  process.env.HEAL_VCF_CANON_MATCH_ROOT ||
+  "C:\\ServerCIT\\services\\heal-vcf-canon-match";
 const PYTHON_EXE = process.env.HEAL_PYTHON_EXE || "python";
 const MAX_UPLOADS = Math.max(1, Number.parseInt(process.env.HEAL_MAX_UPLOADS || "12", 10) || 12);
 const UPLOAD_TTL_MS =
@@ -53,6 +56,8 @@ const N8N_UPLOAD_WEBHOOK_URL = process.env.HEAL_N8N_UPLOAD_WEBHOOK_URL || "";
 const N8N_VALIDATION_WEBHOOK_URL =
   process.env.HEAL_N8N_VALIDATION_WEBHOOK_URL || process.env.HEAL_N8N_WEBHOOK_URL || "";
 const N8N_CANON_WEBHOOK_URL = process.env.HEAL_N8N_CANON_WEBHOOK_URL || "";
+const N8N_RSID_RESOLUTION_WEBHOOK_URL = process.env.HEAL_N8N_RSID_RESOLUTION_WEBHOOK_URL || "";
+const N8N_VCF_CANON_MATCH_WEBHOOK_URL = process.env.HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL || "";
 const N8N_WEBHOOK_TOKEN = process.env.HEAL_N8N_WEBHOOK_TOKEN || "";
 const ALLOWED_ORIGINS = (process.env.HEAL_ALLOWED_ORIGINS ||
   "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173")
@@ -131,6 +136,16 @@ function canonPaths() {
 
 function rsidResolutionPaths() {
   const root = path.resolve(RSID_RESOLUTION_ROOT);
+  return {
+    root,
+    runs: path.join(root, "runs"),
+    current: path.join(root, "current"),
+    currentManifest: path.join(root, "current", "current.json"),
+  };
+}
+
+function vcfCanonMatchPaths() {
+  const root = path.resolve(VCF_CANON_MATCH_ROOT);
   return {
     root,
     runs: path.join(root, "runs"),
@@ -238,6 +253,17 @@ function sanitizeValidationResult(result, upload) {
   const publicResult = JSON.parse(JSON.stringify(result || {}));
   publicResult.metadata = publicResult.metadata || {};
   delete publicResult.metadata.path;
+  publicResult.metadata.file_name = upload.fileName;
+  publicResult.metadata.upload_id = upload.uploadId;
+  return publicResult;
+}
+
+function sanitizeVcfCanonMatchResult(result, upload) {
+  const publicResult = JSON.parse(JSON.stringify(result || {}));
+  delete publicResult.inputPaths;
+  delete publicResult.outputDir;
+  delete publicResult.outputs;
+  publicResult.metadata = publicResult.metadata || {};
   publicResult.metadata.file_name = upload.fileName;
   publicResult.metadata.upload_id = upload.uploadId;
   return publicResult;
@@ -405,6 +431,77 @@ async function processCanonWithN8n(payload) {
   return body.summary || body.result || body;
 }
 
+async function postWorkflowForSummary(url, payload, label) {
+  if (!url) return null;
+  const headers = { "Content-Type": "application/json" };
+  if (N8N_WEBHOOK_TOKEN) headers.Authorization = `Bearer ${N8N_WEBHOOK_TOKEN}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  });
+  const text = await response.text();
+  let body = {};
+  try {
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    body = { error: text };
+  }
+  if (!response.ok) {
+    throw new Error(body.error || body.message || `${label} failed with ${response.status}.`);
+  }
+  return body.summary || body.result || body;
+}
+
+function runBase64JsonScript(scriptPath, payload) {
+  return new Promise((resolve, reject) => {
+    const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
+    const child = spawn(PYTHON_EXE, [scriptPath, "--input-json-base64", encoded], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+      const lastLine = lines[lines.length - 1] || "{}";
+      let result;
+      try {
+        result = JSON.parse(lastLine);
+      } catch (error) {
+        reject(new Error(`Processor returned invalid JSON. ${stderr || error.message}`));
+        return;
+      }
+      if (code !== 0 && result.status !== "warning") {
+        reject(new Error(result.errors?.[0] || stderr || `Processor exited with code ${code}.`));
+        return;
+      }
+      resolve(result);
+    });
+  });
+}
+
+async function processRsidResolution(payload) {
+  return (
+    (await postWorkflowForSummary(N8N_RSID_RESOLUTION_WEBHOOK_URL, payload, "n8n rsID resolution")) ||
+    (await runBase64JsonScript(path.join(RSID_RESOLUTION_ROOT, "resolve_rsid_coordinates.py"), payload))
+  );
+}
+
+async function processVcfCanonMatch(payload) {
+  return (
+    (await postWorkflowForSummary(N8N_VCF_CANON_MATCH_WEBHOOK_URL, payload, "n8n VCF-canon match")) ||
+    (await runBase64JsonScript(path.join(VCF_CANON_MATCH_ROOT, "match_vcf_to_rsid_ready.py"), payload))
+  );
+}
+
 async function loadCurrentCanon() {
   const manifest = await loadCurrentCanonManifest();
   if (!manifest) return publicCanon(null, null, null);
@@ -431,6 +528,42 @@ async function loadCurrentRsidResolutionManifest() {
   const raw = await readFile(paths.currentManifest, "utf8").catch(() => null);
   if (!raw) return null;
   return JSON.parse(raw);
+}
+
+async function saveCurrentRsidResolution(runId, summary) {
+  const paths = rsidResolutionPaths();
+  await mkdir(paths.current, { recursive: true });
+  const manifest = {
+    runId,
+    summaryPath: path.join(paths.runs, runId, "rsid_resolution_summary.json"),
+    rsidMatchReadyCsv: summary.outputs?.rsidMatchReadyCsv || path.join(paths.runs, runId, "rsid_match_ready.csv"),
+    createdAt: new Date().toISOString(),
+  };
+  await writeFile(paths.currentManifest, JSON.stringify(manifest, null, 2), "utf8");
+  return manifest;
+}
+
+async function resolveRsidForCanon(canonRunId, canonSummary) {
+  const paths = rsidResolutionPaths();
+  const canonRoot = path.resolve(CANON_ROOT);
+  const rsidMasterPath = path.resolve(canonSummary.outputs?.rsidMasterCsv || "");
+  if (!isPathInside(canonRoot, rsidMasterPath)) {
+    throw new Error("Canon rsID master path is outside the allowed canon root.");
+  }
+  const rsidRunId = `rsid-${canonRunId}`;
+  const outputDir = path.join(paths.runs, rsidRunId);
+  await mkdir(outputDir, { recursive: true });
+  const payload = {
+    event: "heal.rsid.coordinate_resolution.requested",
+    runId: rsidRunId,
+    canonRunId,
+    inputPath: rsidMasterPath,
+    outputDir,
+    requestedAt: new Date().toISOString(),
+  };
+  const summary = await processRsidResolution(payload);
+  const manifest = await saveCurrentRsidResolution(rsidRunId, summary);
+  return { summary, manifest };
 }
 
 async function saveCurrentCanon(runId, sourceFileName, summary) {
@@ -536,6 +669,8 @@ app.get("/api/health", (_req, res) => {
     validatorConfigured: Boolean(VALIDATOR_SCRIPT),
     canonRoot: CANON_ROOT,
     canonProcessorConfigured: Boolean(CANON_PROCESSOR_SCRIPT),
+    rsidResolutionRoot: RSID_RESOLUTION_ROOT,
+    vcfCanonMatchRoot: VCF_CANON_MATCH_ROOT,
     maxCanonFileSizeBytes: MAX_CANON_FILE_SIZE_BYTES,
     maxCanons: MAX_CANONS,
     maxUploads: MAX_UPLOADS,
@@ -550,6 +685,8 @@ app.get("/api/health", (_req, res) => {
     n8nUploadWebhookConfigured: Boolean(N8N_UPLOAD_WEBHOOK_URL),
     n8nValidationWebhookConfigured: Boolean(N8N_VALIDATION_WEBHOOK_URL),
     n8nCanonWebhookConfigured: Boolean(N8N_CANON_WEBHOOK_URL),
+    n8nRsidResolutionWebhookConfigured: Boolean(N8N_RSID_RESOLUTION_WEBHOOK_URL),
+    n8nVcfCanonMatchWebhookConfigured: Boolean(N8N_VCF_CANON_MATCH_WEBHOOK_URL),
   });
 });
 
@@ -703,7 +840,14 @@ app.post("/api/canon/upload", express.raw({ type: "*/*", limit: MAX_CANON_FILE_S
       requestedAt: new Date().toISOString(),
     };
     const summary = (await processCanonWithN8n(payload)) || (await runCanonProcessor(inputPath, outputDir, fileName));
+    const rsidResolution = await resolveRsidForCanon(runId, summary);
     const current = await saveCurrentCanon(runId, fileName, summary);
+    current.current.rsidResolution = {
+      status: rsidResolution.summary.status,
+      runId: rsidResolution.manifest.runId,
+      metadata: rsidResolution.summary.metadata || {},
+      createdAt: rsidResolution.manifest.createdAt,
+    };
     res.status(201).json(current);
   } catch (error) {
     res.status(422).json({ error: error.message || String(error), runId });
@@ -1044,6 +1188,126 @@ app.get("/api/validations/:jobId", (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job) {
     res.status(404).json({ error: "Validation job not found." });
+    return;
+  }
+  res.json(publicJob(job));
+});
+
+app.post("/api/vcf-canon-matches", async (req, res) => {
+  const { uploadId } = req.body || {};
+  if (!uploadId) {
+    res.status(400).json({ error: "uploadId is required." });
+    return;
+  }
+
+  const upload = await loadUpload(uploadId);
+  if (!upload) {
+    res.status(404).json({ error: "Upload not found." });
+    return;
+  }
+  if (upload.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+    res.status(403).json({ error: "Upload belongs to a different client." });
+    return;
+  }
+  if (upload.status !== "complete") {
+    res.status(409).json({ error: "Upload must be complete before VCF-canon matching." });
+    return;
+  }
+
+  const resolvedUploadRoot = path.resolve(UPLOAD_ROOT);
+  const resolvedStoredPath = path.resolve(upload.storedPath);
+  if (!isPathInside(resolvedUploadRoot, resolvedStoredPath)) {
+    res.status(400).json({ error: "storedPath is outside the allowed upload root." });
+    return;
+  }
+
+  const canonRoot = path.resolve(CANON_ROOT);
+  const canonManifest = await loadCurrentCanonManifest().catch(() => null);
+  if (!canonManifest) {
+    res.status(409).json({ error: "No canon is currently loaded." });
+    return;
+  }
+  const canonSummaryPath = path.resolve(canonManifest.summaryPath || "");
+  if (!isPathInside(canonRoot, canonSummaryPath)) {
+    res.status(400).json({ error: "Current canon summary is outside the allowed root." });
+    return;
+  }
+  const canonSummary = JSON.parse(await readFile(canonSummaryPath, "utf8"));
+  const canonCleanPath = path.resolve(canonSummary.outputs?.cleanRowsCsv || "");
+  if (!isPathInside(canonRoot, canonCleanPath)) {
+    res.status(400).json({ error: "Current canon clean CSV is outside the allowed root." });
+    return;
+  }
+
+  const resolutionPaths = rsidResolutionPaths();
+  const resolutionManifest = await loadCurrentRsidResolutionManifest().catch(() => null);
+  const rsidReadyPath = path.resolve(resolutionManifest?.rsidMatchReadyCsv || "");
+  if (!resolutionManifest || !isPathInside(resolutionPaths.root, rsidReadyPath)) {
+    res.status(409).json({ error: "The current canon does not have an rsID match-ready file yet." });
+    return;
+  }
+
+  const job = {
+    id: crypto.randomUUID(),
+    uploadId,
+    fileName: upload.fileName,
+    sizeBytes: upload.sizeBytes,
+    status: "running",
+    progress: 8,
+    message: "Preparing VCF-canon match",
+    result: null,
+    error: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  jobs.set(job.id, job);
+
+  (async () => {
+    try {
+      const paths = vcfCanonMatchPaths();
+      await mkdir(paths.runs, { recursive: true });
+      const runId = crypto.randomUUID();
+      const outputDir = path.join(paths.runs, runId);
+      await mkdir(outputDir, { recursive: true });
+      job.progress = 25;
+      job.message = "Streaming VCF and matching canon targets";
+      job.updatedAt = new Date().toISOString();
+
+      const payload = {
+        event: "heal.vcf_canon_match.requested",
+        runId,
+        uploadId: upload.uploadId,
+        fileName: upload.fileName,
+        canonRunId: canonManifest.runId,
+        rsidResolutionRunId: resolutionManifest.runId,
+        canonCleanPath,
+        rsidReadyPath,
+        vcfPath: resolvedStoredPath,
+        outputDir,
+        requestedAt: new Date().toISOString(),
+      };
+      const summary = await processVcfCanonMatch(payload);
+      job.result = sanitizeVcfCanonMatchResult(summary, upload);
+      job.status = "complete";
+      job.progress = 100;
+      job.message = "VCF-canon match completed";
+    } catch (error) {
+      job.status = "failed";
+      job.progress = 100;
+      job.error = error.message || String(error);
+      job.message = "VCF-canon match failed";
+    } finally {
+      job.updatedAt = new Date().toISOString();
+    }
+  })();
+
+  res.status(202).json(publicJob(job));
+});
+
+app.get("/api/vcf-canon-matches/:jobId", (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
     return;
   }
   res.json(publicJob(job));

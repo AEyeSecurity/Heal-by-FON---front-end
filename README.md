@@ -1,6 +1,6 @@
 # HEAL VCF Upload
 
-Local React prototype for uploading a VCF file and running the HEAL by FON VCF integrity validator.
+Local React prototype for uploading a VCF file, validating HEAL by FON VCF integrity, and starting the first downstream canon match.
 
 ## Documentation
 
@@ -64,6 +64,9 @@ POST /api/uploads/init
 PUT  /api/uploads/:uploadId/chunks/:chunkIndex
 POST /api/uploads/:uploadId/complete
 POST /api/validations
+GET  /api/validations/:jobId
+POST /api/vcf-canon-matches
+GET  /api/vcf-canon-matches/:jobId
 ```
 
 Default chunk size is 8 MiB. This keeps every request well below Cloudflare's common proxied request body limits while allowing multi-GB VCF files to land on the server by streaming each chunk to disk. The browser only receives an `uploadId`; local server paths stay on the backend.
@@ -79,6 +82,33 @@ When validation is complete, it can notify n8n with:
 ```text
 HEAL_N8N_VALIDATION_WEBHOOK_URL
 ```
+
+After a valid or warning validation result, the frontend asks the backend to run the VCF-canon match. The backend uses the current cleaned canon and current resolved rsID master, then invokes:
+
+```text
+HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL
+```
+
+The UI currently shows four pipeline steps:
+
+```text
+VCF upload -> Integrity validation -> VCF-Canon match -> Downstream analysis
+```
+
+The fourth step is a placeholder for the next interpretation workflows.
+
+## Canon Flow
+
+The "Change canon" modal accepts `.csv` and `.xlsx` files. Canon upload is protected with the same Turnstile flow as VCF uploads.
+
+When a canon changes, the backend runs:
+
+```text
+HEAL_N8N_CANON_WEBHOOK_URL
+HEAL_N8N_RSID_RESOLUTION_WEBHOOK_URL
+```
+
+This keeps the cleaned canon and rsID match-ready table current, so they are not regenerated for every VCF upload.
 
 If a webhook token is needed, set it outside the repository:
 

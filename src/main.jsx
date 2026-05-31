@@ -29,7 +29,7 @@ const COPY = {
     title: "VCF Integrity Check",
     lede: "Carga un archivo VCF o VCF.GZ para validar estructura, headers, primeras variantes y metricas tecnicas.",
     pipelineLabel: "Pipeline",
-    steps: ["Carga del VCF", "Validacion de integridad", "Analisis posterior"],
+    steps: ["Carga del VCF", "Validacion de integridad", "Match VCF-Canon", "Analisis posterior"],
     dropEmpty: "Arrastra tu VCF aca",
     dropHelp: "Tambien podes seleccionarlo desde tu equipo.",
     selectFile: "Seleccionar archivo",
@@ -43,6 +43,7 @@ const COPY = {
     variantLimit: "Variantes iniciales a revisar",
     uploadProgress: "Carga del archivo",
     validationProgress: "Validacion del VCF",
+    matchProgress: "Match VCF-Canon",
     submit: "Enviar y validar",
     securityCheck: "Verificacion de seguridad",
     securityCheckHelp: "Protege el backend antes de aceptar VCFs grandes.",
@@ -56,10 +57,14 @@ const COPY = {
     uploading: "Subiendo el archivo en partes a un espacio aislado...",
     validationStarting: "Iniciando validacion por streaming...",
     validating: "Validando",
+    matchStarting: "Iniciando match VCF-Canon...",
+    matching: "Matcheando VCF contra canon...",
+    matchFailed: "No se pudo completar el match VCF-Canon.",
     validationFailed: "La validacion fallo.",
     uploadFailed: "No se pudo completar la carga.",
     processFailed: "No se pudo completar el proceso.",
     complete: "Validacion finalizada.",
+    matchComplete: "Match VCF-Canon finalizado.",
     resultValid: "VCF validado",
     resultWarning: "Validado con warnings",
     resultInvalid: "VCF invalido",
@@ -85,6 +90,14 @@ const COPY = {
     notCalculated: "No calculado",
     topChromosomes: "Top cromosomas/contigs",
     checksum: "SHA-256",
+    matchTitle: "Match VCF-Canon",
+    matchStatusStrict: "Matches estrictos",
+    matchStatusAltReview: "Matches con revision ALT",
+    matchStatusNoPosition: "Sin match por posicion",
+    matchStatusNoRsid: "Sin rsID detectado",
+    matchTargets: "Targets canon",
+    matchCandidates: "Candidatos VCF",
+    matchScannedRows: "Filas VCF escaneadas",
     changeCanon: "Cambiar canon",
     canonTitle: "Canon de interpretacion",
     canonCurrent: "Canon actual",
@@ -112,7 +125,7 @@ const COPY = {
     title: "VCF Integrity Check",
     lede: "Upload a VCF or VCF.GZ file to validate structure, headers, first variants, and technical metrics.",
     pipelineLabel: "Pipeline",
-    steps: ["VCF upload", "Integrity validation", "Downstream analysis"],
+    steps: ["VCF upload", "Integrity validation", "VCF-Canon match", "Downstream analysis"],
     dropEmpty: "Drop your VCF here",
     dropHelp: "You can also select it from your computer.",
     selectFile: "Select file",
@@ -126,6 +139,7 @@ const COPY = {
     variantLimit: "Initial variants to inspect",
     uploadProgress: "File upload",
     validationProgress: "VCF validation",
+    matchProgress: "VCF-Canon match",
     submit: "Send and validate",
     securityCheck: "Security check",
     securityCheckHelp: "Protects the backend before accepting large VCF files.",
@@ -139,10 +153,14 @@ const COPY = {
     uploading: "Uploading the file in chunks into an isolated workspace...",
     validationStarting: "Starting streaming validation...",
     validating: "Validating",
+    matchStarting: "Starting VCF-Canon match...",
+    matching: "Matching VCF against canon...",
+    matchFailed: "Could not complete the VCF-Canon match.",
     validationFailed: "Validation failed.",
     uploadFailed: "Could not complete the upload.",
     processFailed: "Could not complete the process.",
     complete: "Validation finished.",
+    matchComplete: "VCF-Canon match finished.",
     resultValid: "VCF validated",
     resultWarning: "Validated with warnings",
     resultInvalid: "Invalid VCF",
@@ -168,6 +186,14 @@ const COPY = {
     notCalculated: "Not calculated",
     topChromosomes: "Top chromosomes/contigs",
     checksum: "SHA-256",
+    matchTitle: "VCF-Canon match",
+    matchStatusStrict: "Strict matches",
+    matchStatusAltReview: "Matches needing ALT review",
+    matchStatusNoPosition: "No position match",
+    matchStatusNoRsid: "No rsID detected",
+    matchTargets: "Canon targets",
+    matchCandidates: "VCF candidates",
+    matchScannedRows: "VCF rows scanned",
     changeCanon: "Change canon",
     canonTitle: "Interpretation canon",
     canonCurrent: "Current canon",
@@ -233,10 +259,11 @@ function PipelineStepper({ phase, t }) {
   const steps = [
     { key: "upload", label: t.steps[0] },
     { key: "validation", label: t.steps[1] },
-    { key: "analysis", label: t.steps[2] },
+    { key: "match", label: t.steps[2] },
+    { key: "analysis", label: t.steps[3] },
   ];
-  const activeIndex = phase === "uploading" ? 0 : phase === "validating" ? 1 : phase === "done" ? 1 : 0;
-  const completeIndex = phase === "done" ? 1 : phase === "validating" ? 0 : -1;
+  const activeIndex = phase === "uploading" ? 0 : phase === "validating" ? 1 : phase === "matching" || phase === "done" ? 2 : 0;
+  const completeIndex = phase === "done" ? 2 : phase === "matching" ? 1 : phase === "validating" ? 0 : -1;
 
   return (
     <section className="pipeline" aria-label={t.pipelineLabel}>
@@ -700,6 +727,57 @@ function ResultPanel({ result, analysisMode, locale, t }) {
   );
 }
 
+function MatchResultPanel({ result, locale, t }) {
+  if (!result) return null;
+
+  const isValid = result.status === "valid";
+  const Icon = isValid ? CheckCircle2 : XCircle;
+  const metadata = result.metadata || {};
+  const statusCounts = metadata.match_status_counts || {};
+  const fileLabel = metadata.file_name || metadata.upload_id || "";
+  const cards = [
+    [t.matchTargets, formatNumber(metadata.target_keys, locale)],
+    [t.matchCandidates, formatNumber(metadata.vcf_candidates_rows, locale)],
+    [t.matchStatusStrict, formatNumber(statusCounts.match_strict || 0, locale)],
+    [t.matchStatusAltReview, formatNumber(statusCounts.match_likely_needs_alt_review || 0, locale)],
+    [t.matchStatusNoPosition, formatNumber(statusCounts.no_vcf_match_by_chr_pos || 0, locale)],
+    [t.matchStatusNoRsid, formatNumber(statusCounts.no_rsid_detected || 0, locale)],
+    [t.matchScannedRows, formatNumber(metadata.scanned_variant_rows, locale)],
+    [t.sample, metadata.sample_name || "-"],
+  ];
+
+  return (
+    <section className="result-panel">
+      <div className="result-heading">
+        <Icon size={22} />
+        <div>
+          <h2>{t.matchTitle}</h2>
+          {fileLabel && <p>{fileLabel}</p>}
+        </div>
+      </div>
+      <div className="metrics-grid">
+        {cards.map(([label, value]) => (
+          <MetricCard label={label} value={value} key={label} />
+        ))}
+      </div>
+      {(result.errors?.length > 0 || result.warnings?.length > 0) && (
+        <div className="issues">
+          {result.errors?.map((error) => (
+            <p className="error" key={error}>
+              {error}
+            </p>
+          ))}
+          {result.warnings?.map((warning) => (
+            <p className="warning" key={warning}>
+              {warning}
+            </p>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function App() {
   const fileInputRef = useRef(null);
   const [language, setLanguage] = useState("es");
@@ -708,11 +786,13 @@ function App() {
   const [dragging, setDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [validationProgress, setValidationProgress] = useState(0);
+  const [matchProgress, setMatchProgress] = useState(0);
   const [maxVariants, setMaxVariants] = useState(20);
   const [phase, setPhase] = useState("idle");
   const [messageKey, setMessageKey] = useState("initialMessage");
   const [customMessage, setCustomMessage] = useState("");
   const [result, setResult] = useState(null);
+  const [matchResult, setMatchResult] = useState(null);
   const [error, setError] = useState(null);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileResetKey, setTurnstileResetKey] = useState(0);
@@ -721,14 +801,16 @@ function App() {
 
   const t = COPY[language];
   const locale = language === "es" ? "es-AR" : "en-US";
-  const canSend = useMemo(() => file && !["uploading", "validating"].includes(phase), [file, phase]);
+  const canSend = useMemo(() => file && !["uploading", "validating", "matching"].includes(phase), [file, phase]);
   const statusMessage = customMessage || t[messageKey] || t.initialMessage;
 
   function pickFile(nextFile) {
     setFile(nextFile || null);
     setUploadProgress(0);
     setValidationProgress(0);
+    setMatchProgress(0);
     setResult(null);
+    setMatchResult(null);
     setError(null);
     setDuplicateCandidate(null);
     setPhase("idle");
@@ -819,6 +901,20 @@ function App() {
     }
   }
 
+  async function pollMatch(jobId) {
+    for (;;) {
+      const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${jobId}`);
+      if (!response.ok) throw new Error(await response.text());
+      const job = await response.json();
+      setMatchProgress(job.progress || 0);
+      setCustomMessage(job.message || t.matching);
+
+      if (job.status === "complete") return job.result;
+      if (job.status === "failed") throw new Error(job.error || t.matchFailed);
+      await new Promise((resolve) => setTimeout(resolve, 900));
+    }
+  }
+
   async function submit({ skipDuplicateCheck = false, reuseUpload = null } = {}) {
     if (!file) return;
     if (TURNSTILE_SITE_KEY && !turnstileToken) {
@@ -830,11 +926,13 @@ function App() {
     setMaxVariants(variantLimit);
     setError(null);
     setResult(null);
+    setMatchResult(null);
     setPhase("uploading");
     setMessageKey("uploading");
     setCustomMessage("");
     setUploadProgress(0);
     setValidationProgress(0);
+    setMatchProgress(0);
     setDuplicateCandidate(null);
 
     try {
@@ -877,10 +975,35 @@ function App() {
       const validationResult = await pollValidation(job.id);
 
       setResult(validationResult);
-      setPhase("done");
-      setMessageKey("complete");
-      setCustomMessage("");
       setValidationProgress(100);
+
+      if (validationResult.status === "invalid") {
+        setPhase("done");
+        setMessageKey("complete");
+        setCustomMessage("");
+        setTurnstileToken("");
+        setTurnstileResetKey((current) => current + 1);
+        return;
+      }
+
+      setPhase("matching");
+      setMessageKey("matchStarting");
+      setMatchProgress(5);
+
+      const matchStart = await fetch(`${API_BASE}/api/vcf-canon-matches`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uploadId: upload.uploadId }),
+      });
+      if (!matchStart.ok) throw new Error(await matchStart.text());
+      const matchJob = await matchStart.json();
+      const nextMatchResult = await pollMatch(matchJob.id);
+
+      setMatchResult(nextMatchResult);
+      setPhase("done");
+      setMessageKey("matchComplete");
+      setCustomMessage("");
+      setMatchProgress(100);
       setTurnstileToken("");
       setTurnstileResetKey((current) => current + 1);
     } catch (caught) {
@@ -956,7 +1079,7 @@ function App() {
 
       <section className="action-panel">
         <div className="status-line">
-          {phase === "validating" ? <Loader2 className="spin" size={20} /> : <ShieldCheck size={20} />}
+          {phase === "validating" || phase === "matching" ? <Loader2 className="spin" size={20} /> : <ShieldCheck size={20} />}
           <span>{statusMessage}</span>
         </div>
 
@@ -983,6 +1106,7 @@ function App() {
 
         <ProgressBar label={t.uploadProgress} value={uploadProgress} tone="green" />
         <ProgressBar label={t.validationProgress} value={validationProgress} tone="blue" />
+        <ProgressBar label={t.matchProgress} value={matchProgress} tone="blue" />
         {error && <p className="error-message">{error}</p>}
         <button className="primary-button" type="button" disabled={!canSend} onClick={submit}>
           <Send size={18} />
@@ -991,6 +1115,7 @@ function App() {
       </section>
 
       <ResultPanel result={result} analysisMode={analysisMode} locale={locale} t={t} />
+      <MatchResultPanel result={matchResult} locale={locale} t={t} />
       <DuplicateUploadModal
         candidate={duplicateCandidate}
         locale={locale}

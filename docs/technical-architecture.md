@@ -2,9 +2,9 @@
 
 ## Scope
 
-This repository contains the first production-facing slice of HEAL by FON: a web interface and backend API for receiving large VCF files and validating their integrity before downstream genomic interpretation workflows.
+This repository contains the first production-facing slice of HEAL by FON: a web interface and backend API for receiving large VCF files, validating their integrity, maintaining the current interpretation canon, and starting the first VCF-canon match.
 
-The current scope is intentionally limited to VCF intake and integrity validation. Clinical/genomic interpretation, report generation, multi-user accounts, and the n8n downstream pipeline are not implemented here yet.
+Clinical/genomic interpretation, report generation, and multi-user accounts are not implemented here yet. The current downstream implementation stops after the VCF-canon match; later interpretation is still represented as a placeholder.
 
 ## Public Components
 
@@ -28,7 +28,7 @@ The frontend is a static application. It does not process, store, or validate VC
 - Tunnel: Cloudflare Tunnel, dedicated to HEAL API
 - Upload storage root: configured by `HEAL_UPLOAD_ROOT`
 
-The backend receives VCF chunks, assembles files on disk, starts streaming validation, and returns structured JSON results.
+The backend receives VCF chunks, assembles files on disk, starts streaming validation, orchestrates canon processing, and starts the VCF-canon match.
 
 ### VCF Validator
 
@@ -70,6 +70,8 @@ PUT  /api/uploads/:uploadId/chunks/:chunkIndex
 POST /api/uploads/:uploadId/complete
 POST /api/validations
 GET  /api/validations/:jobId
+POST /api/vcf-canon-matches
+GET  /api/vcf-canon-matches/:jobId
 ```
 
 Default chunk size:
@@ -145,25 +147,41 @@ Local paths remain internal to the backend and n8n integration.
 
 ## n8n Integration Points
 
-The backend has two optional webhook points:
+The backend has webhook points for the current HEAL prototype:
 
 ```text
 HEAL_N8N_UPLOAD_WEBHOOK_URL
 HEAL_N8N_VALIDATION_WEBHOOK_URL
+HEAL_N8N_CANON_WEBHOOK_URL
+HEAL_N8N_RSID_RESOLUTION_WEBHOOK_URL
+HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL
 ```
 
 Current status:
 
 ```text
-n8nUploadWebhookConfigured: false
-n8nValidationWebhookConfigured: false
+n8nUploadWebhookConfigured: true
+n8nValidationWebhookConfigured: true
+n8nCanonWebhookConfigured: true
+n8nRsidResolutionWebhookConfigured: true
+n8nVcfCanonMatchWebhookConfigured: true
 ```
 
-Expected next step:
+Workflow responsibilities:
 
-1. Create or update the n8n workflow that receives a completed upload or completed validation event.
-2. Set webhook URLs in the backend environment file.
-3. Keep webhook secrets outside GitHub and outside Cloudflare Pages.
+- `HEAL - VCF Integrity Check`: original integrity workflow, kept inactive.
+- `HEAL - Canon Sheet Intake`: cleans the uploaded canon and creates `rsid_master.csv`.
+- `HEAL - rsID Coordinate Resolution`: runs only after canon changes and creates the match-ready rsID table.
+- `HEAL - VCF Canon Match`: runs after a VCF passes validation and matches the current VCF against the current canon.
+
+Natural usage path:
+
+```text
+Canon change -> clean canon -> resolve rsID coordinates
+VCF upload -> integrity validation -> VCF-canon match -> downstream analysis placeholder
+```
+
+Webhook secrets, if added later, must stay outside GitHub and outside Cloudflare Pages.
 
 ## Production Domains
 
@@ -174,8 +192,8 @@ API:      https://heal-api.aeye.com.ar
 
 ## Current Known Gaps
 
-- API and tunnel are running, but persistence after server reboot still needs installation from an elevated PowerShell session.
-- Tunnel token should be rotated because it was temporarily shared during setup.
-- n8n webhooks are not configured yet.
+- API and tunnel are running, but persistence after server reboot still depends on the installed local scheduled tasks/service setup.
+- Tunnel token should still be rotated later because it was temporarily shared during setup.
+- Workflow 3 and workflow 4 are active but not visually assigned to the `Heal by FON` folder in n8n until a specific `parentFolderId` maintenance update is authorized.
 - Upload retention is simple TTL/cap based storage, not a formal user/file lifecycle system.
 - There is no user login or account isolation beyond the current browser/client fingerprint and Turnstile controls.
