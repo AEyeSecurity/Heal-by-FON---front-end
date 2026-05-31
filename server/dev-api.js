@@ -19,6 +19,9 @@ const CANON_ROOT =
 const CANON_PROCESSOR_SCRIPT =
   process.env.HEAL_CANON_PROCESSOR_SCRIPT ||
   "C:\\ServerCIT\\services\\heal-canon-intake\\process_heal_canon.py";
+const RSID_RESOLUTION_ROOT =
+  process.env.HEAL_RSID_RESOLUTION_ROOT ||
+  "C:\\ServerCIT\\services\\heal-rsid-resolution";
 const PYTHON_EXE = process.env.HEAL_PYTHON_EXE || "python";
 const MAX_UPLOADS = Math.max(1, Number.parseInt(process.env.HEAL_MAX_UPLOADS || "12", 10) || 12);
 const UPLOAD_TTL_MS =
@@ -120,6 +123,16 @@ function canonPaths() {
   return {
     root,
     incoming: path.join(root, "incoming"),
+    runs: path.join(root, "runs"),
+    current: path.join(root, "current"),
+    currentManifest: path.join(root, "current", "current.json"),
+  };
+}
+
+function rsidResolutionPaths() {
+  const root = path.resolve(RSID_RESOLUTION_ROOT);
+  return {
+    root,
     runs: path.join(root, "runs"),
     current: path.join(root, "current"),
     currentManifest: path.join(root, "current", "current.json"),
@@ -413,6 +426,13 @@ async function loadCurrentCanonManifest() {
   return JSON.parse(raw);
 }
 
+async function loadCurrentRsidResolutionManifest() {
+  const paths = rsidResolutionPaths();
+  const raw = await readFile(paths.currentManifest, "utf8").catch(() => null);
+  if (!raw) return null;
+  return JSON.parse(raw);
+}
+
 async function saveCurrentCanon(runId, sourceFileName, summary) {
   const paths = canonPaths();
   await mkdir(paths.current, { recursive: true });
@@ -599,10 +619,23 @@ app.get("/api/canon/current/rsid-master", async (req, res) => {
   }
 
   const summary = JSON.parse(await readFile(summaryPath, "utf8"));
-  const rsidMasterPath = path.resolve(summary.outputs?.rsidMasterCsv || "");
-  if (!isPathInside(paths.root, rsidMasterPath)) {
-    res.status(400).json({ error: "Current rsID master CSV is outside the allowed root." });
-    return;
+  const resolutionPaths = rsidResolutionPaths();
+  const resolutionManifest = await loadCurrentRsidResolutionManifest().catch(() => null);
+  let rsidMasterPath = "";
+  let downloadSuffix = "rsid_master";
+  if (resolutionManifest?.rsidMatchReadyCsv) {
+    const resolvedPath = path.resolve(resolutionManifest.rsidMatchReadyCsv);
+    if (isPathInside(resolutionPaths.root, resolvedPath)) {
+      rsidMasterPath = resolvedPath;
+      downloadSuffix = "rsid_master_resolved";
+    }
+  }
+  if (!rsidMasterPath) {
+    rsidMasterPath = path.resolve(summary.outputs?.rsidMasterCsv || "");
+    if (!isPathInside(paths.root, rsidMasterPath)) {
+      res.status(400).json({ error: "Current rsID master CSV is outside the allowed root." });
+      return;
+    }
   }
   const rsidMasterStat = await stat(rsidMasterPath).catch(() => null);
   if (!rsidMasterStat || rsidMasterStat.size <= 0) {
@@ -612,7 +645,7 @@ app.get("/api/canon/current/rsid-master", async (req, res) => {
 
   const baseName = safeFileName(String(summary.sourceFileName || "heal-canon").replace(/\.(csv|xlsx)$/i, ""));
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
-  res.download(rsidMasterPath, `${baseName}_rsid_master.csv`);
+  res.download(rsidMasterPath, `${baseName}_${downloadSuffix}.csv`);
 });
 
 app.post("/api/canon/upload", express.raw({ type: "*/*", limit: MAX_CANON_FILE_SIZE_BYTES }), async (req, res) => {
