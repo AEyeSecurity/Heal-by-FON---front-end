@@ -86,3 +86,10 @@ Remaining before stable production:
 - configure n8n webhook URLs
 - define retention policy for uploaded VCFs
 - move from client fingerprint isolation to authenticated user ownership when multi-user requirements become concrete
+
+### 2026-05-31 Operational Follow-up
+
+- Added current-user Startup fallback launchers for HEAL API and HEAL Cloudflare Tunnel.
+- Verified public API health and Turnstile enforcement.
+- Confirmed n8n local REST API requires authentication (`401`) and the existing HEAL webhook is not registered while its workflow remains inactive.
+- No direct SQLite writes were made.

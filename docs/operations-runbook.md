@@ -176,6 +176,15 @@ C:\ServerCIT\services\heal-vcf-api\install_heal_vcf_api_task.ps1
 
 Run them from PowerShell as Administrator.
 
+Current fallback persistence has also been added to the current user's Startup folder:
+
+```text
+C:\Users\Usuario\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\heal_vcf_api_start.cmd
+C:\Users\Usuario\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\cloudflared_heal_api_start.cmd
+```
+
+This matches the current operational pattern used by n8n on this server: it restores availability after user login, not before login. For production-grade unattended recovery, replace this fallback with the elevated scheduled tasks above.
+
 ## Deployment
 
 Frontend deployment is managed by Cloudflare Pages from GitHub:
