@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import {
   BarChart3,
   CheckCircle2,
+  Download,
   FileSpreadsheet,
   FileUp,
   Globe2,
@@ -98,6 +99,8 @@ const COPY = {
     canonRepeatedRsids: "rsIDs repetidos",
     canonManualReview: "Revision manual",
     canonPreview: "Vista previa limpia",
+    canonDownload: "Descargar canon completo",
+    canonDownloadFailed: "No se pudo descargar el canon.",
     close: "Cerrar",
   },
   en: {
@@ -178,6 +181,8 @@ const COPY = {
     canonRepeatedRsids: "Repeated rsIDs",
     canonManualReview: "Manual review",
     canonPreview: "Clean preview",
+    canonDownload: "Download full canon",
+    canonDownloadFailed: "Could not download canon.",
     close: "Close",
   },
 };
@@ -436,6 +441,31 @@ function CanonModal({ open, onClose, language, locale, t }) {
     }
   }
 
+  async function downloadCanon() {
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/canon/current/download`);
+      if (!response.ok) {
+        const payload = await readJsonResponse(response);
+        throw new Error(payload.error || t.canonDownloadFailed);
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="?([^"]+)"?/i);
+      const fileName = match?.[1] || "heal-canon-clean-rows.csv";
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (caught) {
+      setError(caught.message || String(caught));
+    }
+  }
+
   if (!open) return null;
 
   const current = canonState?.current;
@@ -471,12 +501,18 @@ function CanonModal({ open, onClose, language, locale, t }) {
             )}
           </div>
           {current && (
-            <div className="canon-mini-grid">
-              <MetricCard label={t.canonRows} value={formatNumber(current.metadata?.rows_nonempty, locale)} />
-              <MetricCard label={t.canonUniqueRsids} value={formatNumber(current.metadata?.unique_rsids, locale)} />
-              <MetricCard label={t.canonRepeatedRsids} value={formatNumber(current.metadata?.duplicate_rsids, locale)} />
-              <MetricCard label={t.canonManualReview} value={formatNumber(sourceGroups.revision_manual || 0, locale)} />
-            </div>
+            <>
+              <div className="canon-mini-grid">
+                <MetricCard label={t.canonRows} value={formatNumber(current.metadata?.rows_nonempty, locale)} />
+                <MetricCard label={t.canonUniqueRsids} value={formatNumber(current.metadata?.unique_rsids, locale)} />
+                <MetricCard label={t.canonRepeatedRsids} value={formatNumber(current.metadata?.duplicate_rsids, locale)} />
+                <MetricCard label={t.canonManualReview} value={formatNumber(sourceGroups.revision_manual || 0, locale)} />
+              </div>
+              <button className="secondary-button canon-download-button" type="button" onClick={downloadCanon}>
+                <Download size={17} />
+                {t.canonDownload}
+              </button>
+            </>
           )}
         </div>
 

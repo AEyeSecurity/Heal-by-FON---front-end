@@ -704,6 +704,10 @@ h1 {
   gap: 10px;
 }
 
+.canon-download-button {
+  margin-top: 12px;
+}
+
 .canon-upload {
   display: grid;
   gap: 14px;

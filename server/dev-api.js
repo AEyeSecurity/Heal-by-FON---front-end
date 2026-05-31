@@ -393,10 +393,9 @@ async function processCanonWithN8n(payload) {
 }
 
 async function loadCurrentCanon() {
+  const manifest = await loadCurrentCanonManifest();
+  if (!manifest) return publicCanon(null, null, null);
   const paths = canonPaths();
-  const raw = await readFile(paths.currentManifest, "utf8").catch(() => null);
-  if (!raw) return publicCanon(null, null, null);
-  const manifest = JSON.parse(raw);
   const summaryPath = path.resolve(manifest.summaryPath || "");
   const previewPath = path.resolve(manifest.previewPath || "");
   if (!isPathInside(paths.root, summaryPath) || !isPathInside(paths.root, previewPath)) {
@@ -405,6 +404,13 @@ async function loadCurrentCanon() {
   const summary = JSON.parse(await readFile(summaryPath, "utf8"));
   const preview = JSON.parse(await readFile(previewPath, "utf8").catch(() => '{"columns":[],"rows":[]}'));
   return publicCanon(summary, preview, manifest);
+}
+
+async function loadCurrentCanonManifest() {
+  const paths = canonPaths();
+  const raw = await readFile(paths.currentManifest, "utf8").catch(() => null);
+  if (!raw) return null;
+  return JSON.parse(raw);
 }
 
 async function saveCurrentCanon(runId, sourceFileName, summary) {
@@ -535,6 +541,42 @@ app.get("/api/canon/current", async (_req, res) => {
     error: error.message,
   }));
   res.json(current);
+});
+
+app.get("/api/canon/current/download", async (req, res) => {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+
+  const paths = canonPaths();
+  const manifest = await loadCurrentCanonManifest().catch(() => null);
+  if (!manifest) {
+    res.status(404).json({ error: "No canon is currently loaded." });
+    return;
+  }
+
+  const summaryPath = path.resolve(manifest.summaryPath || "");
+  if (!isPathInside(paths.root, summaryPath)) {
+    res.status(400).json({ error: "Current canon summary is outside the allowed root." });
+    return;
+  }
+
+  const summary = JSON.parse(await readFile(summaryPath, "utf8"));
+  const cleanRowsPath = path.resolve(summary.outputs?.cleanRowsCsv || "");
+  if (!isPathInside(paths.root, cleanRowsPath)) {
+    res.status(400).json({ error: "Current canon CSV is outside the allowed root." });
+    return;
+  }
+  const cleanRowsStat = await stat(cleanRowsPath).catch(() => null);
+  if (!cleanRowsStat || cleanRowsStat.size <= 0) {
+    res.status(404).json({ error: "Current canon CSV was not found." });
+    return;
+  }
+
+  const baseName = safeFileName(String(summary.sourceFileName || "heal-canon").replace(/\.(csv|xlsx)$/i, ""));
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.download(cleanRowsPath, `${baseName}_clean_rows.csv`);
 });
 
 app.post("/api/canon/upload", express.raw({ type: "*/*", limit: MAX_CANON_FILE_SIZE_BYTES }), async (req, res) => {
