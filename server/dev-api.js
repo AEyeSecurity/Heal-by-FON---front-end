@@ -579,6 +579,42 @@ app.get("/api/canon/current/download", async (req, res) => {
   res.download(cleanRowsPath, `${baseName}_clean_rows.csv`);
 });
 
+app.get("/api/canon/current/rsid-master", async (req, res) => {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+
+  const paths = canonPaths();
+  const manifest = await loadCurrentCanonManifest().catch(() => null);
+  if (!manifest) {
+    res.status(404).json({ error: "No canon is currently loaded." });
+    return;
+  }
+
+  const summaryPath = path.resolve(manifest.summaryPath || "");
+  if (!isPathInside(paths.root, summaryPath)) {
+    res.status(400).json({ error: "Current canon summary is outside the allowed root." });
+    return;
+  }
+
+  const summary = JSON.parse(await readFile(summaryPath, "utf8"));
+  const rsidMasterPath = path.resolve(summary.outputs?.rsidMasterCsv || "");
+  if (!isPathInside(paths.root, rsidMasterPath)) {
+    res.status(400).json({ error: "Current rsID master CSV is outside the allowed root." });
+    return;
+  }
+  const rsidMasterStat = await stat(rsidMasterPath).catch(() => null);
+  if (!rsidMasterStat || rsidMasterStat.size <= 0) {
+    res.status(404).json({ error: "Current rsID master CSV was not found." });
+    return;
+  }
+
+  const baseName = safeFileName(String(summary.sourceFileName || "heal-canon").replace(/\.(csv|xlsx)$/i, ""));
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.download(rsidMasterPath, `${baseName}_rsid_master.csv`);
+});
+
 app.post("/api/canon/upload", express.raw({ type: "*/*", limit: MAX_CANON_FILE_SIZE_BYTES }), async (req, res) => {
   const rawFileName = req.headers["x-canon-file-name"];
   const encodedFileName = Array.isArray(rawFileName) ? rawFileName[0] : rawFileName;

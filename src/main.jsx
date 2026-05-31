@@ -100,6 +100,7 @@ const COPY = {
     canonManualReview: "Revision manual",
     canonPreview: "Vista previa limpia",
     canonDownload: "Descargar canon completo",
+    rsidMasterDownload: "Descargar rsID master",
     canonDownloadFailed: "No se pudo descargar el canon.",
     close: "Cerrar",
   },
@@ -182,6 +183,7 @@ const COPY = {
     canonManualReview: "Manual review",
     canonPreview: "Clean preview",
     canonDownload: "Download full canon",
+    rsidMasterDownload: "Download rsID master",
     canonDownloadFailed: "Could not download canon.",
     close: "Close",
   },
@@ -441,10 +443,10 @@ function CanonModal({ open, onClose, language, locale, t }) {
     }
   }
 
-  async function downloadCanon() {
+  async function downloadFile(endpoint, fallbackName) {
     setError(null);
     try {
-      const response = await fetch(`${API_BASE}/api/canon/current/download`);
+      const response = await fetch(`${API_BASE}${endpoint}`);
       if (!response.ok) {
         const payload = await readJsonResponse(response);
         throw new Error(payload.error || t.canonDownloadFailed);
@@ -452,7 +454,7 @@ function CanonModal({ open, onClose, language, locale, t }) {
       const blob = await response.blob();
       const disposition = response.headers.get("Content-Disposition") || "";
       const match = disposition.match(/filename="?([^"]+)"?/i);
-      const fileName = match?.[1] || "heal-canon-clean-rows.csv";
+      const fileName = match?.[1] || fallbackName;
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -464,6 +466,14 @@ function CanonModal({ open, onClose, language, locale, t }) {
     } catch (caught) {
       setError(caught.message || String(caught));
     }
+  }
+
+  async function downloadCanon() {
+    await downloadFile("/api/canon/current/download", "heal-canon-clean-rows.csv");
+  }
+
+  async function downloadRsidMaster() {
+    await downloadFile("/api/canon/current/rsid-master", "heal-canon-rsid-master.csv");
   }
 
   if (!open) return null;
@@ -511,6 +521,10 @@ function CanonModal({ open, onClose, language, locale, t }) {
               <button className="secondary-button canon-download-button" type="button" onClick={downloadCanon}>
                 <Download size={17} />
                 {t.canonDownload}
+              </button>
+              <button className="secondary-button canon-download-button" type="button" onClick={downloadRsidMaster}>
+                <Download size={17} />
+                {t.rsidMasterDownload}
               </button>
             </>
           )}
