@@ -72,6 +72,7 @@ POST /api/validations
 GET  /api/validations/:jobId
 POST /api/vcf-canon-matches
 GET  /api/vcf-canon-matches/:jobId
+GET  /api/vcf-canon-matches/:jobId/download
 ```
 
 Default chunk size:
@@ -144,6 +145,8 @@ The API returns validation results without exposing local filesystem paths. Publ
 - optional full metrics
 
 Local paths remain internal to the backend and n8n integration.
+
+The VCF-canon match download endpoint serves the per-job `sheet_final_consolidated.csv` artifact for QA after the job completes. The browser receives a CSV attachment; the JSON result and download response do not expose internal filesystem paths.
 
 ## n8n Integration Points
 

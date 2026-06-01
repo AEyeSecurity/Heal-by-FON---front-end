@@ -708,6 +708,10 @@ h1 {
   margin-top: 12px;
 }
 
+.match-download-button {
+  margin-top: 16px;
+}
+
 .canon-upload {
   display: grid;
   gap: 14px;

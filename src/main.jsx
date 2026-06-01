@@ -106,6 +106,7 @@ const COPY = {
     canonSelect: "Seleccionar canon",
     canonUpload: "Subir y limpiar canon",
     canonUploading: "Procesando canon...",
+    canonProgress: "Carga y procesamiento del canon",
     canonLoaded: "Canon cargado",
     canonRows: "Filas no vacias",
     canonUniqueRsids: "rsIDs unicos",
@@ -114,6 +115,8 @@ const COPY = {
     canonPreview: "Vista previa limpia",
     canonDownload: "Descargar canon completo",
     rsidMasterDownload: "Descargar rsID master",
+    matchDownload: "Descargar CSV de matches",
+    matchDownloadFailed: "No se pudo descargar el CSV de matches.",
     canonDownloadFailed: "No se pudo descargar el canon.",
     close: "Cerrar",
   },
@@ -202,6 +205,7 @@ const COPY = {
     canonSelect: "Select canon",
     canonUpload: "Upload and clean canon",
     canonUploading: "Processing canon...",
+    canonProgress: "Canon upload and processing",
     canonLoaded: "Canon loaded",
     canonRows: "Non-empty rows",
     canonUniqueRsids: "Unique rsIDs",
@@ -210,6 +214,8 @@ const COPY = {
     canonPreview: "Clean preview",
     canonDownload: "Download full canon",
     rsidMasterDownload: "Download rsID master",
+    matchDownload: "Download matches CSV",
+    matchDownloadFailed: "Could not download matches CSV.",
     canonDownloadFailed: "Could not download canon.",
     close: "Close",
   },
@@ -400,6 +406,7 @@ function CanonModal({ open, onClose, language, locale, t }) {
   const [canonFile, setCanonFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [canonProgress, setCanonProgress] = useState(0);
   const [error, setError] = useState(null);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileResetKey, setTurnstileResetKey] = useState(0);
@@ -432,10 +439,71 @@ function CanonModal({ open, onClose, language, locale, t }) {
     if (open) {
       loadCanon();
       setCanonFile(null);
+      setCanonProgress(0);
       setTurnstileToken("");
       setTurnstileResetKey((current) => current + 1);
     }
   }, [open]);
+
+  function postCanonWithProgress(selectedFile) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      let processingTimer = null;
+      const clearProcessingTimer = () => {
+        if (processingTimer) {
+          window.clearInterval(processingTimer);
+          processingTimer = null;
+        }
+      };
+
+      xhr.open("POST", `${API_BASE}/api/canon/upload`);
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.setRequestHeader("X-Canon-File-Name", encodeURIComponent(selectedFile.name));
+      xhr.setRequestHeader("X-Turnstile-Token", turnstileToken);
+
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable) return;
+        const uploadRatio = event.loaded / event.total;
+        setCanonProgress(Math.max(5, Math.min(50, Math.round(uploadRatio * 50))));
+      };
+
+      xhr.upload.onload = () => {
+        setCanonProgress((current) => Math.max(current, 55));
+        processingTimer = window.setInterval(() => {
+          setCanonProgress((current) => Math.min(92, current + 4));
+        }, 450);
+      };
+
+      xhr.onload = () => {
+        clearProcessingTimer();
+        const payload = (() => {
+          try {
+            return xhr.responseText ? JSON.parse(xhr.responseText) : {};
+          } catch {
+            return { error: xhr.responseText };
+          }
+        })();
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new Error(payload.error || "Could not upload canon."));
+          return;
+        }
+        setCanonProgress(100);
+        resolve(payload);
+      };
+
+      xhr.onerror = () => {
+        clearProcessingTimer();
+        reject(new Error("Could not upload canon."));
+      };
+      xhr.onabort = () => {
+        clearProcessingTimer();
+        reject(new Error("Canon upload was aborted."));
+      };
+
+      setCanonProgress(5);
+      xhr.send(selectedFile);
+    });
+  }
 
   async function uploadCanon() {
     if (!canonFile) return;
@@ -445,18 +513,9 @@ function CanonModal({ open, onClose, language, locale, t }) {
     }
     setUploading(true);
     setError(null);
+    setCanonProgress(0);
     try {
-      const response = await fetch(`${API_BASE}/api/canon/upload`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/octet-stream",
-          "X-Canon-File-Name": encodeURIComponent(canonFile.name),
-          "X-Turnstile-Token": turnstileToken,
-        },
-        body: canonFile,
-      });
-      const payload = await readJsonResponse(response);
-      if (!response.ok) throw new Error(payload.error || "Could not upload canon.");
+      const payload = await postCanonWithProgress(canonFile);
       setCanonState(payload);
       setCanonFile(null);
       setTurnstileToken("");
@@ -564,7 +623,10 @@ function CanonModal({ open, onClose, language, locale, t }) {
             className="file-input"
             type="file"
             accept=".csv,.xlsx"
-            onChange={(event) => setCanonFile(event.target.files?.[0] || null)}
+            onChange={(event) => {
+              setCanonFile(event.target.files?.[0] || null);
+              setCanonProgress(0);
+            }}
           />
           <div className="canon-upload-row">
             <button className="secondary-button" type="button" onClick={() => fileInputRef.current?.click()}>
@@ -581,6 +643,7 @@ function CanonModal({ open, onClose, language, locale, t }) {
             t={t}
           />
           {error && <p className="error-message">{error}</p>}
+          {(uploading || canonProgress > 0) && <ProgressBar label={t.canonProgress} value={canonProgress} tone="green" />}
           <button className="primary-button" type="button" disabled={!canonFile || uploading} onClick={uploadCanon}>
             {uploading ? <Loader2 className="spin" size={18} /> : <UploadCloud size={18} />}
             {uploading ? t.canonUploading : t.canonUpload}
@@ -728,6 +791,7 @@ function ResultPanel({ result, analysisMode, locale, t }) {
 }
 
 function MatchResultPanel({ result, locale, t }) {
+  const [downloadError, setDownloadError] = useState(null);
   if (!result) return null;
 
   const isValid = result.status === "valid";
@@ -746,6 +810,38 @@ function MatchResultPanel({ result, locale, t }) {
     [t.sample, metadata.sample_name || "-"],
   ];
 
+  async function downloadMatches() {
+    if (!result.jobId) return;
+    setDownloadError(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${result.jobId}/download`);
+      if (!response.ok) {
+        const text = await response.text();
+        let payload = {};
+        try {
+          payload = text ? JSON.parse(text) : {};
+        } catch {
+          payload = { error: text };
+        }
+        throw new Error(payload.error || t.matchDownloadFailed);
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="?([^"]+)"?/i);
+      const fileName = match?.[1] || "heal-vcf-canon-matches.csv";
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (caught) {
+      setDownloadError(caught.message || String(caught));
+    }
+  }
+
   return (
     <section className="result-panel">
       <div className="result-heading">
@@ -760,6 +856,11 @@ function MatchResultPanel({ result, locale, t }) {
           <MetricCard label={label} value={value} key={label} />
         ))}
       </div>
+      <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadMatches}>
+        <Download size={17} />
+        {t.matchDownload}
+      </button>
+      {downloadError && <p className="error-message">{downloadError}</p>}
       {(result.errors?.length > 0 || result.warnings?.length > 0) && (
         <div className="issues">
           {result.errors?.map((error) => (
@@ -895,7 +996,7 @@ function App() {
       setValidationProgress(job.progress || 0);
       setCustomMessage(job.message || t.validating);
 
-      if (job.status === "complete") return job.result;
+      if (job.status === "complete") return { ...(job.result || {}), jobId: job.id };
       if (job.status === "failed") throw new Error(job.error || t.validationFailed);
       await new Promise((resolve) => setTimeout(resolve, 800));
     }

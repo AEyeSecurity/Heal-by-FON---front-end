@@ -1287,6 +1287,10 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         requestedAt: new Date().toISOString(),
       };
       const summary = await processVcfCanonMatch(payload);
+      job.artifacts = {
+        sheetFinalConsolidatedCsv: summary.outputs?.sheetFinalConsolidatedCsv || "",
+        vcfCandidatesCsv: summary.outputs?.vcfCandidatesCsv || "",
+      };
       job.result = sanitizeVcfCanonMatchResult(summary, upload);
       job.status = "complete";
       job.progress = 100;
@@ -1311,6 +1315,45 @@ app.get("/api/vcf-canon-matches/:jobId", (req, res) => {
     return;
   }
   res.json(publicJob(job));
+});
+
+app.get("/api/vcf-canon-matches/:jobId/download", async (req, res) => {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (job.status !== "complete") {
+    res.status(409).json({ error: "VCF-canon match is not complete yet." });
+    return;
+  }
+
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+
+  const paths = vcfCanonMatchPaths();
+  const matchCsvPath = path.resolve(job.artifacts?.sheetFinalConsolidatedCsv || "");
+  if (!isPathInside(paths.root, matchCsvPath)) {
+    res.status(400).json({ error: "Match CSV is outside the allowed root." });
+    return;
+  }
+  const matchCsvStat = await stat(matchCsvPath).catch(() => null);
+  if (!matchCsvStat || matchCsvStat.size <= 0) {
+    res.status(404).json({ error: "Match CSV was not found." });
+    return;
+  }
+
+  const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.download(matchCsvPath, `${baseName}_vcf_canon_matches.csv`);
 });
 
 app.listen(PORT, "127.0.0.1", () => {

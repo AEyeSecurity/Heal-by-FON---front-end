@@ -67,6 +67,7 @@ POST /api/validations
 GET  /api/validations/:jobId
 POST /api/vcf-canon-matches
 GET  /api/vcf-canon-matches/:jobId
+GET  /api/vcf-canon-matches/:jobId/download
 ```
 
 Default chunk size is 8 MiB. This keeps every request well below Cloudflare's common proxied request body limits while allowing multi-GB VCF files to land on the server by streaming each chunk to disk. The browser only receives an `uploadId`; local server paths stay on the backend.
@@ -96,6 +97,8 @@ VCF upload -> Integrity validation -> VCF-Canon match -> Downstream analysis
 ```
 
 The fourth step is a placeholder for the next interpretation workflows.
+
+When the match finishes, the UI exposes a CSV download for QA. The API serves the per-job consolidated match CSV without exposing local server paths.
 
 ## Canon Flow
 
