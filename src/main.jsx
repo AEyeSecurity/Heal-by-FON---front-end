@@ -29,7 +29,7 @@ const COPY = {
     title: "VCF Integrity Check",
     lede: "Carga un archivo VCF o VCF.GZ para validar estructura, headers, primeras variantes y metricas tecnicas.",
     pipelineLabel: "Pipeline",
-    steps: ["Carga del VCF", "Validacion de integridad", "Match VCF-Canon", "Preparacion del match", "Analisis posterior"],
+    steps: ["Carga del VCF", "Validacion de integridad", "Match VCF-Canon", "Analisis posterior"],
     dropEmpty: "Arrastra tu VCF aca",
     dropHelp: "Tambien podes seleccionarlo desde tu equipo.",
     selectFile: "Seleccionar archivo",
@@ -139,7 +139,7 @@ const COPY = {
     title: "VCF Integrity Check",
     lede: "Upload a VCF or VCF.GZ file to validate structure, headers, first variants, and technical metrics.",
     pipelineLabel: "Pipeline",
-    steps: ["VCF upload", "Integrity validation", "VCF-Canon match", "Match preparation", "Downstream analysis"],
+    steps: ["VCF upload", "Integrity validation", "VCF-Canon match", "Downstream analysis"],
     dropEmpty: "Drop your VCF here",
     dropHelp: "You can also select it from your computer.",
     selectFile: "Select file",
@@ -288,21 +288,17 @@ function PipelineStepper({ phase, t }) {
     { key: "upload", label: t.steps[0] },
     { key: "validation", label: t.steps[1] },
     { key: "match", label: t.steps[2] },
-    { key: "preparation", label: t.steps[3] },
-    { key: "analysis", label: t.steps[4] },
+    { key: "analysis", label: t.steps[3] },
   ];
   const activeIndex =
     phase === "uploading"
       ? 0
       : phase === "validating"
         ? 1
-        : phase === "matching"
+        : phase === "matching" || phase === "preparing" || phase === "done"
           ? 2
-          : phase === "preparing" || phase === "done"
-            ? 3
-            : 0;
-  const completeIndex =
-    phase === "done" ? 3 : phase === "preparing" ? 2 : phase === "matching" ? 1 : phase === "validating" ? 0 : -1;
+          : 0;
+  const completeIndex = phase === "done" ? 2 : phase === "matching" || phase === "preparing" ? 1 : phase === "validating" ? 0 : -1;
 
   return (
     <section className="pipeline" aria-label={t.pipelineLabel}>

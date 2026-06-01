@@ -141,7 +141,7 @@ h1 {
 .pipeline {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 20px;
   padding: 20px 18px;
@@ -150,8 +150,8 @@ h1 {
 .pipeline::before {
   position: absolute;
   top: 39px;
-  right: calc(10% + 26px);
-  left: calc(10% + 26px);
+  right: calc(12.5% + 26px);
+  left: calc(12.5% + 26px);
   height: 2px;
   background: #dfe7d8;
   content: "";
@@ -837,8 +837,8 @@ h1 {
   }
 
   .pipeline::before {
-    right: calc(10% + 20px);
-    left: calc(10% + 20px);
+    right: calc(12.5% + 20px);
+    left: calc(12.5% + 20px);
   }
 
   .pipeline-step {

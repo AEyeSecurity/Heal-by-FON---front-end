@@ -96,20 +96,17 @@ Remaining before stable production:
 
 ## 2026-06-01
 
-### Workflow 5 - Match Preparation
+### Match Preparation Service
 
 - Added runtime service:
   - `C:\ServerCIT\services\heal-match-preparation\prepare_match_deliverable.py`
   - `C:\ServerCIT\services\heal-match-preparation\run_heal_match_preparation.ps1`
-- Added n8n workflow:
+- Initially added standalone n8n workflow, later superseded by the Workflow 4 internal stage:
   - `HEAL - Match Preparation`
   - workflow ID: `HEALmatchPrep01`
   - webhook path: `heal-match-preparation-9b2f4a7c8d134b61`
 - Added backend env:
   - `HEAL_MATCH_PREPARATION_ROOT`
-  - `HEAL_N8N_MATCH_PREPARATION_WEBHOOK_URL`
-- Added frontend pipeline step:
-  - `Match preparation`
 - Added download endpoints:
   - `GET /api/vcf-canon-matches/:jobId/preparation-audit`
   - `GET /api/vcf-canon-matches/:jobId/preparation-minimal`
@@ -138,3 +135,20 @@ Remaining before stable production:
   - credentials exported: `65`
   - final health: `ok`
 - Restarted only the HEAL API process to load backend/env changes.
+
+### Workflow Consolidation Follow-up
+
+- Moved match preparation inside `HEAL - VCF Canon Match`.
+- Left the standalone `HEAL - Match Preparation` workflow inactive.
+- Restored the user-facing pipeline to four visible steps:
+  - VCF upload
+  - integrity validation
+  - VCF-canon match
+  - downstream analysis
+- Kept internal progress bars for VCF-canon match and match preparation.
+- Corrected `rsid_without_coordinates` classification in the VCF-canon match script.
+- Ran official safe n8n restart:
+  - backup: `C:\n8n-backups\daily\20260601-100652`
+  - workflows exported: `128`
+  - credentials exported: `65`
+  - final health: `ok`

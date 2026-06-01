@@ -91,16 +91,15 @@ After a valid or warning validation result, the frontend asks the backend to run
 
 ```text
 HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL
-HEAL_N8N_MATCH_PREPARATION_WEBHOOK_URL
 ```
 
-The UI currently shows five pipeline steps:
+The UI currently shows four pipeline steps:
 
 ```text
-VCF upload -> Integrity validation -> VCF-Canon match -> Match preparation -> Downstream analysis
+VCF upload -> Integrity validation -> VCF-Canon match -> Downstream analysis
 ```
 
-The fifth step is a placeholder for the next interpretation workflows.
+The VCF-canon match step internally includes the targeted VCF scan and match preparation. The fourth step is a placeholder for the next interpretation workflows.
 
 When the match finishes, the UI exposes CSV downloads for QA. The API serves the per-job consolidated match CSV plus the prepared audit/minimal CSVs without exposing local server paths.
 

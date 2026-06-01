@@ -1,0 +1,182 @@
+{
+  "id": "7EGemqwYdFn5WLvb",
+  "name": "HEAL - VCF Canon Match",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "heal-vcf-canon-match-cfd1853dc6d844c1",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -760,
+        0
+      ],
+      "id": "80944d05-a080-4baf-bc86-5f53a361d790",
+      "name": "Webhook - VCF Canon Match Request",
+      "webhookId": "22c0a934-2274-4c89-9364-b50236efc786"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json;\nconst now = new Date().toISOString();\nconst canonRoot = 'C:\\\\ServerCIT\\\\services\\\\heal-canon-intake';\nconst rsidRoot = 'C:\\\\ServerCIT\\\\services\\\\heal-rsid-resolution';\nconst vcfRoot = 'C:\\\\ServerCIT\\\\services\\\\heal-vcf-integrity\\\\incoming';\nconst outputRoot = 'C:\\\\ServerCIT\\\\services\\\\heal-vcf-canon-match';\nfunction normalizePath(value) { return String(value ?? '').replace(/\\//g, '\\\\'); }\nfunction assertInside(root, target, label) {\n  const normalizedRoot = normalizePath(root).toLowerCase();\n  const normalizedTarget = normalizePath(target).toLowerCase();\n  if (!normalizedTarget.startsWith(normalizedRoot + '\\\\')) throw new Error(`${label} is outside the allowed root.`);\n}\nconst canonCleanPath = normalizePath(body.canonCleanPath);\nconst rsidReadyPath = normalizePath(body.rsidReadyPath);\nconst vcfPath = normalizePath(body.vcfPath);\nconst outputDir = normalizePath(body.outputDir);\nconst runId = String(body.runId ?? $execution.id);\nif (!canonCleanPath || !rsidReadyPath || !vcfPath || !outputDir) throw new Error('canonCleanPath, rsidReadyPath, vcfPath, and outputDir are required.');\nassertInside(canonRoot, canonCleanPath, 'canonCleanPath');\nassertInside(rsidRoot, rsidReadyPath, 'rsidReadyPath');\nassertInside(vcfRoot, vcfPath, 'vcfPath');\nassertInside(outputRoot, outputDir, 'outputDir');\nconst payload = { canonCleanPath, rsidReadyPath, vcfPath, outputDir, runId };\nconst inputJsonBase64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');\nconst command = `powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\\\ServerCIT\\\\services\\\\heal-vcf-canon-match\\\\run_heal_vcf_canon_match.ps1\" -InputJsonBase64 \"${inputJsonBase64}\"`;\nreturn [{ json: { accepted: true, event: 'heal.vcf_canon_match.requested', runId, canonCleanPath, rsidReadyPath, vcfPath, outputDir, command, receivedAt: now, source: 'heal-api' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -500,
+        0
+      ],
+      "id": "826b3e85-99e4-4620-b4ad-2e8c23785494",
+      "name": "Prepare VCF Canon Match"
+    },
+    {
+      "parameters": {
+        "command": "={{ $json.command }}"
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        -220,
+        0
+      ],
+      "id": "03f16ca2-daf6-4daa-9103-b3bb5fb8c80e",
+      "name": "Run VCF Canon Matcher"
+    },
+    {
+      "parameters": {
+        "jsCode": "const stdout = String($json.stdout ?? '');\nconst stderr = String($json.stderr ?? '');\nconst lines = stdout.trim().split(/\\r?\\n/).filter(Boolean);\nconst lastLine = lines[lines.length - 1] ?? '{}';\nlet matchSummary;\ntry { matchSummary = JSON.parse(lastLine); }\ncatch (error) { throw new Error(`VCF canon match returned invalid JSON: ${error.message}. stderr=${stderr}`); }\nconst inputRoot = 'C:\\\\ServerCIT\\\\services\\\\heal-vcf-canon-match';\nconst outputRoot = 'C:\\\\ServerCIT\\\\services\\\\heal-match-preparation';\nfunction normalizePath(value) { return String(value ?? '').replace(/\\//g, '\\\\'); }\nfunction assertInside(root, target, label) {\n  const normalizedRoot = normalizePath(root).toLowerCase();\n  const normalizedTarget = normalizePath(target).toLowerCase();\n  if (!normalizedTarget.startsWith(normalizedRoot + '\\\\')) throw new Error(`${label} is outside the allowed root.`);\n}\nconst matchRunId = $('Prepare VCF Canon Match').first().json.runId;\nconst runId = `match-prep-${matchRunId}`;\nconst inputPath = normalizePath(matchSummary.outputs?.sheetFinalConsolidatedCsv);\nconst outputDir = `${outputRoot}\\\\runs\\\\${runId}`;\nif (!inputPath) throw new Error('sheetFinalConsolidatedCsv is required for match preparation.');\nassertInside(inputRoot, inputPath, 'inputPath');\nassertInside(outputRoot, outputDir, 'outputDir');\nconst payload = { inputPath, outputDir, runId, matchRunId };\nconst inputJsonBase64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');\nconst command = `powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\\\ServerCIT\\\\services\\\\heal-match-preparation\\\\run_heal_match_preparation.ps1\" -InputJsonBase64 \"${inputJsonBase64}\"`;\nreturn [{ json: { accepted: true, event: 'heal.match_preparation.requested', runId, matchRunId, inputPath, outputDir, command, matchSummary, receivedAt: new Date().toISOString(), source: 'heal-api' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40,
+        0
+      ],
+      "id": "bb4a8e56-2d9e-43a2-a48f-0f6e2e418f5f",
+      "name": "Prepare Match Preparation"
+    },
+    {
+      "parameters": {
+        "command": "={{ $json.command }}"
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        300,
+        0
+      ],
+      "id": "487c7db5-1a0b-4f7c-935d-a01d75250a65",
+      "name": "Run Match Preparation"
+    },
+    {
+      "parameters": {
+        "jsCode": "const stdout = String($json.stdout ?? '');\nconst stderr = String($json.stderr ?? '');\nconst lines = stdout.trim().split(/\\r?\\n/).filter(Boolean);\nconst lastLine = lines[lines.length - 1] ?? '{}';\nlet preparationSummary;\ntry { preparationSummary = JSON.parse(lastLine); }\ncatch (error) { throw new Error(`Match preparation returned invalid JSON: ${error.message}. stderr=${stderr}`); }\nconst matchSummary = $('Prepare Match Preparation').first().json.matchSummary;\nconst summary = { ...matchSummary, matchPreparation: preparationSummary };\nreturn [{ json: { accepted: summary.status === 'valid' || summary.status === 'warning', event: 'heal.vcf_canon_match.completed', runId: $('Prepare VCF Canon Match').first().json.runId, status: summary.status, summary, completedAt: new Date().toISOString(), n8n: { workflowName: 'HEAL - VCF Canon Match', executionId: $execution.id } } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        0
+      ],
+      "id": "b05c6e8d-cfd3-4989-9b34-ca699242834b",
+      "name": "Parse VCF Canon Match"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        820,
+        0
+      ],
+      "id": "dc1f7910-a377-43f4-931c-94c878981e33",
+      "name": "Respond JSON"
+    }
+  ],
+  "connections": {
+    "Webhook - VCF Canon Match Request": {
+      "main": [
+        [
+          {
+            "node": "Prepare VCF Canon Match",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare VCF Canon Match": {
+      "main": [
+        [
+          {
+            "node": "Run VCF Canon Matcher",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run VCF Canon Matcher": {
+      "main": [
+        [
+          {
+            "node": "Prepare Match Preparation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Match Preparation": {
+      "main": [
+        [
+          {
+            "node": "Run Match Preparation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Match Preparation": {
+      "main": [
+        [
+          {
+            "node": "Parse VCF Canon Match",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse VCF Canon Match": {
+      "main": [
+        [
+          {
+            "node": "Respond JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "pinData": null,
+  "versionId": "07c94143-8e7d-44e4-8ff4-2beeb7a10f9d",
+  "meta": null,
+  "parentFolderId": null
+}

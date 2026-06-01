@@ -9,8 +9,7 @@ Canon change
 
 VCF upload
   -> Workflow 1: VCF Integrity Check
-  -> Workflow 4: VCF-Canon Match
-  -> Workflow 5: Match Preparation
+  -> Workflow 4: VCF-Canon Match, targeted scan, and match preparation
   -> Downstream analysis placeholder
 ```
 
@@ -54,18 +53,16 @@ The output is the match-ready rsID table used by all later VCF uploads until the
 - Key script: `match_vcf_to_rsid_ready.py`
 - Trigger: after a VCF passes integrity validation.
 
-This workflow scans the VCF once and extracts candidate rows for the current canon targets. It creates `sheet_final_consolidated.csv` for QA and downstream preparation.
+This workflow includes the Colab "targeted VCF scan" stage. It scans the VCF once and extracts candidate rows for the current canon targets by `CHROM:POS`, then joins those candidates with the current canon and rsID match-ready table. It creates `sheet_final_consolidated.csv` for QA.
 
-## Workflow 5 - Match Preparation
+Workflow 4 also runs the match preparation script internally. This keeps the user-facing pipeline as one match step while still producing separate audit/download artifacts.
 
-- n8n name: `HEAL - Match Preparation`
-- Workflow ID: `HEALmatchPrep01`
-- Webhook path: `heal-match-preparation-9b2f4a7c8d134b61`
-- Webhook env: `HEAL_N8N_MATCH_PREPARATION_WEBHOOK_URL`
+Internal preparation service:
+
 - Runtime service: `C:\ServerCIT\services\heal-match-preparation`
 - Repository source copy: `services/heal-match-preparation`
 - Key script: `prepare_match_deliverable.py`
-- Trigger: immediately after Workflow 4 succeeds.
+- Trigger: inside Workflow 4, immediately after `sheet_final_consolidated.csv` is created.
 
 Inputs:
 
@@ -84,8 +81,27 @@ match_preparation_summary.json
 The frontend exposes download buttons for:
 
 - the raw consolidated match CSV from Workflow 4
-- the audit-ready match preparation CSV from Workflow 5
-- the minimal deliverable-style CSV from Workflow 5
+- the audit-ready match preparation CSV from Workflow 4's internal preparation stage
+- the minimal deliverable-style CSV from Workflow 4's internal preparation stage
+
+## Next Workflow 5 - External Variant Enrichment
+
+The next workflow number should be reused for external enrichment of observed variants. This corresponds to Colab cell 30.
+
+Input:
+
+```text
+heal_fon_deliverable_presentation_audit.csv
+```
+
+Scope:
+
+- keep only rows with `has_genotype=true`
+- enrich observed rsIDs with Ensembl variation lookup
+- enrich with Ensembl VEP
+- enrich with ClinVar summaries
+- enrich with MyVariant.info summaries
+- produce an enriched audit CSV for interpretation review
 
 ## Why It Is Fast
 
@@ -94,11 +110,11 @@ The Colab prototype used dataframe operations over a local notebook. The server 
 - Large VCF uploads are chunked at the browser/API boundary, so the server never receives the full VCF as one request body.
 - The VCF validator reads sequentially by streaming, not by loading the whole file into memory.
 - Canon processing and rsID coordinate resolution happen only when the canon changes, not for every VCF.
-- Workflow 4 precomputes the target chromosome/position keys from the canon and then scans the VCF once. Each VCF row is checked against indexed target keys instead of comparing every canon row against every VCF row.
-- Workflow 5 does not re-read the VCF. It consumes the small consolidated CSV produced by Workflow 4, so preparation is effectively immediate.
+- Workflow 4 precomputes the target chromosome/position keys from the canon and then performs the targeted VCF scan once. Each VCF row is checked against indexed target keys instead of comparing every canon row against every VCF row.
+- The internal preparation stage does not re-read the VCF. It consumes the small consolidated CSV produced by the match stage, so preparation is effectively immediate.
 - n8n only orchestrates paths and process execution. Heavy parsing stays in external scripts, which avoids large binary payloads and memory pressure inside n8n.
 
-For the current test canon, Workflow 4 produces 149 consolidated rows. Workflow 5 works on those 149 rows, not on the full 1.5 GB VCF.
+For the current test canon, Workflow 4 produces 149 consolidated rows. The internal preparation stage works on those 149 rows, not on the full 1.5 GB VCF.
 
 ## Audit Downloads
 
@@ -114,7 +130,7 @@ The API verifies job ownership and allowed filesystem roots before serving any a
 
 ## Operational Notes
 
-- `HEAL - Match Preparation` is active and validated by webhook.
+- `HEAL - Match Preparation (superseded inactive)` was superseded by the internal preparation stage in `HEAL - VCF Canon Match`; its old public webhook is no longer registered.
 - The official n8n safe restart was used on 2026-06-01 to register the new production webhook.
-- The workflow import did not preserve `parentFolderId`; no direct SQLite folder update was performed for Workflow 5.
+- The workflow imports did not preserve `parentFolderId`; no direct SQLite folder update was performed for Workflow 4 or the inactive superseded Workflow 5.
 - The latest verified n8n backup made during restart was `C:\n8n-backups\daily\20260601-094331`.

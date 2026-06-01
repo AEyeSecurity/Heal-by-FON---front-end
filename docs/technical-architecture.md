@@ -160,7 +160,6 @@ HEAL_N8N_VALIDATION_WEBHOOK_URL
 HEAL_N8N_CANON_WEBHOOK_URL
 HEAL_N8N_RSID_RESOLUTION_WEBHOOK_URL
 HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL
-HEAL_N8N_MATCH_PREPARATION_WEBHOOK_URL
 ```
 
 Current status:
@@ -171,7 +170,6 @@ n8nValidationWebhookConfigured: true
 n8nCanonWebhookConfigured: true
 n8nRsidResolutionWebhookConfigured: true
 n8nVcfCanonMatchWebhookConfigured: true
-n8nMatchPreparationWebhookConfigured: true
 ```
 
 Workflow responsibilities:
@@ -179,14 +177,14 @@ Workflow responsibilities:
 - `HEAL - VCF Integrity Check`: original integrity workflow, kept inactive.
 - `HEAL - Canon Sheet Intake`: cleans the uploaded canon and creates `rsid_master.csv`.
 - `HEAL - rsID Coordinate Resolution`: runs only after canon changes and creates the match-ready rsID table.
-- `HEAL - VCF Canon Match`: runs after a VCF passes validation and matches the current VCF against the current canon.
-- `HEAL - Match Preparation`: runs after the VCF-canon match and creates audit/minimal CSV outputs for QA and downstream review.
+- `HEAL - VCF Canon Match`: runs after a VCF passes validation, performs the targeted VCF scan, matches against the current canon, and creates audit/minimal CSV outputs for QA and downstream review.
+- `HEAL - Match Preparation`: superseded as a standalone workflow and left inactive; its script now runs inside `HEAL - VCF Canon Match`.
 
 Natural usage path:
 
 ```text
 Canon change -> clean canon -> resolve rsID coordinates
-VCF upload -> integrity validation -> VCF-canon match -> match preparation -> downstream analysis placeholder
+VCF upload -> integrity validation -> VCF-canon match, targeted scan, and preparation -> downstream analysis placeholder
 ```
 
 Webhook secrets, if added later, must stay outside GitHub and outside Cloudflare Pages.

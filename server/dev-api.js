@@ -61,7 +61,6 @@ const N8N_VALIDATION_WEBHOOK_URL =
 const N8N_CANON_WEBHOOK_URL = process.env.HEAL_N8N_CANON_WEBHOOK_URL || "";
 const N8N_RSID_RESOLUTION_WEBHOOK_URL = process.env.HEAL_N8N_RSID_RESOLUTION_WEBHOOK_URL || "";
 const N8N_VCF_CANON_MATCH_WEBHOOK_URL = process.env.HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL || "";
-const N8N_MATCH_PREPARATION_WEBHOOK_URL = process.env.HEAL_N8N_MATCH_PREPARATION_WEBHOOK_URL || "";
 const N8N_WEBHOOK_TOKEN = process.env.HEAL_N8N_WEBHOOK_TOKEN || "";
 const ALLOWED_ORIGINS = (process.env.HEAL_ALLOWED_ORIGINS ||
   "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173")
@@ -523,10 +522,7 @@ async function processVcfCanonMatch(payload) {
 }
 
 async function processMatchPreparation(payload) {
-  return (
-    (await postWorkflowForSummary(N8N_MATCH_PREPARATION_WEBHOOK_URL, payload, "n8n match preparation")) ||
-    (await runBase64JsonScript(path.join(MATCH_PREPARATION_ROOT, "prepare_match_deliverable.py"), payload))
-  );
+  return await runBase64JsonScript(path.join(MATCH_PREPARATION_ROOT, "prepare_match_deliverable.py"), payload);
 }
 
 async function loadCurrentCanon() {
@@ -717,7 +713,6 @@ app.get("/api/health", (_req, res) => {
     n8nCanonWebhookConfigured: Boolean(N8N_CANON_WEBHOOK_URL),
     n8nRsidResolutionWebhookConfigured: Boolean(N8N_RSID_RESOLUTION_WEBHOOK_URL),
     n8nVcfCanonMatchWebhookConfigured: Boolean(N8N_VCF_CANON_MATCH_WEBHOOK_URL),
-    n8nMatchPreparationWebhookConfigured: Boolean(N8N_MATCH_PREPARATION_WEBHOOK_URL),
   });
 });
 
@@ -1336,20 +1331,23 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
       job.message = "Preparing audit-ready match CSVs";
       job.updatedAt = new Date().toISOString();
 
-      const preparationPaths = matchPreparationPaths();
-      await mkdir(preparationPaths.runs, { recursive: true });
-      const preparationRunId = `match-prep-${runId}`;
-      const preparationOutputDir = path.join(preparationPaths.runs, preparationRunId);
-      await mkdir(preparationOutputDir, { recursive: true });
-      const preparationPayload = {
-        event: "heal.match_preparation.requested",
-        runId: preparationRunId,
-        matchRunId: runId,
-        inputPath: matchCsvPath,
-        outputDir: preparationOutputDir,
-        requestedAt: new Date().toISOString(),
-      };
-      const preparationSummary = await processMatchPreparation(preparationPayload);
+      let preparationSummary = summary.matchPreparation || summary.preparationSummary || null;
+      if (!preparationSummary) {
+        const preparationPaths = matchPreparationPaths();
+        await mkdir(preparationPaths.runs, { recursive: true });
+        const preparationRunId = `match-prep-${runId}`;
+        const preparationOutputDir = path.join(preparationPaths.runs, preparationRunId);
+        await mkdir(preparationOutputDir, { recursive: true });
+        const preparationPayload = {
+          event: "heal.match_preparation.requested",
+          runId: preparationRunId,
+          matchRunId: runId,
+          inputPath: matchCsvPath,
+          outputDir: preparationOutputDir,
+          requestedAt: new Date().toISOString(),
+        };
+        preparationSummary = await processMatchPreparation(preparationPayload);
+      }
       job.artifacts.deliverableMinCsv = preparationSummary.outputs?.deliverableMinCsv || "";
       job.artifacts.deliverableAuditCsv = preparationSummary.outputs?.deliverableAuditCsv || "";
       job.result = {
