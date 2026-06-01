@@ -83,6 +83,8 @@ HEAL_MAX_UPLOADS=12
 HEAL_UPLOAD_TTL_HOURS=24
 ```
 
+Reused VCFs refresh their retention timestamp when validation or match starts. A frequently reused VCF should stay available as long as it is used at least once within the TTL window.
+
 ## Safe Manual Cleanup
 
 Only remove upload folders under:

@@ -192,3 +192,8 @@ Remaining before stable production:
   - workflows exported: `129`
   - credentials exported: `65`
   - final health: `ok`
+
+### Upload Reuse Retention
+
+- Updated VCF reuse behavior so starting validation or VCF-canon match refreshes the upload manifest and filesystem timestamps.
+- The configured 24-hour cleanup window now restarts from the latest actual use of a reused VCF.

@@ -1,6 +1,6 @@
 import express from "express";
 import { createWriteStream } from "node:fs";
-import { mkdir, open, readFile, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
@@ -314,6 +314,15 @@ async function saveUpload(upload) {
   upload.updatedAt = new Date().toISOString();
   uploads.set(upload.uploadId, upload);
   await writeFile(manifestPath(upload.uploadDir), JSON.stringify(upload, null, 2), "utf8");
+}
+
+async function refreshUploadRetention(upload) {
+  await saveUpload(upload);
+  const now = new Date();
+  await Promise.all([
+    utimes(upload.uploadDir, now, now).catch(() => {}),
+    utimes(upload.storedPath, now, now).catch(() => {}),
+  ]);
 }
 
 async function loadUpload(uploadId) {
@@ -1132,6 +1141,7 @@ app.post("/api/validations", async (req, res) => {
     res.status(409).json({ error: "Upload must be complete before validation." });
     return;
   }
+  await refreshUploadRetention(upload);
 
   const resolvedUploadRoot = path.resolve(UPLOAD_ROOT);
   const resolvedStoredPath = path.resolve(upload.storedPath);
@@ -1270,6 +1280,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
     res.status(409).json({ error: "Upload must be complete before VCF-canon matching." });
     return;
   }
+  await refreshUploadRetention(upload);
 
   const resolvedUploadRoot = path.resolve(UPLOAD_ROOT);
   const resolvedStoredPath = path.resolve(upload.storedPath);

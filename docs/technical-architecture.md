@@ -103,6 +103,8 @@ The backend offers reuse only when all of these match:
 
 This avoids re-uploading the same multi-GB VCF during repeated tests while preventing one user from seeing or reusing another user's upload.
 
+When an existing VCF is reused for validation or match, the backend refreshes the upload manifest and filesystem timestamps. The 24-hour retention window therefore restarts from the latest real use, so repeated work on the same VCF does not require re-uploading it every day.
+
 ## Analysis Modes
 
 ### Quick Analysis
