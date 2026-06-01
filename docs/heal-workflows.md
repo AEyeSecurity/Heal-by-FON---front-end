@@ -24,7 +24,14 @@ The browser only orchestrates uploads and polling. Heavy work is delegated to ba
 - Key script: `validate_vcf_integrity.py`
 - Status: kept inactive as the original standalone workflow; the API currently runs validation directly and still emits validation events to n8n.
 
-Validation includes VCF/VCF.GZ detection, gzip readability, required headers, first variants, SHA-256 checksum, and optional full streaming metrics.
+Validation includes VCF/VCF.GZ detection, gzip readability, required headers, first variants, SHA-256 checksum, and optional full metrics.
+
+The validator accepts a `vcfParser` setting:
+
+- `streaming`: default production parser, no native dependency.
+- `pysam`: optional parser closer to the original Colab implementation. If `pysam` is unavailable or cannot open the file, the validator records a warning and falls back to `streaming`.
+
+On the current Windows/Python 3.13 runtime, `pysam` does not install from a prebuilt wheel and source compilation fails without a native htslib toolchain. The option is implemented safely, but currently falls back to streaming until the runtime is moved to a compatible Python/Linux/conda environment.
 
 ## Workflow 2 - Canon Sheet Intake
 
@@ -56,6 +63,8 @@ The output is the match-ready rsID table used by all later VCF uploads until the
 
 This workflow includes the Colab "targeted VCF scan" stage. It scans the VCF once and extracts candidate rows for the current canon targets by `CHROM:POS`, then joins those candidates with the current canon and rsID match-ready table. It creates `sheet_final_consolidated.csv` for QA.
 
+Workflow 4 also accepts `vcfParser` from the HEAL API and forwards it to the matcher script. The same parser policy applies here: `streaming` is stable; `pysam` is attempted when requested and falls back to streaming with an explicit warning if unavailable.
+
 Workflow 4 also runs the match preparation script internally. This keeps the user-facing pipeline as one match step while still producing separate audit/download artifacts.
 
 Internal preparation service:
@@ -84,6 +93,7 @@ The frontend exposes download buttons for:
 - the raw consolidated match CSV from Workflow 4
 - the audit-ready match preparation CSV from Workflow 4's internal preparation stage
 - the minimal deliverable-style CSV from Workflow 4's internal preparation stage
+- QA/debug match CSVs: VCF position candidates, strict matches, ALT-review matches, position-review matches, and no-position-match rows
 
 ## Workflow 5 - External Variant Enrichment
 
@@ -107,10 +117,12 @@ Scope:
 - keep only rows with `has_genotype=true`
 - enrich observed rsIDs with Ensembl Variation
 - enrich with Ensembl VEP consequences
-- enrich with ClinVar E-utilities IDs/counts
+- enrich with ClinVar E-utilities `esearch` and `esummary`
 - enrich with MyVariant.info summaries
 - use a local rsID cache so repeated audits do not re-query public APIs
 - produce an enriched audit CSV for interpretation review
+
+The enrichment CSV now mirrors the Colab more closely. It includes patient allele context, `allele_match_summary`, `external_support_summary`, Ensembl mapping/phenotype/population/VEP transcript summaries, colocated variants, ClinVar details, MyVariant CADD/dbSNP/dbNSFP-derived fields, and compact raw JSON columns for source-level QA.
 
 Outputs:
 
@@ -143,6 +155,7 @@ GET /api/vcf-canon-matches/:jobId/download
 GET /api/vcf-canon-matches/:jobId/preparation-audit
 GET /api/vcf-canon-matches/:jobId/preparation-minimal
 GET /api/vcf-canon-matches/:jobId/enrichment
+GET /api/vcf-canon-matches/:jobId/debug/:artifact
 ```
 
 The API verifies job ownership and allowed filesystem roots before serving any artifact. Local paths are not exposed in browser JSON.
@@ -150,7 +163,7 @@ The API verifies job ownership and allowed filesystem roots before serving any a
 ## Operational Notes
 
 - `HEAL - Match Preparation (superseded inactive)` was superseded by the internal preparation stage in `HEAL - VCF Canon Match`; its old public webhook is no longer registered.
-- The official n8n safe restart was used on 2026-06-01 to register the new production webhook.
+- The official n8n safe restart was used on 2026-06-01 to register production webhook updates.
 - The workflow imports did not preserve `parentFolderId`; no direct SQLite folder update was performed for Workflow 4 or the inactive superseded Workflow 5.
 - `HEAL - Variant Enrichment` is active and registered. The import CLI did not preserve `parentFolderId`, so it is not visually assigned to the `Heal by FON` folder until a specific folder maintenance update is authorized.
-- The latest verified n8n backup made during restart was `C:\n8n-backups\daily\20260601-185238`.
+- The latest verified n8n backup made during restart was `C:\n8n-backups\daily\20260601-194608`.

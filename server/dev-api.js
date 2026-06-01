@@ -57,6 +57,7 @@ const INIT_RATE_LIMIT_PER_HOUR = Math.max(
   Number.parseInt(process.env.HEAL_INIT_RATE_LIMIT_PER_HOUR || "10", 10) || 10,
 );
 const TURNSTILE_SECRET = process.env.HEAL_TURNSTILE_SECRET || "";
+const ALLOWED_VCF_PARSERS = new Set(["streaming", "pysam"]);
 const REQUIRE_ORIGIN = process.env.HEAL_REQUIRE_ORIGIN !== "false";
 const N8N_UPLOAD_WEBHOOK_URL = process.env.HEAL_N8N_UPLOAD_WEBHOOK_URL || "";
 const N8N_VALIDATION_WEBHOOK_URL =
@@ -308,6 +309,11 @@ function sanitizeVariantEnrichmentResult(result) {
   delete publicResult.cacheDir;
   delete publicResult.outputs;
   return publicResult;
+}
+
+function normalizeVcfParser(value) {
+  const parser = String(value || "streaming").trim().toLowerCase();
+  return ALLOWED_VCF_PARSERS.has(parser) ? parser : "streaming";
 }
 
 async function saveUpload(upload) {
@@ -851,6 +857,54 @@ app.get("/api/canon/current/rsid-master", async (req, res) => {
   res.download(rsidMasterPath, `${baseName}_${downloadSuffix}.csv`);
 });
 
+app.get("/api/canon/current/debug/:artifact", async (req, res) => {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+
+  const artifactMap = {
+    targets_ok: "targetsOkCsv",
+    targets_repeated_rsids: "targetsRepeatedRsidsCsv",
+    targets_manual_review: "targetsManualReviewCsv",
+    rsids_long: "rsidsLongCsv",
+    rsid_master_raw: "rsidMasterCsv",
+  };
+  const artifactKey = artifactMap[req.params.artifact];
+  if (!artifactKey) {
+    res.status(404).json({ error: "Unknown canon debug artifact." });
+    return;
+  }
+
+  const paths = canonPaths();
+  const manifest = await loadCurrentCanonManifest().catch(() => null);
+  if (!manifest) {
+    res.status(404).json({ error: "No canon is currently loaded." });
+    return;
+  }
+
+  const summaryPath = path.resolve(manifest.summaryPath || "");
+  if (!isPathInside(paths.root, summaryPath)) {
+    res.status(400).json({ error: "Current canon summary is outside the allowed root." });
+    return;
+  }
+  const summary = JSON.parse(await readFile(summaryPath, "utf8"));
+  const csvPath = path.resolve(summary.outputs?.[artifactKey] || "");
+  if (!isPathInside(paths.root, csvPath)) {
+    res.status(400).json({ error: "Canon debug CSV is outside the allowed root." });
+    return;
+  }
+  const csvStat = await stat(csvPath).catch(() => null);
+  if (!csvStat || csvStat.size <= 0) {
+    res.status(404).json({ error: "Canon debug CSV was not found." });
+    return;
+  }
+
+  const baseName = safeFileName(String(summary.sourceFileName || "heal-canon").replace(/\.(csv|xlsx)$/i, ""));
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.download(csvPath, `${baseName}_${req.params.artifact}.csv`);
+});
+
 app.post("/api/canon/upload", express.raw({ type: "*/*", limit: MAX_CANON_FILE_SIZE_BYTES }), async (req, res) => {
   const rawFileName = req.headers["x-canon-file-name"];
   const encodedFileName = Array.isArray(rawFileName) ? rawFileName[0] : rawFileName;
@@ -1122,6 +1176,7 @@ app.post("/api/validations", async (req, res) => {
     calculateStats = true,
     analysisMode = calculateStats ? "complete" : "quick",
     maxVariantsToCheck = 20,
+    vcfParser = "streaming",
   } = req.body || {};
   if (!uploadId) {
     res.status(400).json({ error: "uploadId is required." });
@@ -1184,6 +1239,7 @@ app.post("/api/validations", async (req, res) => {
       ];
       if (calculateChecksum) args.push("--checksum");
       if (calculateStats) args.push("--stats");
+      args.push("--vcf-parser", normalizeVcfParser(vcfParser));
 
       const child = spawn(PYTHON_EXE, args, {
         windowsHide: true,
@@ -1261,7 +1317,7 @@ app.get("/api/validations/:jobId", (req, res) => {
 });
 
 app.post("/api/vcf-canon-matches", async (req, res) => {
-  const { uploadId } = req.body || {};
+  const { uploadId, vcfParser = "streaming" } = req.body || {};
   if (!uploadId) {
     res.status(400).json({ error: "uploadId is required." });
     return;
@@ -1356,12 +1412,17 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         rsidReadyPath,
         vcfPath: resolvedStoredPath,
         outputDir,
+        vcfParser: normalizeVcfParser(vcfParser),
         requestedAt: new Date().toISOString(),
       };
       const summary = await processVcfCanonMatch(payload);
       job.artifacts = {
         sheetFinalConsolidatedCsv: summary.outputs?.sheetFinalConsolidatedCsv || "",
         vcfCandidatesCsv: summary.outputs?.vcfCandidatesCsv || "",
+        sheetFinalMatchStrictCsv: summary.outputs?.sheetFinalMatchStrictCsv || "",
+        sheetFinalMatchLikelyNeedsAltReviewCsv: summary.outputs?.sheetFinalMatchLikelyNeedsAltReviewCsv || "",
+        sheetFinalMatchByPositionNeedsReviewCsv: summary.outputs?.sheetFinalMatchByPositionNeedsReviewCsv || "",
+        sheetFinalNoVcfMatchByChrPosCsv: summary.outputs?.sheetFinalNoVcfMatchByChrPosCsv || "",
       };
       const matchCsvPath = path.resolve(job.artifacts.sheetFinalConsolidatedCsv);
       if (!isPathInside(paths.root, matchCsvPath)) {
@@ -1496,6 +1557,58 @@ app.get("/api/vcf-canon-matches/:jobId/download", async (req, res) => {
   const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.download(matchCsvPath, `${baseName}_vcf_canon_matches.csv`);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/debug/:artifact", async (req, res) => {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+
+  const artifactMap = {
+    vcf_candidates: "vcfCandidatesCsv",
+    match_strict: "sheetFinalMatchStrictCsv",
+    alt_review: "sheetFinalMatchLikelyNeedsAltReviewCsv",
+    position_review: "sheetFinalMatchByPositionNeedsReviewCsv",
+    no_vcf_match: "sheetFinalNoVcfMatchByChrPosCsv",
+  };
+  const artifactKey = artifactMap[req.params.artifact];
+  if (!artifactKey) {
+    res.status(404).json({ error: "Unknown VCF-canon debug artifact." });
+    return;
+  }
+
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (job.status !== "complete") {
+    res.status(409).json({ error: "VCF-canon match is not complete yet." });
+    return;
+  }
+
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+
+  const paths = vcfCanonMatchPaths();
+  const csvPath = path.resolve(job.artifacts?.[artifactKey] || "");
+  if (!isPathInside(paths.root, csvPath)) {
+    res.status(400).json({ error: "VCF-canon debug CSV is outside the allowed root." });
+    return;
+  }
+  const csvStat = await stat(csvPath).catch(() => null);
+  if (!csvStat || csvStat.size <= 0) {
+    res.status(404).json({ error: "VCF-canon debug CSV was not found." });
+    return;
+  }
+
+  const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.download(csvPath, `${baseName}_${req.params.artifact}.csv`);
 });
 
 async function downloadMatchPreparationArtifact(req, res, artifactKey, suffix) {

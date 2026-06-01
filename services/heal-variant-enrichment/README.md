@@ -22,6 +22,8 @@ Outputs:
 - `heal_observed_variant_enrichment.csv`
 - `observed_variant_enrichment_summary.json`
 
+The enriched CSV includes patient allele context, allele/external support summaries, Ensembl Variation/VEP summaries, ClinVar `esearch` plus `esummary`, MyVariant-derived fields, and compact raw JSON snippets for source-level QA.
+
 Example:
 
 ```powershell

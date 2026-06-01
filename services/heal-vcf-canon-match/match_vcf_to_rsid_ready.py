@@ -71,6 +71,16 @@ def gt_to_alleles(gt: str, ref: str, alt: str) -> str:
     return "/".join(out)
 
 
+def pysam_gt_to_raw(gt, phased: bool = False) -> str:
+    if gt is None:
+        return ""
+    separator = "|" if phased else "/"
+    values = []
+    for allele in gt:
+        values.append("." if allele is None or allele < 0 else str(allele))
+    return separator.join(values)
+
+
 def zygosity_from_gt(gt: str) -> str:
     parts = split_gt(gt)
     if not parts or any(part in {"", "."} for part in parts):
@@ -137,7 +147,7 @@ def classify_match(row: dict) -> str:
     return "review"
 
 
-def scan_vcf(vcf_path: Path, target_keys: set[str]) -> tuple[list[dict], dict]:
+def scan_vcf_streaming(vcf_path: Path, target_keys: set[str]) -> tuple[list[dict], dict]:
     matched = []
     sample_name = ""
     scanned_rows = 0
@@ -182,12 +192,71 @@ def scan_vcf(vcf_path: Path, target_keys: set[str]) -> tuple[list[dict], dict]:
                     "zygosity": zygosity_from_gt(gt_raw),
                 }
             )
-    return matched, {"sample_name": sample_name, "scanned_variant_rows": scanned_rows}
+    return matched, {"sample_name": sample_name, "scanned_variant_rows": scanned_rows, "vcf_parser_used": "streaming"}
 
 
-def process(canon_clean_path: Path, rsid_ready_path: Path, vcf_path: Path, output_dir: Path) -> dict:
+def scan_vcf_pysam(vcf_path: Path, target_keys: set[str]) -> tuple[list[dict], dict]:
+    try:
+        import pysam  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("pysam is not installed in the configured Python environment.") from exc
+
+    matched = []
+    scanned_rows = 0
+    with pysam.VariantFile(str(vcf_path)) as vcf:
+        samples = list(vcf.header.samples)
+        sample_name = samples[0] if samples else ""
+        for record in vcf:
+            scanned_rows += 1
+            key = f"{record.chrom}:{record.pos}"
+            if key not in target_keys:
+                continue
+            gt_raw = ""
+            if sample_name:
+                sample_data = record.samples[sample_name]
+                gt_raw = pysam_gt_to_raw(sample_data.get("GT"), bool(getattr(sample_data, "phased", False)))
+            alt = ",".join(record.alts or [])
+            filters = ";".join(record.filter.keys()) if record.filter.keys() else "PASS"
+            matched.append(
+                {
+                    "match_key_chr_pos": key,
+                    "chrom_vcf": str(record.chrom),
+                    "pos_vcf": str(record.pos),
+                    "id_vcf": str(record.id or ""),
+                    "ref_vcf": str(record.ref or ""),
+                    "alt_vcf": alt,
+                    "qual_vcf": "" if record.qual is None else str(record.qual),
+                    "filter_vcf": filters,
+                    "gt_raw": gt_raw,
+                    "gt_alleles": gt_to_alleles(gt_raw, str(record.ref or ""), alt),
+                    "zygosity": zygosity_from_gt(gt_raw),
+                }
+            )
+    return matched, {"sample_name": sample_name, "scanned_variant_rows": scanned_rows, "vcf_parser_used": "pysam"}
+
+
+def scan_vcf(vcf_path: Path, target_keys: set[str], vcf_parser: str) -> tuple[list[dict], dict, list[str]]:
+    warnings = []
+    if vcf_parser == "pysam":
+        try:
+            matched, meta = scan_vcf_pysam(vcf_path, target_keys)
+            return matched, meta, warnings
+        except Exception as exc:  # noqa: BLE001 - parser fallback is intentional.
+            warnings.append(f"pysam VCF scan failed, used streaming parser instead: {exc}")
+    matched, meta = scan_vcf_streaming(vcf_path, target_keys)
+    if vcf_parser == "pysam":
+        meta["requested_vcf_parser"] = "pysam"
+    return matched, meta, warnings
+
+
+def process(canon_clean_path: Path, rsid_ready_path: Path, vcf_path: Path, output_dir: Path, vcf_parser: str = "streaming") -> dict:
     started_at = utc_now()
     output_dir.mkdir(parents=True, exist_ok=True)
+    vcf_parser = str(vcf_parser or "streaming").strip().lower()
+    warnings = []
+    if vcf_parser not in {"streaming", "pysam"}:
+        warnings.append(f"Unknown VCF parser '{vcf_parser}', using streaming parser.")
+        vcf_parser = "streaming"
     canon_rows = read_csv(canon_clean_path)
     rsid_ready_rows = read_csv(rsid_ready_path)
     ready_by_rsid = {}
@@ -200,7 +269,8 @@ def process(canon_clean_path: Path, rsid_ready_path: Path, vcf_path: Path, outpu
         if key:
             target_keys.add(key)
 
-    vcf_candidates, scan_meta = scan_vcf(vcf_path, target_keys)
+    vcf_candidates, scan_meta, scan_warnings = scan_vcf(vcf_path, target_keys, vcf_parser)
+    warnings.extend(scan_warnings)
     evidence_by_key = {}
     for row in vcf_candidates:
         evidence_by_key.setdefault(row["match_key_chr_pos"], row)
@@ -327,7 +397,7 @@ def process(canon_clean_path: Path, rsid_ready_path: Path, vcf_path: Path, outpu
     summary = {
         "status": "valid",
         "errors": [],
-        "warnings": [],
+        "warnings": warnings,
         "inputPaths": {
             "canonCleanCsv": str(canon_clean_path),
             "rsidMatchReadyCsv": str(rsid_ready_path),
@@ -345,6 +415,10 @@ def process(canon_clean_path: Path, rsid_ready_path: Path, vcf_path: Path, outpu
         "outputs": {
             "vcfCandidatesCsv": str(output_dir / "vcf_candidates_chr_pos.csv"),
             "sheetFinalConsolidatedCsv": str(output_dir / "sheet_final_consolidated.csv"),
+            "sheetFinalMatchStrictCsv": str(output_dir / "sheet_final_match_strict.csv"),
+            "sheetFinalMatchLikelyNeedsAltReviewCsv": str(output_dir / "sheet_final_match_likely_needs_alt_review.csv"),
+            "sheetFinalMatchByPositionNeedsReviewCsv": str(output_dir / "sheet_final_match_by_position_needs_review.csv"),
+            "sheetFinalNoVcfMatchByChrPosCsv": str(output_dir / "sheet_final_no_vcf_match_by_chr_pos.csv"),
         },
         "timestamps": {"startedAt": started_at, "completedAt": utc_now()},
     }
@@ -359,6 +433,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rsid-ready")
     parser.add_argument("--vcf")
     parser.add_argument("--output-dir")
+    parser.add_argument("--vcf-parser", choices=["streaming", "pysam"], default="streaming")
     parser.add_argument("--input-json-base64", default="")
     args = parser.parse_args()
     if args.input_json_base64:
@@ -367,6 +442,7 @@ def parse_args() -> argparse.Namespace:
         args.rsid_ready = payload.get("rsidReadyPath")
         args.vcf = payload.get("vcfPath")
         args.output_dir = payload.get("outputDir")
+        args.vcf_parser = payload.get("vcfParser") or payload.get("parser") or args.vcf_parser
     if not args.canon_clean or not args.rsid_ready or not args.vcf or not args.output_dir:
         parser.error("--canon-clean, --rsid-ready, --vcf, and --output-dir are required.")
     return args
@@ -374,7 +450,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    process(Path(args.canon_clean), Path(args.rsid_ready), Path(args.vcf), Path(args.output_dir))
+    process(Path(args.canon_clean), Path(args.rsid_ready), Path(args.vcf), Path(args.output_dir), args.vcf_parser)
     return 0
 
 

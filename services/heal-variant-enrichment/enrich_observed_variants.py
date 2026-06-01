@@ -85,6 +85,16 @@ def unique_join(values, limit: int = 8) -> str:
     return "|".join(out)
 
 
+def compact_json(obj, max_len: int = 12000) -> str:
+    try:
+        text = json.dumps(obj, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        text = str(obj)
+    if len(text) > max_len:
+        return f"{text[:max_len]} ...[TRUNCATED]"
+    return text
+
+
 def split_alleles(value: str) -> list[str]:
     text = clean_str(value)
     if not text:
@@ -186,6 +196,14 @@ def fetch_ensembl_variation(rsid: str, timeout_seconds: int) -> tuple[dict, str]
         "mapping_assembly": clean_str(first_mapping.get("assembly_name")),
         "mapping_location": clean_str(first_mapping.get("location")),
         "mapping_allele_string": clean_str(first_mapping.get("allele_string")),
+        "mappings_summary": unique_join(
+            [
+                f"{clean_str(item.get('assembly_name'))}:{clean_str(item.get('seq_region_name'))}:{clean_str(item.get('start'))}-{clean_str(item.get('end'))}:{clean_str(item.get('allele_string'))}"
+                for item in mappings[:8]
+            ],
+            limit=8,
+        ),
+        "raw_json": compact_json(payload),
     }, ""
 
 
@@ -196,17 +214,50 @@ def fetch_ensembl_vep(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
         return {}, error or "empty_response"
     item = payload[0]
     transcript_consequences = item.get("transcript_consequences") or []
+    colocated_variants = item.get("colocated_variants") or []
     gene_symbols = [entry.get("gene_symbol") for entry in transcript_consequences]
     impacts = [entry.get("impact") for entry in transcript_consequences]
     consequence_terms = []
+    transcript_summary = []
     for entry in transcript_consequences:
         consequence_terms.extend(entry.get("consequence_terms") or [])
+        transcript_summary.append(
+            "; ".join(
+                part
+                for part in [
+                    f"gene={clean_str(entry.get('gene_symbol'))}" if clean_str(entry.get("gene_symbol")) else "",
+                    f"transcript={clean_str(entry.get('transcript_id'))}" if clean_str(entry.get("transcript_id")) else "",
+                    f"impact={clean_str(entry.get('impact'))}" if clean_str(entry.get("impact")) else "",
+                    f"terms={unique_join(entry.get('consequence_terms') or [], limit=4)}"
+                    if entry.get("consequence_terms")
+                    else "",
+                ]
+                if part
+            )
+        )
+    colocated_summary = []
+    for entry in colocated_variants[:10]:
+        colocated_summary.append(
+            "; ".join(
+                part
+                for part in [
+                    f"id={clean_str(entry.get('id'))}" if clean_str(entry.get("id")) else "",
+                    f"alleles={clean_str(entry.get('allele_string'))}" if clean_str(entry.get("allele_string")) else "",
+                    f"minor={clean_str(entry.get('minor_allele'))}" if clean_str(entry.get("minor_allele")) else "",
+                    f"maf={clean_str(entry.get('minor_allele_freq'))}" if clean_str(entry.get("minor_allele_freq")) else "",
+                ]
+                if part
+            )
+        )
     return {
         "most_severe_consequence": clean_str(item.get("most_severe_consequence")),
         "variant_class": clean_str(item.get("variant_class")),
         "gene_symbols": unique_join(gene_symbols),
         "impacts": unique_join(impacts),
         "consequence_terms": unique_join(consequence_terms, limit=12),
+        "transcript_summary": unique_join(transcript_summary, limit=10),
+        "colocated_variants": unique_join(colocated_summary, limit=10),
+        "raw_json": compact_json(payload),
     }, ""
 
 
@@ -225,6 +276,8 @@ def fetch_myvariant(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
     first = hits[0] if hits else {}
     clinvar = first.get("clinvar") or {}
     cadd = first.get("cadd") or {}
+    dbsnp = first.get("dbsnp") or {}
+    dbnsfp = first.get("dbnsfp") or {}
     if isinstance(clinvar.get("rcv"), list):
         rcv = clinvar.get("rcv")[0] if clinvar.get("rcv") else {}
     else:
@@ -234,6 +287,10 @@ def fetch_myvariant(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
         "clinvar_significance": clean_str(rcv.get("clinical_significance") or clinvar.get("clinical_significance")),
         "clinvar_review_status": clean_str(rcv.get("review_status") or clinvar.get("review_status")),
         "cadd_phred": clean_str(cadd.get("phred")),
+        "dbsnp_gene": clean_str(dbsnp.get("gene") or dbsnp.get("genes")),
+        "dbsnp_alleles": clean_str(dbsnp.get("alleles")),
+        "dbnsfp_gene_name": clean_str(dbnsfp.get("genename")),
+        "raw_json": compact_json(first or payload),
     }, ""
 
 
@@ -244,9 +301,48 @@ def fetch_clinvar(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
     if not isinstance(payload, dict):
         return {}, error or "empty_response"
     result = payload.get("esearchresult") or {}
+    ids = result.get("idlist") or []
+    summary_payload = {}
+    if ids:
+        ids_param = urllib.parse.quote(",".join(ids[:5]))
+        summary_url = (
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+            f"?db=clinvar&retmode=json&id={ids_param}"
+        )
+        summary_payload, summary_error = json_get(summary_url, timeout_seconds)
+        if summary_error:
+            return {
+                "count": clean_str(result.get("count")),
+                "ids": unique_join(ids, limit=5),
+                "summary_error": summary_error,
+                "esearch_raw_json": compact_json(payload),
+            }, ""
+    summary_items = []
+    if isinstance(summary_payload, dict):
+        summary_result = summary_payload.get("result") or {}
+        for clinvar_id in ids[:5]:
+            item = summary_result.get(str(clinvar_id)) or {}
+            if not isinstance(item, dict):
+                continue
+            summary_items.append(item)
     return {
         "count": clean_str(result.get("count")),
-        "ids": unique_join(result.get("idlist") or [], limit=5),
+        "ids": unique_join(ids, limit=5),
+        "titles": unique_join([item.get("title") for item in summary_items], limit=5),
+        "clinical_significance": unique_join(
+            [clinvar_classification(item) for item in summary_items],
+            limit=5,
+        ),
+        "review_status": unique_join(
+            [clinvar_review_status(item) for item in summary_items],
+            limit=5,
+        ),
+        "trait_names": unique_join(
+            [clinvar_trait_name(item) for item in summary_items],
+            limit=8,
+        ),
+        "esearch_raw_json": compact_json(payload),
+        "esummary_raw_json": compact_json(summary_payload),
     }, ""
 
 
@@ -286,6 +382,68 @@ def fetch_external(rsid: str, cache_dir: Path, timeout_seconds: int, ttl_days: i
     return payload
 
 
+def allele_match_summary(row: dict, enrichment: dict) -> str:
+    observed = set(split_alleles(observed_alt_alleles(row)))
+    catalog = set(split_alleles(first_present(row.get("alt_vcf"), row.get("alt"))))
+    ensembl_alleles = set(split_alleles((enrichment.get("ensemblVariation") or {}).get("mapping_allele_string")))
+    if not observed:
+        return "no_observed_alt_allele"
+    if catalog and observed.intersection(catalog):
+        return "observed_alt_overlaps_vcf_alt_catalog"
+    if ensembl_alleles and observed.intersection(ensembl_alleles):
+        return "observed_alt_overlaps_ensembl_mapping"
+    return "observed_alt_not_confirmed_against_catalogs"
+
+
+def external_support_summary(enrichment: dict) -> str:
+    support = []
+    errors = enrichment.get("errors") or {}
+    ensembl_variation = enrichment.get("ensemblVariation") or {}
+    ensembl_vep = enrichment.get("ensemblVep") or {}
+    myvariant = enrichment.get("myVariant") or {}
+    clinvar = enrichment.get("clinVar") or {}
+    if ensembl_variation.get("clinical_significance") or ensembl_variation.get("phenotypes"):
+        support.append("Ensembl variation clinical/phenotype signals")
+    if ensembl_vep.get("most_severe_consequence") or ensembl_vep.get("gene_symbols"):
+        support.append("Ensembl VEP consequence signals")
+    if clinvar.get("count") and clinvar.get("count") != "0":
+        support.append("ClinVar records found")
+    if myvariant.get("hits") and myvariant.get("hits") != "0":
+        support.append("MyVariant records found")
+    if errors:
+        support.append(f"Source errors: {','.join(sorted(errors.keys()))}")
+    return " | ".join(support)
+
+
+def clinvar_classification(item: dict) -> str:
+    direct = clean_str(item.get("clinical_significance"))
+    if direct:
+        return direct
+    germline = item.get("germline_classification")
+    if isinstance(germline, dict):
+        return clean_str(germline.get("description"))
+    return ""
+
+
+def clinvar_review_status(item: dict) -> str:
+    direct = clean_str(item.get("review_status"))
+    if direct:
+        return direct
+    germline = item.get("germline_classification")
+    if isinstance(germline, dict):
+        return clean_str(germline.get("review_status"))
+    return ""
+
+
+def clinvar_trait_name(item: dict) -> str:
+    trait_set = item.get("trait_set")
+    if isinstance(trait_set, list) and trait_set:
+        first = trait_set[0]
+        if isinstance(first, dict):
+            return clean_str(first.get("trait_name"))
+    return ""
+
+
 def build_output_row(row: dict, enrichment: dict) -> dict:
     ensembl_variation = enrichment.get("ensemblVariation") or {}
     ensembl_vep = enrichment.get("ensemblVep") or {}
@@ -301,6 +459,8 @@ def build_output_row(row: dict, enrichment: dict) -> dict:
         "patient_ref": first_present(row.get("ref_vcf"), row.get("ref")),
         "patient_alt_catalog": first_present(row.get("alt_vcf"), row.get("alt")),
         "patient_observed_alt_alleles": observed_alt_alleles(row),
+        "allele_match_summary": allele_match_summary(row, enrichment),
+        "external_support_summary": external_support_summary(enrichment),
         "Confidence Level": clean_str(row.get("Confidence Level")),
         "Category / Module": clean_str(row.get("Category / Module")),
         "Review Status": clean_str(row.get("Review Status")),
@@ -323,14 +483,29 @@ def build_output_row(row: dict, enrichment: dict) -> dict:
         "ensembl_maf": clean_str(ensembl_variation.get("maf")),
         "ensembl_mapping_location": clean_str(ensembl_variation.get("mapping_location")),
         "ensembl_mapping_allele_string": clean_str(ensembl_variation.get("mapping_allele_string")),
+        "ensembl_mappings_summary": clean_str(ensembl_variation.get("mappings_summary")),
+        "ensembl_transcript_summary": clean_str(ensembl_vep.get("transcript_summary")),
+        "ensembl_colocated_variants": clean_str(ensembl_vep.get("colocated_variants")),
         "clinvar_count": clean_str(clinvar.get("count")),
         "clinvar_ids": clean_str(clinvar.get("ids")),
+        "clinvar_titles": clean_str(clinvar.get("titles")),
+        "clinvar_clinical_significance": clean_str(clinvar.get("clinical_significance")),
+        "clinvar_review_status": clean_str(clinvar.get("review_status")),
+        "clinvar_trait_names": clean_str(clinvar.get("trait_names")),
         "myvariant_hits": clean_str(myvariant.get("hits")),
         "myvariant_clinvar_significance": clean_str(myvariant.get("clinvar_significance")),
         "myvariant_clinvar_review_status": clean_str(myvariant.get("clinvar_review_status")),
         "myvariant_cadd_phred": clean_str(myvariant.get("cadd_phred")),
+        "myvariant_dbsnp_gene": clean_str(myvariant.get("dbsnp_gene")),
+        "myvariant_dbsnp_alleles": clean_str(myvariant.get("dbsnp_alleles")),
+        "myvariant_dbnsfp_gene_name": clean_str(myvariant.get("dbnsfp_gene_name")),
         "external_cache_hit": "true" if enrichment.get("cacheHit") else "false",
         "external_error_sources": "|".join(sorted(errors.keys())),
+        "ensembl_variation_raw_json": clean_str(ensembl_variation.get("raw_json")),
+        "ensembl_vep_raw_json": clean_str(ensembl_vep.get("raw_json")),
+        "clinvar_esearch_raw_json": clean_str(clinvar.get("esearch_raw_json")),
+        "clinvar_esummary_raw_json": clean_str(clinvar.get("esummary_raw_json")),
+        "myvariant_raw_json": clean_str(myvariant.get("raw_json")),
     }
 
 
@@ -366,6 +541,8 @@ def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds
         "patient_ref",
         "patient_alt_catalog",
         "patient_observed_alt_alleles",
+        "allele_match_summary",
+        "external_support_summary",
         "Confidence Level",
         "Category / Module",
         "Review Status",
@@ -388,14 +565,29 @@ def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds
         "ensembl_maf",
         "ensembl_mapping_location",
         "ensembl_mapping_allele_string",
+        "ensembl_mappings_summary",
+        "ensembl_transcript_summary",
+        "ensembl_colocated_variants",
         "clinvar_count",
         "clinvar_ids",
+        "clinvar_titles",
+        "clinvar_clinical_significance",
+        "clinvar_review_status",
+        "clinvar_trait_names",
         "myvariant_hits",
         "myvariant_clinvar_significance",
         "myvariant_clinvar_review_status",
         "myvariant_cadd_phred",
+        "myvariant_dbsnp_gene",
+        "myvariant_dbsnp_alleles",
+        "myvariant_dbnsfp_gene_name",
         "external_cache_hit",
         "external_error_sources",
+        "ensembl_variation_raw_json",
+        "ensembl_vep_raw_json",
+        "clinvar_esearch_raw_json",
+        "clinvar_esummary_raw_json",
+        "myvariant_raw_json",
     ]
     output_csv = output_dir / "heal_observed_variant_enrichment.csv"
     write_csv(output_csv, output_rows, fieldnames)

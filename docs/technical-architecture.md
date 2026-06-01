@@ -43,7 +43,8 @@ The validator supports:
 - first variant row checks
 - gzip readability
 - streaming checksum
-- optional full streaming metrics
+- optional full metrics
+- optional `pysam` parser mode with explicit fallback to the default streaming parser when `pysam` is unavailable
 
 ## Request Flow
 
@@ -152,6 +153,19 @@ The API returns validation results without exposing local filesystem paths. Publ
 Local paths remain internal to the backend and n8n integration.
 
 The VCF-canon match download endpoint serves the per-job `sheet_final_consolidated.csv` artifact for QA after the job completes. Match preparation download endpoints serve audit-ready and minimal deliverable-style CSVs. The enrichment download endpoint serves the observed variant enrichment CSV. The browser receives CSV attachments; JSON results and download responses do not expose internal filesystem paths.
+
+Control de Calidad mode exposes additional debug downloads through whitelisted endpoints:
+
+```text
+GET /api/vcf-canon-matches/:jobId/debug/vcf_candidates
+GET /api/vcf-canon-matches/:jobId/debug/match_strict
+GET /api/vcf-canon-matches/:jobId/debug/alt_review
+GET /api/vcf-canon-matches/:jobId/debug/position_review
+GET /api/vcf-canon-matches/:jobId/debug/no_vcf_match
+GET /api/canon/current/debug/:artifact
+```
+
+The backend serves these only from known run directories and verifies job ownership before download.
 
 ## n8n Integration Points
 

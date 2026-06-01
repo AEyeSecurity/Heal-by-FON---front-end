@@ -197,3 +197,36 @@ Remaining before stable production:
 
 - Updated VCF reuse behavior so starting validation or VCF-canon match refreshes the upload manifest and filesystem timestamps.
 - The configured 24-hour cleanup window now restarts from the latest actual use of a reused VCF.
+
+### QA Mode, Optional pysam Parser, and Enrichment Parity
+
+- Added frontend `Control de Calidad` mode.
+- Added stage play controls for QA mode while keeping the normal one-button path.
+- Added VCF parser selection:
+  - `streaming` remains the stable default.
+  - `pysam` is attempted when requested and falls back to streaming with an explicit warning if unavailable.
+- Attempted `python -m pip install pysam` on the current Windows/Python 3.13 runtime. It failed because no wheel was available and source build required native tooling/htslib configuration. No production path depends on `pysam`; fallback behavior was verified.
+- Added QA/debug match download endpoints for VCF candidates, strict matches, ALT-review matches, position-review matches, and no-position-match rows.
+- Expanded observed variant enrichment to better mirror the Colab:
+  - Ensembl mapping, phenotype, population, VEP transcript, and colocated-variant summaries
+  - ClinVar `esearch` plus `esummary`
+  - MyVariant CADD/dbSNP/dbNSFP-derived fields where available
+  - allele and external-support summaries
+  - compact raw JSON columns for source-level QA
+- Updated `HEAL - VCF Canon Match` so n8n forwards `vcfParser` to the matcher script.
+- Ran official safe n8n restart:
+  - backup: `C:\n8n-backups\daily\20260601-194608`
+  - workflows exported: `129`
+  - credentials exported: `65`
+  - final health: `ok`
+- Restarted only HEAL API using `C:\ServerCIT\services\heal-vcf-api\start_heal_vcf_api.ps1` and verified all production env flags/webhooks were restored.
+
+Validation:
+
+- `python -m py_compile` passed for updated Python services.
+- `node --check server\dev-api.js` passed.
+- `npm run build` passed.
+- Validator streaming smoke passed.
+- Validator `pysam` fallback smoke passed.
+- VCF-canon match `pysam` fallback smoke passed.
+- Enrichment parity smoke with `rs429358` passed and produced the expanded columns.

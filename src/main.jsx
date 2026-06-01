@@ -8,6 +8,7 @@ import {
   FileUp,
   Globe2,
   Loader2,
+  Play,
   Send,
   ShieldCheck,
   UploadCloud,
@@ -40,6 +41,21 @@ const COPY = {
     quickModeDetail: "Valida estructura, headers y primeras variantes.",
     completeMode: "Analisis completo",
     completeModeDetail: "Agrega metricas streaming de todo el VCF.",
+    qaMode: "Control de Calidad",
+    qaModeDetail: "Activa parser seleccionable, controles por etapa y reportes debug.",
+    parserLabel: "Motor VCF",
+    parserStreaming: "Streaming estable",
+    parserPysam: "pysam experimental",
+    parserHelp: "pysam replica mejor el Colab cuando esta disponible; si falla, el backend vuelve a streaming.",
+    playStage: "Ejecutar etapa",
+    debugDownloads: "Descargas QA",
+    qaVcfCandidates: "Candidatos VCF por posicion",
+    qaStrict: "QA matches estrictos",
+    qaAltReview: "QA revision ALT",
+    qaPositionReview: "QA revision por posicion",
+    qaNoVcfMatch: "QA sin match VCF",
+    qaRunUploadFirst: "Primero carga o reutiliza un VCF.",
+    qaRunValidationFirst: "Primero valida el VCF.",
     variantLimit: "Variantes iniciales a revisar",
     uploadProgress: "Carga del archivo",
     validationProgress: "Validacion del VCF",
@@ -159,6 +175,21 @@ const COPY = {
     quickModeDetail: "Validates structure, headers, and first variants.",
     completeMode: "Full analysis",
     completeModeDetail: "Adds streaming metrics across the full VCF.",
+    qaMode: "Quality Control",
+    qaModeDetail: "Enables selectable parser, stage controls, and debug reports.",
+    parserLabel: "VCF engine",
+    parserStreaming: "Stable streaming",
+    parserPysam: "Experimental pysam",
+    parserHelp: "pysam mirrors the Colab parser more closely when available; if it fails, the backend falls back to streaming.",
+    playStage: "Run stage",
+    debugDownloads: "QA downloads",
+    qaVcfCandidates: "VCF position candidates",
+    qaStrict: "QA strict matches",
+    qaAltReview: "QA ALT review",
+    qaPositionReview: "QA position review",
+    qaNoVcfMatch: "QA no VCF match",
+    qaRunUploadFirst: "Upload or reuse a VCF first.",
+    qaRunValidationFirst: "Validate the VCF first.",
     variantLimit: "Initial variants to inspect",
     uploadProgress: "File upload",
     validationProgress: "VCF validation",
@@ -287,12 +318,35 @@ function clampVariantCount(value) {
   return Math.min(100, Math.max(1, parsed));
 }
 
-function ProgressBar({ label, value, tone = "blue", downloadLabel = "", onDownload = null }) {
+function ProgressBar({
+  label,
+  value,
+  tone = "blue",
+  downloadLabel = "",
+  onDownload = null,
+  onPlay = null,
+  playLabel = "",
+  playDisabled = false,
+}) {
   const complete = Math.round(value) >= 100;
   return (
     <div className="progress-block">
       <div className="progress-row">
-        <span>{label}</span>
+        <span className="progress-label">
+          {onPlay && (
+            <button
+              className="progress-play-button"
+              type="button"
+              onClick={onPlay}
+              disabled={playDisabled}
+              aria-label={playLabel || label}
+              title={playLabel || label}
+            >
+              <Play size={14} />
+            </button>
+          )}
+          <span>{label}</span>
+        </span>
         <span className="progress-value">
           <strong>{Math.round(value)}%</strong>
           {complete && onDownload && (
@@ -374,6 +428,10 @@ function ModeSelector({ mode, setMode, t }) {
         <button className={mode === "complete" ? "active" : ""} type="button" onClick={() => setMode("complete")}>
           <strong>{t.completeMode}</strong>
           <span>{t.completeModeDetail}</span>
+        </button>
+        <button className={mode === "qa" ? "active" : ""} type="button" onClick={() => setMode("qa")}>
+          <strong>{t.qaMode}</strong>
+          <span>{t.qaModeDetail}</span>
         </button>
       </div>
     </section>
@@ -944,6 +1002,10 @@ function MatchResultPanel({ result, locale, t }) {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/enrichment`, "heal-observed-variant-enrichment.csv");
   }
 
+  async function downloadDebugArtifact(artifact, fallbackName) {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/debug/${artifact}`, fallbackName);
+  }
+
   return (
     <section className="result-panel">
       <div className="result-heading">
@@ -996,6 +1058,29 @@ function MatchResultPanel({ result, locale, t }) {
           {t.enrichmentDownload}
         </button>
       </div>
+      <h3 className="result-subtitle">{t.debugDownloads}</h3>
+      <div className="match-download-actions">
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={() => downloadDebugArtifact("vcf_candidates", "heal-vcf-candidates.csv")}>
+          <Download size={17} />
+          {t.qaVcfCandidates}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={() => downloadDebugArtifact("match_strict", "heal-match-strict.csv")}>
+          <Download size={17} />
+          {t.qaStrict}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={() => downloadDebugArtifact("alt_review", "heal-match-alt-review.csv")}>
+          <Download size={17} />
+          {t.qaAltReview}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={() => downloadDebugArtifact("position_review", "heal-match-position-review.csv")}>
+          <Download size={17} />
+          {t.qaPositionReview}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={() => downloadDebugArtifact("no_vcf_match", "heal-match-no-vcf-match.csv")}>
+          <Download size={17} />
+          {t.qaNoVcfMatch}
+        </button>
+      </div>
       {downloadError && <p className="error-message">{downloadError}</p>}
       {(result.errors?.length > 0 || result.warnings?.length > 0) && (
         <div className="issues">
@@ -1019,7 +1104,9 @@ function App() {
   const fileInputRef = useRef(null);
   const [language, setLanguage] = useState("es");
   const [analysisMode, setAnalysisMode] = useState("quick");
+  const [vcfParser, setVcfParser] = useState("streaming");
   const [file, setFile] = useState(null);
+  const [uploadRecord, setUploadRecord] = useState(null);
   const [dragging, setDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [validationProgress, setValidationProgress] = useState(0);
@@ -1057,6 +1144,7 @@ function App() {
     setMatchResult(null);
     setError(null);
     setDuplicateCandidate(null);
+    setUploadRecord(null);
     setPhase("idle");
     setCustomMessage("");
     setTurnstileToken("");
@@ -1219,74 +1307,163 @@ function App() {
     }
   }
 
-  async function submit({ skipDuplicateCheck = false, reuseUpload = null } = {}) {
+  async function resolveUpload({ skipDuplicateCheck = false, reuseUpload = null } = {}) {
     if (!file) return;
     if (TURNSTILE_SITE_KEY && !turnstileToken) {
       setError(t.securityRequired);
       return;
     }
-    const variantLimit = clampVariantCount(maxVariants);
-    const shouldCalculateStats = analysisMode === "complete";
-    setMaxVariants(variantLimit);
-    setError(null);
-    setResult(null);
-    setMatchResult(null);
     setPhase("uploading");
     setMessageKey("uploading");
     setCustomMessage("");
+    setDuplicateCandidate(null);
+
+    let upload = reuseUpload;
+    if (upload) {
+      setUploadProgress(100);
+      setCustomMessage(t.reusingUpload);
+    } else {
+      if (!skipDuplicateCheck) {
+        const existingUpload = await lookupExistingUpload(file);
+        if (existingUpload) {
+          setPhase("idle");
+          setUploadProgress(0);
+          setValidationProgress(0);
+          setMatchProgress(0);
+          setPreparationProgress(0);
+          setEnrichmentProgress(0);
+          setDuplicateCandidate(existingUpload);
+          setMessageKey("fileReady");
+          return null;
+        }
+      }
+      upload = await uploadFile(file);
+    }
+    setUploadRecord(upload);
+    return upload;
+  }
+
+  async function validateUpload(upload) {
+    if (!upload) return null;
+    const variantLimit = clampVariantCount(maxVariants);
+    const shouldCalculateStats = analysisMode === "complete" || analysisMode === "qa";
+    setMaxVariants(variantLimit);
+    setPhase("validating");
+    setMessageKey("validationStarting");
+    setValidationProgress(5);
+
+    const validationStart = await fetch(`${API_BASE}/api/validations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        uploadId: upload.uploadId,
+        fileName: upload.fileName,
+        calculateChecksum: true,
+        calculateStats: shouldCalculateStats,
+        analysisMode,
+        maxVariantsToCheck: variantLimit,
+        vcfParser,
+      }),
+    });
+    if (!validationStart.ok) throw new Error(await validationStart.text());
+    const job = await validationStart.json();
+    const validationResult = await pollValidation(job.id);
+    setResult(validationResult);
+    setValidationProgress(100);
+    return validationResult;
+  }
+
+  async function runMatch(upload) {
+    if (!upload) return null;
+    setPhase("matching");
+    setMessageKey("matchStarting");
+    setMatchProgress(5);
+    setPreparationProgress(0);
+    setEnrichmentProgress(0);
+
+    const matchStart = await fetch(`${API_BASE}/api/vcf-canon-matches`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ uploadId: upload.uploadId, vcfParser }),
+    });
+    if (!matchStart.ok) throw new Error(await matchStart.text());
+    const matchJob = await matchStart.json();
+    const nextMatchResult = await pollMatch(matchJob.id);
+    setMatchResult(nextMatchResult);
+    setPhase("done");
+    setMessageKey("preparationComplete");
+    setCustomMessage("");
+    setMatchProgress(100);
+    setPreparationProgress(100);
+    setEnrichmentProgress(100);
+    return nextMatchResult;
+  }
+
+  async function runQaUpload() {
+    setError(null);
+    try {
+      const upload = await resolveUpload({ skipDuplicateCheck: false });
+      if (!upload) return;
+      setPhase("done");
+      setMessageKey("fileReady");
+      setCustomMessage("");
+    } catch (caught) {
+      setPhase("error");
+      setError(caught.message || String(caught));
+      setMessageKey("processFailed");
+      setCustomMessage("");
+    }
+  }
+
+  async function runQaValidation() {
+    setError(null);
+    try {
+      const upload = uploadRecord || (await resolveUpload({ skipDuplicateCheck: false }));
+      if (!upload) return;
+      await validateUpload(upload);
+      setPhase("done");
+      setMessageKey("complete");
+      setCustomMessage("");
+    } catch (caught) {
+      setPhase("error");
+      setError(caught.message || String(caught));
+      setMessageKey("processFailed");
+      setCustomMessage("");
+    }
+  }
+
+  async function runQaMatch() {
+    setError(null);
+    try {
+      const upload = uploadRecord;
+      if (!upload) throw new Error(t.qaRunUploadFirst);
+      if (!result || result.status === "invalid") throw new Error(t.qaRunValidationFirst);
+      await runMatch(upload);
+    } catch (caught) {
+      setPhase("error");
+      setError(caught.message || String(caught));
+      setMessageKey("processFailed");
+      setCustomMessage("");
+    }
+  }
+
+  async function submit({ skipDuplicateCheck = false, reuseUpload = null } = {}) {
+    if (!file) return;
+    setError(null);
+    setResult(null);
+    setMatchResult(null);
     setUploadProgress(0);
     setValidationProgress(0);
     setMatchProgress(0);
     setPreparationProgress(0);
     setEnrichmentProgress(0);
-    setDuplicateCandidate(null);
+    setUploadRecord(null);
 
     try {
-      let upload = reuseUpload;
-      if (upload) {
-        setUploadProgress(100);
-        setCustomMessage(t.reusingUpload);
-      } else {
-        if (!skipDuplicateCheck) {
-          const existingUpload = await lookupExistingUpload(file);
-          if (existingUpload) {
-            setPhase("idle");
-            setUploadProgress(0);
-            setValidationProgress(0);
-            setMatchProgress(0);
-            setPreparationProgress(0);
-            setEnrichmentProgress(0);
-            setDuplicateCandidate(existingUpload);
-            setMessageKey("fileReady");
-            return;
-          }
-        }
-        upload = await uploadFile(file);
-      }
-      setPhase("validating");
-      setMessageKey("validationStarting");
-      setValidationProgress(5);
-
-      const validationStart = await fetch(`${API_BASE}/api/validations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          uploadId: upload.uploadId,
-          fileName: upload.fileName,
-          calculateChecksum: true,
-          calculateStats: shouldCalculateStats,
-          analysisMode,
-          maxVariantsToCheck: variantLimit,
-        }),
-      });
-      if (!validationStart.ok) throw new Error(await validationStart.text());
-      const job = await validationStart.json();
-      const validationResult = await pollValidation(job.id);
-
-      setResult(validationResult);
-      setValidationProgress(100);
-
-      if (validationResult.status === "invalid") {
+      const upload = await resolveUpload({ skipDuplicateCheck, reuseUpload });
+      if (!upload) return;
+      const validationResult = await validateUpload(upload);
+      if (validationResult?.status === "invalid") {
         setPhase("done");
         setMessageKey("complete");
         setCustomMessage("");
@@ -1294,29 +1471,7 @@ function App() {
         setTurnstileResetKey((current) => current + 1);
         return;
       }
-
-      setPhase("matching");
-      setMessageKey("matchStarting");
-      setMatchProgress(5);
-      setPreparationProgress(0);
-      setEnrichmentProgress(0);
-
-      const matchStart = await fetch(`${API_BASE}/api/vcf-canon-matches`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uploadId: upload.uploadId }),
-      });
-      if (!matchStart.ok) throw new Error(await matchStart.text());
-      const matchJob = await matchStart.json();
-      const nextMatchResult = await pollMatch(matchJob.id);
-
-      setMatchResult(nextMatchResult);
-      setPhase("done");
-      setMessageKey("preparationComplete");
-      setCustomMessage("");
-      setMatchProgress(100);
-      setPreparationProgress(100);
-      setEnrichmentProgress(100);
+      await runMatch(upload);
       setTurnstileToken("");
       setTurnstileResetKey((current) => current + 1);
     } catch (caught) {
@@ -1401,6 +1556,16 @@ function App() {
         </div>
 
         <ModeSelector mode={analysisMode} setMode={setAnalysisMode} t={t} />
+        {analysisMode === "qa" && (
+          <label className="parser-control">
+            <span>{t.parserLabel}</span>
+            <select value={vcfParser} onChange={(event) => setVcfParser(event.target.value)}>
+              <option value="streaming">{t.parserStreaming}</option>
+              <option value="pysam">{t.parserPysam}</option>
+            </select>
+            <small>{t.parserHelp}</small>
+          </label>
+        )}
         <TurnstileBox
           siteKey={TURNSTILE_SITE_KEY}
           language={language}
@@ -1421,14 +1586,31 @@ function App() {
           />
         </label>
 
-        <ProgressBar label={t.uploadProgress} value={uploadProgress} tone="green" />
-        <ProgressBar label={t.validationProgress} value={validationProgress} tone="blue" />
+        <ProgressBar
+          label={t.uploadProgress}
+          value={uploadProgress}
+          tone="green"
+          onPlay={analysisMode === "qa" ? runQaUpload : null}
+          playLabel={`${t.playStage}: ${t.uploadProgress}`}
+          playDisabled={!file || ["uploading", "validating", "matching", "preparing", "enriching"].includes(phase)}
+        />
+        <ProgressBar
+          label={t.validationProgress}
+          value={validationProgress}
+          tone="blue"
+          onPlay={analysisMode === "qa" ? runQaValidation : null}
+          playLabel={`${t.playStage}: ${t.validationProgress}`}
+          playDisabled={!file || ["uploading", "validating", "matching", "preparing", "enriching"].includes(phase)}
+        />
         <ProgressBar
           label={t.matchProgress}
           value={matchProgress}
           tone="blue"
           downloadLabel={t.matchDownload}
           onDownload={matchResult?.jobId ? () => downloadMatchArtifact("matches") : null}
+          onPlay={analysisMode === "qa" ? runQaMatch : null}
+          playLabel={`${t.playStage}: ${t.matchProgress}`}
+          playDisabled={!uploadRecord || !result || result.status === "invalid" || ["uploading", "validating", "matching", "preparing", "enriching"].includes(phase)}
         />
         <ProgressBar
           label={t.preparationProgress}
@@ -1436,6 +1618,9 @@ function App() {
           tone="blue"
           downloadLabel={t.matchPreparationAuditDownload}
           onDownload={matchResult?.jobId ? () => downloadMatchArtifact("preparation") : null}
+          onPlay={analysisMode === "qa" ? runQaMatch : null}
+          playLabel={`${t.playStage}: ${t.preparationProgress}`}
+          playDisabled={!uploadRecord || !result || result.status === "invalid" || ["uploading", "validating", "matching", "preparing", "enriching"].includes(phase)}
         />
         <ProgressBar
           label={t.enrichmentProgress}
@@ -1443,6 +1628,9 @@ function App() {
           tone="blue"
           downloadLabel={t.enrichmentDownload}
           onDownload={matchResult?.jobId ? () => downloadMatchArtifact("enrichment") : null}
+          onPlay={analysisMode === "qa" ? runQaMatch : null}
+          playLabel={`${t.playStage}: ${t.enrichmentProgress}`}
+          playDisabled={!uploadRecord || !result || result.status === "invalid" || ["uploading", "validating", "matching", "preparing", "enriching"].includes(phase)}
         />
         {error && <p className="error-message">{error}</p>}
         <button className="primary-button" type="button" disabled={!canSend} onClick={submit}>
