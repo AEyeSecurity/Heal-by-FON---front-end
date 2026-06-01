@@ -29,7 +29,7 @@ const COPY = {
     title: "VCF Integrity Check",
     lede: "Carga un archivo VCF o VCF.GZ para validar estructura, headers, primeras variantes y metricas tecnicas.",
     pipelineLabel: "Pipeline",
-    steps: ["Carga del VCF", "Validacion de integridad", "Match VCF-Canon", "Analisis posterior"],
+    steps: ["Carga del VCF", "Validacion de integridad", "Match VCF-Canon", "Preparacion del match", "Analisis posterior"],
     dropEmpty: "Arrastra tu VCF aca",
     dropHelp: "Tambien podes seleccionarlo desde tu equipo.",
     selectFile: "Seleccionar archivo",
@@ -44,6 +44,7 @@ const COPY = {
     uploadProgress: "Carga del archivo",
     validationProgress: "Validacion del VCF",
     matchProgress: "Match VCF-Canon",
+    preparationProgress: "Preparacion del match",
     submit: "Enviar y validar",
     securityCheck: "Verificacion de seguridad",
     securityCheckHelp: "Protege el backend antes de aceptar VCFs grandes.",
@@ -59,12 +60,14 @@ const COPY = {
     validating: "Validando",
     matchStarting: "Iniciando match VCF-Canon...",
     matching: "Matcheando VCF contra canon...",
+    preparing: "Preparando CSVs de auditoria...",
     matchFailed: "No se pudo completar el match VCF-Canon.",
     validationFailed: "La validacion fallo.",
     uploadFailed: "No se pudo completar la carga.",
     processFailed: "No se pudo completar el proceso.",
     complete: "Validacion finalizada.",
     matchComplete: "Match VCF-Canon finalizado.",
+    preparationComplete: "Preparacion del match finalizada.",
     resultValid: "VCF validado",
     resultWarning: "Validado con warnings",
     resultInvalid: "VCF invalido",
@@ -91,6 +94,12 @@ const COPY = {
     topChromosomes: "Top cromosomas/contigs",
     checksum: "SHA-256",
     matchTitle: "Match VCF-Canon",
+    preparationTitle: "Preparacion del match",
+    preparationRows: "Filas preparadas",
+    preparationObserved: "Con genotipo observado",
+    preparationHigh: "Confianza alta",
+    preparationModerate: "Confianza moderada",
+    preparationLow: "Confianza baja",
     matchStatusStrict: "Matches estrictos",
     matchStatusAltReview: "Matches con revision ALT",
     matchStatusNoPosition: "Sin match por posicion",
@@ -116,6 +125,8 @@ const COPY = {
     canonDownload: "Descargar canon completo",
     rsidMasterDownload: "Descargar rsID master",
     matchDownload: "Descargar CSV de matches",
+    matchPreparationAuditDownload: "Descargar CSV preparado",
+    matchPreparationMinimalDownload: "Descargar CSV minimo",
     matchDownloadFailed: "No se pudo descargar el CSV de matches.",
     canonDownloadFailed: "No se pudo descargar el canon.",
     close: "Cerrar",
@@ -128,7 +139,7 @@ const COPY = {
     title: "VCF Integrity Check",
     lede: "Upload a VCF or VCF.GZ file to validate structure, headers, first variants, and technical metrics.",
     pipelineLabel: "Pipeline",
-    steps: ["VCF upload", "Integrity validation", "VCF-Canon match", "Downstream analysis"],
+    steps: ["VCF upload", "Integrity validation", "VCF-Canon match", "Match preparation", "Downstream analysis"],
     dropEmpty: "Drop your VCF here",
     dropHelp: "You can also select it from your computer.",
     selectFile: "Select file",
@@ -143,6 +154,7 @@ const COPY = {
     uploadProgress: "File upload",
     validationProgress: "VCF validation",
     matchProgress: "VCF-Canon match",
+    preparationProgress: "Match preparation",
     submit: "Send and validate",
     securityCheck: "Security check",
     securityCheckHelp: "Protects the backend before accepting large VCF files.",
@@ -158,12 +170,14 @@ const COPY = {
     validating: "Validating",
     matchStarting: "Starting VCF-Canon match...",
     matching: "Matching VCF against canon...",
+    preparing: "Preparing audit CSVs...",
     matchFailed: "Could not complete the VCF-Canon match.",
     validationFailed: "Validation failed.",
     uploadFailed: "Could not complete the upload.",
     processFailed: "Could not complete the process.",
     complete: "Validation finished.",
     matchComplete: "VCF-Canon match finished.",
+    preparationComplete: "Match preparation finished.",
     resultValid: "VCF validated",
     resultWarning: "Validated with warnings",
     resultInvalid: "Invalid VCF",
@@ -190,6 +204,12 @@ const COPY = {
     topChromosomes: "Top chromosomes/contigs",
     checksum: "SHA-256",
     matchTitle: "VCF-Canon match",
+    preparationTitle: "Match preparation",
+    preparationRows: "Prepared rows",
+    preparationObserved: "Observed genotypes",
+    preparationHigh: "High confidence",
+    preparationModerate: "Moderate confidence",
+    preparationLow: "Low confidence",
     matchStatusStrict: "Strict matches",
     matchStatusAltReview: "Matches needing ALT review",
     matchStatusNoPosition: "No position match",
@@ -215,6 +235,8 @@ const COPY = {
     canonDownload: "Download full canon",
     rsidMasterDownload: "Download rsID master",
     matchDownload: "Download matches CSV",
+    matchPreparationAuditDownload: "Download prepared CSV",
+    matchPreparationMinimalDownload: "Download minimal CSV",
     matchDownloadFailed: "Could not download matches CSV.",
     canonDownloadFailed: "Could not download canon.",
     close: "Close",
@@ -266,10 +288,21 @@ function PipelineStepper({ phase, t }) {
     { key: "upload", label: t.steps[0] },
     { key: "validation", label: t.steps[1] },
     { key: "match", label: t.steps[2] },
-    { key: "analysis", label: t.steps[3] },
+    { key: "preparation", label: t.steps[3] },
+    { key: "analysis", label: t.steps[4] },
   ];
-  const activeIndex = phase === "uploading" ? 0 : phase === "validating" ? 1 : phase === "matching" || phase === "done" ? 2 : 0;
-  const completeIndex = phase === "done" ? 2 : phase === "matching" ? 1 : phase === "validating" ? 0 : -1;
+  const activeIndex =
+    phase === "uploading"
+      ? 0
+      : phase === "validating"
+        ? 1
+        : phase === "matching"
+          ? 2
+          : phase === "preparing" || phase === "done"
+            ? 3
+            : 0;
+  const completeIndex =
+    phase === "done" ? 3 : phase === "preparing" ? 2 : phase === "matching" ? 1 : phase === "validating" ? 0 : -1;
 
   return (
     <section className="pipeline" aria-label={t.pipelineLabel}>
@@ -798,6 +831,8 @@ function MatchResultPanel({ result, locale, t }) {
   const Icon = isValid ? CheckCircle2 : XCircle;
   const metadata = result.metadata || {};
   const statusCounts = metadata.match_status_counts || {};
+  const preparation = result.matchPreparation?.metadata || {};
+  const confidenceCounts = preparation.confidence_level_counts || {};
   const fileLabel = metadata.file_name || metadata.upload_id || "";
   const cards = [
     [t.matchTargets, formatNumber(metadata.target_keys, locale)],
@@ -809,12 +844,21 @@ function MatchResultPanel({ result, locale, t }) {
     [t.matchScannedRows, formatNumber(metadata.scanned_variant_rows, locale)],
     [t.sample, metadata.sample_name || "-"],
   ];
+  const preparationCards = result.matchPreparation
+    ? [
+        [t.preparationRows, formatNumber(preparation.rows_total, locale)],
+        [t.preparationObserved, formatNumber(preparation.rows_with_genotype, locale)],
+        [t.preparationHigh, formatNumber(confidenceCounts.High || 0, locale)],
+        [t.preparationModerate, formatNumber(confidenceCounts.Moderate || 0, locale)],
+        [t.preparationLow, formatNumber(confidenceCounts.Low || 0, locale)],
+      ]
+    : [];
 
-  async function downloadMatches() {
+  async function downloadCsv(endpoint, fallbackName) {
     if (!result.jobId) return;
     setDownloadError(null);
     try {
-      const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${result.jobId}/download`);
+      const response = await fetch(`${API_BASE}${endpoint}`);
       if (!response.ok) {
         const text = await response.text();
         let payload = {};
@@ -828,7 +872,7 @@ function MatchResultPanel({ result, locale, t }) {
       const blob = await response.blob();
       const disposition = response.headers.get("Content-Disposition") || "";
       const match = disposition.match(/filename="?([^"]+)"?/i);
-      const fileName = match?.[1] || "heal-vcf-canon-matches.csv";
+      const fileName = match?.[1] || fallbackName;
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -840,6 +884,18 @@ function MatchResultPanel({ result, locale, t }) {
     } catch (caught) {
       setDownloadError(caught.message || String(caught));
     }
+  }
+
+  async function downloadMatches() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/download`, "heal-vcf-canon-matches.csv");
+  }
+
+  async function downloadPreparedAudit() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/preparation-audit`, "heal-match-preparation-audit.csv");
+  }
+
+  async function downloadPreparedMinimal() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/preparation-minimal`, "heal-match-preparation-minimal.csv");
   }
 
   return (
@@ -856,10 +912,30 @@ function MatchResultPanel({ result, locale, t }) {
           <MetricCard label={label} value={value} key={label} />
         ))}
       </div>
-      <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadMatches}>
-        <Download size={17} />
-        {t.matchDownload}
-      </button>
+      {preparationCards.length > 0 && (
+        <>
+          <h3 className="result-subtitle">{t.preparationTitle}</h3>
+          <div className="metrics-grid">
+            {preparationCards.map(([label, value]) => (
+              <MetricCard label={label} value={value} key={label} />
+            ))}
+          </div>
+        </>
+      )}
+      <div className="match-download-actions">
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadMatches}>
+          <Download size={17} />
+          {t.matchDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadPreparedAudit}>
+          <Download size={17} />
+          {t.matchPreparationAuditDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadPreparedMinimal}>
+          <Download size={17} />
+          {t.matchPreparationMinimalDownload}
+        </button>
+      </div>
       {downloadError && <p className="error-message">{downloadError}</p>}
       {(result.errors?.length > 0 || result.warnings?.length > 0) && (
         <div className="issues">
@@ -888,6 +964,7 @@ function App() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [validationProgress, setValidationProgress] = useState(0);
   const [matchProgress, setMatchProgress] = useState(0);
+  const [preparationProgress, setPreparationProgress] = useState(0);
   const [maxVariants, setMaxVariants] = useState(20);
   const [phase, setPhase] = useState("idle");
   const [messageKey, setMessageKey] = useState("initialMessage");
@@ -902,7 +979,7 @@ function App() {
 
   const t = COPY[language];
   const locale = language === "es" ? "es-AR" : "en-US";
-  const canSend = useMemo(() => file && !["uploading", "validating", "matching"].includes(phase), [file, phase]);
+  const canSend = useMemo(() => file && !["uploading", "validating", "matching", "preparing"].includes(phase), [file, phase]);
   const statusMessage = customMessage || t[messageKey] || t.initialMessage;
 
   function pickFile(nextFile) {
@@ -910,6 +987,7 @@ function App() {
     setUploadProgress(0);
     setValidationProgress(0);
     setMatchProgress(0);
+    setPreparationProgress(0);
     setResult(null);
     setMatchResult(null);
     setError(null);
@@ -1008,9 +1086,20 @@ function App() {
       if (!response.ok) throw new Error(await response.text());
       const job = await response.json();
       setMatchProgress(job.progress || 0);
-      setCustomMessage(job.message || t.matching);
+      if (job.stage === "preparing") {
+        setPhase("preparing");
+        setMatchProgress(100);
+        setPreparationProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.preparing);
+      } else {
+        setMatchProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.matching);
+      }
 
-      if (job.status === "complete") return job.result;
+      if (job.status === "complete") {
+        setPreparationProgress(100);
+        return { ...(job.result || {}), jobId: job.id };
+      }
       if (job.status === "failed") throw new Error(job.error || t.matchFailed);
       await new Promise((resolve) => setTimeout(resolve, 900));
     }
@@ -1034,6 +1123,7 @@ function App() {
     setUploadProgress(0);
     setValidationProgress(0);
     setMatchProgress(0);
+    setPreparationProgress(0);
     setDuplicateCandidate(null);
 
     try {
@@ -1048,6 +1138,8 @@ function App() {
             setPhase("idle");
             setUploadProgress(0);
             setValidationProgress(0);
+            setMatchProgress(0);
+            setPreparationProgress(0);
             setDuplicateCandidate(existingUpload);
             setMessageKey("fileReady");
             return;
@@ -1090,6 +1182,7 @@ function App() {
       setPhase("matching");
       setMessageKey("matchStarting");
       setMatchProgress(5);
+      setPreparationProgress(0);
 
       const matchStart = await fetch(`${API_BASE}/api/vcf-canon-matches`, {
         method: "POST",
@@ -1102,9 +1195,10 @@ function App() {
 
       setMatchResult(nextMatchResult);
       setPhase("done");
-      setMessageKey("matchComplete");
+      setMessageKey("preparationComplete");
       setCustomMessage("");
       setMatchProgress(100);
+      setPreparationProgress(100);
       setTurnstileToken("");
       setTurnstileResetKey((current) => current + 1);
     } catch (caught) {
@@ -1180,7 +1274,11 @@ function App() {
 
       <section className="action-panel">
         <div className="status-line">
-          {phase === "validating" || phase === "matching" ? <Loader2 className="spin" size={20} /> : <ShieldCheck size={20} />}
+          {phase === "validating" || phase === "matching" || phase === "preparing" ? (
+            <Loader2 className="spin" size={20} />
+          ) : (
+            <ShieldCheck size={20} />
+          )}
           <span>{statusMessage}</span>
         </div>
 
@@ -1208,6 +1306,7 @@ function App() {
         <ProgressBar label={t.uploadProgress} value={uploadProgress} tone="green" />
         <ProgressBar label={t.validationProgress} value={validationProgress} tone="blue" />
         <ProgressBar label={t.matchProgress} value={matchProgress} tone="blue" />
+        <ProgressBar label={t.preparationProgress} value={preparationProgress} tone="blue" />
         {error && <p className="error-message">{error}</p>}
         <button className="primary-button" type="button" disabled={!canSend} onClick={submit}>
           <Send size={18} />

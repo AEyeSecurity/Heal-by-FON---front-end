@@ -2,9 +2,9 @@
 
 ## Scope
 
-This repository contains the first production-facing slice of HEAL by FON: a web interface and backend API for receiving large VCF files, validating their integrity, maintaining the current interpretation canon, and starting the first VCF-canon match.
+This repository contains the first production-facing slice of HEAL by FON: a web interface and backend API for receiving large VCF files, validating their integrity, maintaining the current interpretation canon, matching VCF rows against the canon, and preparing match outputs for audit.
 
-Clinical/genomic interpretation, report generation, and multi-user accounts are not implemented here yet. The current downstream implementation stops after the VCF-canon match; later interpretation is still represented as a placeholder.
+Clinical/genomic interpretation, report generation, and multi-user accounts are not implemented here yet. The current downstream implementation stops after match preparation; later interpretation is still represented as a placeholder.
 
 ## Public Components
 
@@ -28,7 +28,7 @@ The frontend is a static application. It does not process, store, or validate VC
 - Tunnel: Cloudflare Tunnel, dedicated to HEAL API
 - Upload storage root: configured by `HEAL_UPLOAD_ROOT`
 
-The backend receives VCF chunks, assembles files on disk, starts streaming validation, orchestrates canon processing, and starts the VCF-canon match.
+The backend receives VCF chunks, assembles files on disk, starts streaming validation, orchestrates canon processing, starts the VCF-canon match, and prepares audit/download artifacts.
 
 ### VCF Validator
 
@@ -73,6 +73,8 @@ GET  /api/validations/:jobId
 POST /api/vcf-canon-matches
 GET  /api/vcf-canon-matches/:jobId
 GET  /api/vcf-canon-matches/:jobId/download
+GET  /api/vcf-canon-matches/:jobId/preparation-audit
+GET  /api/vcf-canon-matches/:jobId/preparation-minimal
 ```
 
 Default chunk size:
@@ -146,7 +148,7 @@ The API returns validation results without exposing local filesystem paths. Publ
 
 Local paths remain internal to the backend and n8n integration.
 
-The VCF-canon match download endpoint serves the per-job `sheet_final_consolidated.csv` artifact for QA after the job completes. The browser receives a CSV attachment; the JSON result and download response do not expose internal filesystem paths.
+The VCF-canon match download endpoint serves the per-job `sheet_final_consolidated.csv` artifact for QA after the job completes. Match preparation download endpoints serve audit-ready and minimal deliverable-style CSVs. The browser receives CSV attachments; JSON results and download responses do not expose internal filesystem paths.
 
 ## n8n Integration Points
 
@@ -158,6 +160,7 @@ HEAL_N8N_VALIDATION_WEBHOOK_URL
 HEAL_N8N_CANON_WEBHOOK_URL
 HEAL_N8N_RSID_RESOLUTION_WEBHOOK_URL
 HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL
+HEAL_N8N_MATCH_PREPARATION_WEBHOOK_URL
 ```
 
 Current status:
@@ -168,6 +171,7 @@ n8nValidationWebhookConfigured: true
 n8nCanonWebhookConfigured: true
 n8nRsidResolutionWebhookConfigured: true
 n8nVcfCanonMatchWebhookConfigured: true
+n8nMatchPreparationWebhookConfigured: true
 ```
 
 Workflow responsibilities:
@@ -176,12 +180,13 @@ Workflow responsibilities:
 - `HEAL - Canon Sheet Intake`: cleans the uploaded canon and creates `rsid_master.csv`.
 - `HEAL - rsID Coordinate Resolution`: runs only after canon changes and creates the match-ready rsID table.
 - `HEAL - VCF Canon Match`: runs after a VCF passes validation and matches the current VCF against the current canon.
+- `HEAL - Match Preparation`: runs after the VCF-canon match and creates audit/minimal CSV outputs for QA and downstream review.
 
 Natural usage path:
 
 ```text
 Canon change -> clean canon -> resolve rsID coordinates
-VCF upload -> integrity validation -> VCF-canon match -> downstream analysis placeholder
+VCF upload -> integrity validation -> VCF-canon match -> match preparation -> downstream analysis placeholder
 ```
 
 Webhook secrets, if added later, must stay outside GitHub and outside Cloudflare Pages.
@@ -197,6 +202,6 @@ API:      https://heal-api.aeye.com.ar
 
 - API and tunnel are running, but persistence after server reboot still depends on the installed local scheduled tasks/service setup.
 - Tunnel token should still be rotated later because it was temporarily shared during setup.
-- Workflow 3 and workflow 4 are active but not visually assigned to the `Heal by FON` folder in n8n until a specific `parentFolderId` maintenance update is authorized.
+- Workflow 3, workflow 4, and workflow 5 are active but not visually assigned to the `Heal by FON` folder in n8n until specific `parentFolderId` maintenance updates are authorized.
 - Upload retention is simple TTL/cap based storage, not a formal user/file lifecycle system.
 - There is no user login or account isolation beyond the current browser/client fingerprint and Turnstile controls.

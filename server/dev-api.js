@@ -25,6 +25,9 @@ const RSID_RESOLUTION_ROOT =
 const VCF_CANON_MATCH_ROOT =
   process.env.HEAL_VCF_CANON_MATCH_ROOT ||
   "C:\\ServerCIT\\services\\heal-vcf-canon-match";
+const MATCH_PREPARATION_ROOT =
+  process.env.HEAL_MATCH_PREPARATION_ROOT ||
+  "C:\\ServerCIT\\services\\heal-match-preparation";
 const PYTHON_EXE = process.env.HEAL_PYTHON_EXE || "python";
 const MAX_UPLOADS = Math.max(1, Number.parseInt(process.env.HEAL_MAX_UPLOADS || "12", 10) || 12);
 const UPLOAD_TTL_MS =
@@ -58,6 +61,7 @@ const N8N_VALIDATION_WEBHOOK_URL =
 const N8N_CANON_WEBHOOK_URL = process.env.HEAL_N8N_CANON_WEBHOOK_URL || "";
 const N8N_RSID_RESOLUTION_WEBHOOK_URL = process.env.HEAL_N8N_RSID_RESOLUTION_WEBHOOK_URL || "";
 const N8N_VCF_CANON_MATCH_WEBHOOK_URL = process.env.HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL || "";
+const N8N_MATCH_PREPARATION_WEBHOOK_URL = process.env.HEAL_N8N_MATCH_PREPARATION_WEBHOOK_URL || "";
 const N8N_WEBHOOK_TOKEN = process.env.HEAL_N8N_WEBHOOK_TOKEN || "";
 const ALLOWED_ORIGINS = (process.env.HEAL_ALLOWED_ORIGINS ||
   "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173")
@@ -151,6 +155,14 @@ function vcfCanonMatchPaths() {
     runs: path.join(root, "runs"),
     current: path.join(root, "current"),
     currentManifest: path.join(root, "current", "current.json"),
+  };
+}
+
+function matchPreparationPaths() {
+  const root = path.resolve(MATCH_PREPARATION_ROOT);
+  return {
+    root,
+    runs: path.join(root, "runs"),
   };
 }
 
@@ -266,6 +278,14 @@ function sanitizeVcfCanonMatchResult(result, upload) {
   publicResult.metadata = publicResult.metadata || {};
   publicResult.metadata.file_name = upload.fileName;
   publicResult.metadata.upload_id = upload.uploadId;
+  return publicResult;
+}
+
+function sanitizeMatchPreparationResult(result) {
+  const publicResult = JSON.parse(JSON.stringify(result || {}));
+  delete publicResult.inputPath;
+  delete publicResult.outputDir;
+  delete publicResult.outputs;
   return publicResult;
 }
 
@@ -502,6 +522,13 @@ async function processVcfCanonMatch(payload) {
   );
 }
 
+async function processMatchPreparation(payload) {
+  return (
+    (await postWorkflowForSummary(N8N_MATCH_PREPARATION_WEBHOOK_URL, payload, "n8n match preparation")) ||
+    (await runBase64JsonScript(path.join(MATCH_PREPARATION_ROOT, "prepare_match_deliverable.py"), payload))
+  );
+}
+
 async function loadCurrentCanon() {
   const manifest = await loadCurrentCanonManifest();
   if (!manifest) return publicCanon(null, null, null);
@@ -615,6 +642,8 @@ function publicJob(job) {
     fileName: job.fileName,
     sizeBytes: job.sizeBytes,
     result: job.result,
+    stage: job.stage || null,
+    stageProgress: job.stageProgress ?? null,
     error: job.error,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
@@ -671,6 +700,7 @@ app.get("/api/health", (_req, res) => {
     canonProcessorConfigured: Boolean(CANON_PROCESSOR_SCRIPT),
     rsidResolutionRoot: RSID_RESOLUTION_ROOT,
     vcfCanonMatchRoot: VCF_CANON_MATCH_ROOT,
+    matchPreparationRoot: MATCH_PREPARATION_ROOT,
     maxCanonFileSizeBytes: MAX_CANON_FILE_SIZE_BYTES,
     maxCanons: MAX_CANONS,
     maxUploads: MAX_UPLOADS,
@@ -687,6 +717,7 @@ app.get("/api/health", (_req, res) => {
     n8nCanonWebhookConfigured: Boolean(N8N_CANON_WEBHOOK_URL),
     n8nRsidResolutionWebhookConfigured: Boolean(N8N_RSID_RESOLUTION_WEBHOOK_URL),
     n8nVcfCanonMatchWebhookConfigured: Boolean(N8N_VCF_CANON_MATCH_WEBHOOK_URL),
+    n8nMatchPreparationWebhookConfigured: Boolean(N8N_MATCH_PREPARATION_WEBHOOK_URL),
   });
 });
 
@@ -1254,6 +1285,8 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
     sizeBytes: upload.sizeBytes,
     status: "running",
     progress: 8,
+    stage: "matching",
+    stageProgress: 8,
     message: "Preparing VCF-canon match",
     result: null,
     error: null,
@@ -1270,6 +1303,8 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
       const outputDir = path.join(paths.runs, runId);
       await mkdir(outputDir, { recursive: true });
       job.progress = 25;
+      job.stage = "matching";
+      job.stageProgress = 25;
       job.message = "Streaming VCF and matching canon targets";
       job.updatedAt = new Date().toISOString();
 
@@ -1291,15 +1326,46 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         sheetFinalConsolidatedCsv: summary.outputs?.sheetFinalConsolidatedCsv || "",
         vcfCandidatesCsv: summary.outputs?.vcfCandidatesCsv || "",
       };
-      job.result = sanitizeVcfCanonMatchResult(summary, upload);
+      const matchCsvPath = path.resolve(job.artifacts.sheetFinalConsolidatedCsv);
+      if (!isPathInside(paths.root, matchCsvPath)) {
+        throw new Error("Match preparation input is outside the allowed match root.");
+      }
+      job.progress = 72;
+      job.stage = "preparing";
+      job.stageProgress = 10;
+      job.message = "Preparing audit-ready match CSVs";
+      job.updatedAt = new Date().toISOString();
+
+      const preparationPaths = matchPreparationPaths();
+      await mkdir(preparationPaths.runs, { recursive: true });
+      const preparationRunId = `match-prep-${runId}`;
+      const preparationOutputDir = path.join(preparationPaths.runs, preparationRunId);
+      await mkdir(preparationOutputDir, { recursive: true });
+      const preparationPayload = {
+        event: "heal.match_preparation.requested",
+        runId: preparationRunId,
+        matchRunId: runId,
+        inputPath: matchCsvPath,
+        outputDir: preparationOutputDir,
+        requestedAt: new Date().toISOString(),
+      };
+      const preparationSummary = await processMatchPreparation(preparationPayload);
+      job.artifacts.deliverableMinCsv = preparationSummary.outputs?.deliverableMinCsv || "";
+      job.artifacts.deliverableAuditCsv = preparationSummary.outputs?.deliverableAuditCsv || "";
+      job.result = {
+        ...sanitizeVcfCanonMatchResult(summary, upload),
+        matchPreparation: sanitizeMatchPreparationResult(preparationSummary),
+      };
       job.status = "complete";
       job.progress = 100;
-      job.message = "VCF-canon match completed";
+      job.stage = "preparing";
+      job.stageProgress = 100;
+      job.message = "Match preparation completed";
     } catch (error) {
       job.status = "failed";
       job.progress = 100;
       job.error = error.message || String(error);
-      job.message = "VCF-canon match failed";
+      job.message = job.stage === "preparing" ? "Match preparation failed" : "VCF-canon match failed";
     } finally {
       job.updatedAt = new Date().toISOString();
     }
@@ -1354,6 +1420,53 @@ app.get("/api/vcf-canon-matches/:jobId/download", async (req, res) => {
   const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.download(matchCsvPath, `${baseName}_vcf_canon_matches.csv`);
+});
+
+async function downloadMatchPreparationArtifact(req, res, artifactKey, suffix) {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (job.status !== "complete") {
+    res.status(409).json({ error: "Match preparation is not complete yet." });
+    return;
+  }
+
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+
+  const paths = matchPreparationPaths();
+  const csvPath = path.resolve(job.artifacts?.[artifactKey] || "");
+  if (!isPathInside(paths.root, csvPath)) {
+    res.status(400).json({ error: "Prepared match CSV is outside the allowed root." });
+    return;
+  }
+  const csvStat = await stat(csvPath).catch(() => null);
+  if (!csvStat || csvStat.size <= 0) {
+    res.status(404).json({ error: "Prepared match CSV was not found." });
+    return;
+  }
+
+  const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.download(csvPath, `${baseName}_${suffix}.csv`);
+}
+
+app.get("/api/vcf-canon-matches/:jobId/preparation-audit", async (req, res) => {
+  await downloadMatchPreparationArtifact(req, res, "deliverableAuditCsv", "match_preparation_audit");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/preparation-minimal", async (req, res) => {
+  await downloadMatchPreparationArtifact(req, res, "deliverableMinCsv", "match_preparation_minimal");
 });
 
 app.listen(PORT, "127.0.0.1", () => {

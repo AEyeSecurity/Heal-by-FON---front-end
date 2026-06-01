@@ -93,3 +93,48 @@ Remaining before stable production:
 - Verified public API health and Turnstile enforcement.
 - Confirmed n8n local REST API requires authentication (`401`) and the existing HEAL webhook is not registered while its workflow remains inactive.
 - No direct SQLite writes were made.
+
+## 2026-06-01
+
+### Workflow 5 - Match Preparation
+
+- Added runtime service:
+  - `C:\ServerCIT\services\heal-match-preparation\prepare_match_deliverable.py`
+  - `C:\ServerCIT\services\heal-match-preparation\run_heal_match_preparation.ps1`
+- Added n8n workflow:
+  - `HEAL - Match Preparation`
+  - workflow ID: `HEALmatchPrep01`
+  - webhook path: `heal-match-preparation-9b2f4a7c8d134b61`
+- Added backend env:
+  - `HEAL_MATCH_PREPARATION_ROOT`
+  - `HEAL_N8N_MATCH_PREPARATION_WEBHOOK_URL`
+- Added frontend pipeline step:
+  - `Match preparation`
+- Added download endpoints:
+  - `GET /api/vcf-canon-matches/:jobId/preparation-audit`
+  - `GET /api/vcf-canon-matches/:jobId/preparation-minimal`
+
+### Validation
+
+- Direct script test on the real VCF match output:
+  - rows total: `149`
+  - rows with observed genotype: `69`
+  - strict matches inherited from Workflow 4: `36`
+  - ALT-review matches inherited from Workflow 4: `33`
+  - no VCF position match: `79`
+  - no rsID detected: `1`
+- n8n webhook test succeeded after safe n8n restart.
+- Backend smoke test succeeded:
+  - Workflow 4 completed.
+  - Workflow 5 completed.
+  - audit CSV download returned `200`.
+  - minimal CSV download returned `200`.
+
+### Operations
+
+- Ran official safe n8n restart:
+  - backup: `C:\n8n-backups\daily\20260601-094331`
+  - workflows exported: `128`
+  - credentials exported: `65`
+  - final health: `ok`
+- Restarted only the HEAL API process to load backend/env changes.

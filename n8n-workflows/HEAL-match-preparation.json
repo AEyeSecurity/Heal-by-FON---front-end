@@ -1,0 +1,88 @@
+{
+  "id": "HEALmatchPrep01",
+  "name": "HEAL - Match Preparation",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "heal-match-preparation-9b2f4a7c8d134b61",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-760, 0],
+      "id": "c2e5e5e1-2f30-4f89-a5cb-c196c7d2d35d",
+      "name": "Webhook - Match Preparation Request",
+      "webhookId": "749f4226-fc37-4883-ad7d-9cce4556d955"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json;\nconst now = new Date().toISOString();\nconst inputRoot = 'C:\\\\ServerCIT\\\\services\\\\heal-vcf-canon-match';\nconst outputRoot = 'C:\\\\ServerCIT\\\\services\\\\heal-match-preparation';\nfunction normalizePath(value) { return String(value ?? '').replace(/\\//g, '\\\\'); }\nfunction assertInside(root, target, label) {\n  const normalizedRoot = normalizePath(root).toLowerCase();\n  const normalizedTarget = normalizePath(target).toLowerCase();\n  if (!normalizedTarget.startsWith(normalizedRoot + '\\\\')) throw new Error(`${label} is outside the allowed root.`);\n}\nconst inputPath = normalizePath(body.inputPath ?? body.sheetFinalConsolidatedCsv ?? body.matchCsvPath);\nconst outputDir = normalizePath(body.outputDir);\nconst runId = String(body.runId ?? $execution.id);\nif (!inputPath || !outputDir) throw new Error('inputPath and outputDir are required.');\nassertInside(inputRoot, inputPath, 'inputPath');\nassertInside(outputRoot, outputDir, 'outputDir');\nconst payload = { inputPath, outputDir, runId };\nconst inputJsonBase64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');\nconst command = `powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\\\ServerCIT\\\\services\\\\heal-match-preparation\\\\run_heal_match_preparation.ps1\" -InputJsonBase64 \"${inputJsonBase64}\"`;\nreturn [{ json: { accepted: true, event: 'heal.match_preparation.requested', runId, inputPath, outputDir, command, receivedAt: now, source: 'heal-api' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-500, 0],
+      "id": "24bddf46-2e66-43f0-8a50-54c30fe73f1b",
+      "name": "Prepare Match Deliverable"
+    },
+    {
+      "parameters": {
+        "command": "={{ $json.command }}"
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [-220, 0],
+      "id": "2183cb45-31fd-4cd9-a622-c1639a988a40",
+      "name": "Run Match Preparation"
+    },
+    {
+      "parameters": {
+        "jsCode": "const stdout = String($json.stdout ?? '');\nconst stderr = String($json.stderr ?? '');\nconst lines = stdout.trim().split(/\\r?\\n/).filter(Boolean);\nconst lastLine = lines[lines.length - 1] ?? '{}';\nlet summary;\ntry { summary = JSON.parse(lastLine); }\ncatch (error) { throw new Error(`Match preparation returned invalid JSON: ${error.message}. stderr=${stderr}`); }\nreturn [{ json: { accepted: summary.status === 'valid' || summary.status === 'warning', event: 'heal.match_preparation.completed', runId: $('Prepare Match Deliverable').first().json.runId, status: summary.status, summary, completedAt: new Date().toISOString(), n8n: { workflowName: 'HEAL - Match Preparation', executionId: $execution.id } } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [40, 0],
+      "id": "026aa298-70c8-49df-80ff-c3b787d44105",
+      "name": "Parse Match Preparation"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [300, 0],
+      "id": "b9b1b7c9-49b9-4116-860f-6cff097aa7e3",
+      "name": "Respond JSON"
+    }
+  ],
+  "connections": {
+    "Webhook - Match Preparation Request": {
+      "main": [[{ "node": "Prepare Match Deliverable", "type": "main", "index": 0 }]]
+    },
+    "Prepare Match Deliverable": {
+      "main": [[{ "node": "Run Match Preparation", "type": "main", "index": 0 }]]
+    },
+    "Run Match Preparation": {
+      "main": [[{ "node": "Parse Match Preparation", "type": "main", "index": 0 }]]
+    },
+    "Parse Match Preparation": {
+      "main": [[{ "node": "Respond JSON", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {},
+  "versionId": "e6f40621-a2db-48d9-8912-1511ae5c5064",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": [],
+  "parentFolderId": "Hfz5Eb23JVFZQJoV"
+}

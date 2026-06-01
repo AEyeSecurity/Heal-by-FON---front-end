@@ -5,6 +5,7 @@ Local React prototype for uploading a VCF file, validating HEAL by FON VCF integ
 ## Documentation
 
 - [Technical architecture](docs/technical-architecture.md)
+- [HEAL workflow map](docs/heal-workflows.md)
 - [Operations runbook](docs/operations-runbook.md)
 - [Security notes](docs/security-notes.md)
 - [Implementation log](docs/implementation-log.md)
@@ -68,6 +69,8 @@ GET  /api/validations/:jobId
 POST /api/vcf-canon-matches
 GET  /api/vcf-canon-matches/:jobId
 GET  /api/vcf-canon-matches/:jobId/download
+GET  /api/vcf-canon-matches/:jobId/preparation-audit
+GET  /api/vcf-canon-matches/:jobId/preparation-minimal
 ```
 
 Default chunk size is 8 MiB. This keeps every request well below Cloudflare's common proxied request body limits while allowing multi-GB VCF files to land on the server by streaming each chunk to disk. The browser only receives an `uploadId`; local server paths stay on the backend.
@@ -88,17 +91,18 @@ After a valid or warning validation result, the frontend asks the backend to run
 
 ```text
 HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL
+HEAL_N8N_MATCH_PREPARATION_WEBHOOK_URL
 ```
 
-The UI currently shows four pipeline steps:
+The UI currently shows five pipeline steps:
 
 ```text
-VCF upload -> Integrity validation -> VCF-Canon match -> Downstream analysis
+VCF upload -> Integrity validation -> VCF-Canon match -> Match preparation -> Downstream analysis
 ```
 
-The fourth step is a placeholder for the next interpretation workflows.
+The fifth step is a placeholder for the next interpretation workflows.
 
-When the match finishes, the UI exposes a CSV download for QA. The API serves the per-job consolidated match CSV without exposing local server paths.
+When the match finishes, the UI exposes CSV downloads for QA. The API serves the per-job consolidated match CSV plus the prepared audit/minimal CSVs without exposing local server paths.
 
 ## Canon Flow
 

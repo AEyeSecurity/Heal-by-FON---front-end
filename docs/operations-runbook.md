@@ -126,6 +126,10 @@ Do not commit this file. It may contain:
 HEAL_TURNSTILE_SECRET
 HEAL_N8N_UPLOAD_WEBHOOK_URL
 HEAL_N8N_VALIDATION_WEBHOOK_URL
+HEAL_N8N_CANON_WEBHOOK_URL
+HEAL_N8N_RSID_RESOLUTION_WEBHOOK_URL
+HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL
+HEAL_N8N_MATCH_PREPARATION_WEBHOOK_URL
 HEAL_N8N_WEBHOOK_TOKEN
 ```
 
@@ -209,6 +213,11 @@ Push to `main` triggers deployment.
 7. Confirm duplicate reuse popup appears.
 8. Choose `Usar VCF existente`.
 9. Confirm validation starts without upload.
+10. After a valid VCF, confirm the pipeline reaches `Match preparation`.
+11. Download:
+    - VCF-canon matches CSV
+    - prepared audit CSV
+    - minimal prepared CSV
 
 ## Current Operational Warnings
 
