@@ -1,0 +1,134 @@
+{
+  "id": "HEALvariantEnrich01",
+  "name": "HEAL - Variant Enrichment",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "heal-variant-enrichment-3a9f6d2b4c1e48f0",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -520,
+        0
+      ],
+      "id": "90c1c8ae-e2df-4c61-bd44-d5c2efca31fa",
+      "name": "Webhook - Variant Enrichment Request",
+      "webhookId": "748f3612-2820-4d50-8749-a0c8e6c34dd1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json;\nconst now = new Date().toISOString();\nconst inputRoot = 'C:\\\\ServerCIT\\\\services\\\\heal-match-preparation';\nconst outputRoot = 'C:\\\\ServerCIT\\\\services\\\\heal-variant-enrichment';\nfunction normalizePath(value) { return String(value ?? '').replace(/\\//g, '\\\\'); }\nfunction assertInside(root, target, label) {\n  const normalizedRoot = normalizePath(root).toLowerCase();\n  const normalizedTarget = normalizePath(target).toLowerCase();\n  if (!normalizedTarget.startsWith(normalizedRoot + '\\\\')) throw new Error(`${label} is outside the allowed root.`);\n}\nconst inputPath = normalizePath(body.inputPath || body.deliverableAuditCsv);\nconst outputDir = normalizePath(body.outputDir);\nconst cacheDir = normalizePath(body.cacheDir || `${outputRoot}\\\\cache`);\nconst runId = String(body.runId ?? $execution.id);\nif (!inputPath || !outputDir) throw new Error('inputPath and outputDir are required.');\nassertInside(inputRoot, inputPath, 'inputPath');\nassertInside(outputRoot, outputDir, 'outputDir');\nassertInside(outputRoot, cacheDir, 'cacheDir');\nconst payload = { inputPath, outputDir, cacheDir, runId };\nconst inputJsonBase64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');\nconst command = `powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\\\ServerCIT\\\\services\\\\heal-variant-enrichment\\\\run_heal_variant_enrichment.ps1\" -InputJsonBase64 \"${inputJsonBase64}\"`;\nreturn [{ json: { accepted: true, event: 'heal.variant_enrichment.requested', runId, inputPath, outputDir, cacheDir, command, receivedAt: now, source: 'heal-api' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        0
+      ],
+      "id": "b641c41c-b386-4cc8-9fa7-0cb180e7b7db",
+      "name": "Prepare Variant Enrichment"
+    },
+    {
+      "parameters": {
+        "command": "={{ $json.command }}"
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        40,
+        0
+      ],
+      "id": "af7beded-f9ac-4f85-a3c8-5c3dbb8ad1dd",
+      "name": "Run Variant Enrichment"
+    },
+    {
+      "parameters": {
+        "jsCode": "const stdout = String($json.stdout ?? '');\nconst stderr = String($json.stderr ?? '');\nconst lines = stdout.trim().split(/\\r?\\n/).filter(Boolean);\nconst lastLine = lines[lines.length - 1] ?? '{}';\nlet summary;\ntry { summary = JSON.parse(lastLine); }\ncatch (error) { throw new Error(`Variant enrichment returned invalid JSON: ${error.message}. stderr=${stderr}`); }\nreturn [{ json: { accepted: summary.status === 'valid' || summary.status === 'warning', event: 'heal.variant_enrichment.completed', runId: $('Prepare Variant Enrichment').first().json.runId, status: summary.status, summary, completedAt: new Date().toISOString(), n8n: { workflowName: 'HEAL - Variant Enrichment', executionId: $execution.id } } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        0
+      ],
+      "id": "f78ee573-63c6-4fb6-a246-9320195b5e4d",
+      "name": "Parse Variant Enrichment"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        580,
+        0
+      ],
+      "id": "f3d4b4c0-a82f-4728-a5eb-e2116e5f61c4",
+      "name": "Respond JSON"
+    }
+  ],
+  "connections": {
+    "Webhook - Variant Enrichment Request": {
+      "main": [
+        [
+          {
+            "node": "Prepare Variant Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Variant Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Run Variant Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Variant Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Parse Variant Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Variant Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Respond JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "pinData": null,
+  "versionId": "395f4e6c-7f6c-4fc9-87a9-8caa4090c2dd",
+  "meta": null,
+  "parentFolderId": "Hfz5Eb23JVFZQJoV"
+}

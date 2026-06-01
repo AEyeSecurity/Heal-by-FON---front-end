@@ -152,3 +152,43 @@ Remaining before stable production:
   - workflows exported: `128`
   - credentials exported: `65`
   - final health: `ok`
+
+### External Variant Enrichment
+
+- Added runtime service:
+  - `C:\ServerCIT\services\heal-variant-enrichment\enrich_observed_variants.py`
+  - `C:\ServerCIT\services\heal-variant-enrichment\run_heal_variant_enrichment.ps1`
+- Added n8n workflow:
+  - `HEAL - Variant Enrichment`
+  - workflow ID: `HEALvariantEnrich01`
+  - webhook path: `heal-variant-enrichment-3a9f6d2b4c1e48f0`
+- Added backend env:
+  - `HEAL_VARIANT_ENRICHMENT_ROOT`
+  - `HEAL_N8N_VARIANT_ENRICHMENT_WEBHOOK_URL`
+- Added download endpoint:
+  - `GET /api/vcf-canon-matches/:jobId/enrichment`
+- Added frontend internal progress bar:
+  - External enrichment / Enriquecimiento externo
+- Added compact download icons next to completed progress bars for auditable CSV stages.
+
+### External Enrichment Validation
+
+- Direct script smoke test with `rs429358` succeeded:
+  - status: `valid`
+  - observed rows: `1`
+  - unique rsIDs: `1`
+  - sources: Ensembl Variation, Ensembl VEP, ClinVar E-utilities, MyVariant.info
+- n8n webhook smoke test succeeded:
+  - execution ID: `238671`
+  - cache hit on repeated `rs429358`
+- Backend smoke test with small controlled VCF succeeded:
+  - job status: `complete`
+  - final stage: `enriching`
+  - enrichment status: `warning`
+  - enrichment rows: `0`
+  - enrichment CSV download returned a valid header-only CSV
+- Ran official safe n8n restart:
+  - backup: `C:\n8n-backups\daily\20260601-185238`
+  - workflows exported: `129`
+  - credentials exported: `65`
+  - final health: `ok`

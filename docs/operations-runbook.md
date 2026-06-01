@@ -129,6 +129,7 @@ HEAL_N8N_VALIDATION_WEBHOOK_URL
 HEAL_N8N_CANON_WEBHOOK_URL
 HEAL_N8N_RSID_RESOLUTION_WEBHOOK_URL
 HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL
+HEAL_N8N_VARIANT_ENRICHMENT_WEBHOOK_URL
 HEAL_N8N_WEBHOOK_TOKEN
 ```
 
@@ -217,9 +218,11 @@ Push to `main` triggers deployment.
     - VCF-canon matches CSV
     - prepared audit CSV
     - minimal prepared CSV
+    - observed variant enrichment CSV
 
 ## Current Operational Warnings
 
 - Rotate the dedicated HEAL tunnel token before long-term production.
 - Configure scheduled tasks from elevated PowerShell before relying on automatic recovery after reboot.
-- Configure n8n webhooks before starting downstream workflow automation.
+- Configure and verify n8n webhooks before starting downstream workflow automation.
+- `HEAL - Variant Enrichment` uses public APIs and a local cache. If an external source is temporarily unavailable, the job should finish with `warning` and still produce an audit CSV.

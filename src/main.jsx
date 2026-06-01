@@ -45,6 +45,7 @@ const COPY = {
     validationProgress: "Validacion del VCF",
     matchProgress: "Match VCF-Canon",
     preparationProgress: "Preparacion del match",
+    enrichmentProgress: "Enriquecimiento externo",
     submit: "Enviar y validar",
     securityCheck: "Verificacion de seguridad",
     securityCheckHelp: "Protege el backend antes de aceptar VCFs grandes.",
@@ -61,6 +62,7 @@ const COPY = {
     matchStarting: "Iniciando match VCF-Canon...",
     matching: "Matcheando VCF contra canon...",
     preparing: "Preparando CSVs de auditoria...",
+    enriching: "Enriqueciendo variantes observadas...",
     matchFailed: "No se pudo completar el match VCF-Canon.",
     validationFailed: "La validacion fallo.",
     uploadFailed: "No se pudo completar la carga.",
@@ -68,6 +70,7 @@ const COPY = {
     complete: "Validacion finalizada.",
     matchComplete: "Match VCF-Canon finalizado.",
     preparationComplete: "Preparacion del match finalizada.",
+    enrichmentComplete: "Enriquecimiento externo finalizado.",
     resultValid: "VCF validado",
     resultWarning: "Validado con warnings",
     resultInvalid: "VCF invalido",
@@ -95,11 +98,16 @@ const COPY = {
     checksum: "SHA-256",
     matchTitle: "Match VCF-Canon",
     preparationTitle: "Preparacion del match",
+    enrichmentTitle: "Enriquecimiento de variantes observadas",
     preparationRows: "Filas preparadas",
     preparationObserved: "Con genotipo observado",
     preparationHigh: "Confianza alta",
     preparationModerate: "Confianza moderada",
     preparationLow: "Confianza baja",
+    enrichmentObserved: "Filas enriquecidas",
+    enrichmentUniqueRsids: "rsIDs unicos",
+    enrichmentCacheHits: "Cache hits",
+    enrichmentSourceErrors: "Errores de fuentes",
     matchStatusStrict: "Matches estrictos",
     matchStatusAltReview: "Matches con revision ALT",
     matchStatusNoPosition: "Sin match por posicion",
@@ -127,6 +135,7 @@ const COPY = {
     matchDownload: "Descargar CSV de matches",
     matchPreparationAuditDownload: "Descargar CSV preparado",
     matchPreparationMinimalDownload: "Descargar CSV minimo",
+    enrichmentDownload: "Descargar CSV enriquecido",
     matchDownloadFailed: "No se pudo descargar el CSV de matches.",
     canonDownloadFailed: "No se pudo descargar el canon.",
     close: "Cerrar",
@@ -155,6 +164,7 @@ const COPY = {
     validationProgress: "VCF validation",
     matchProgress: "VCF-Canon match",
     preparationProgress: "Match preparation",
+    enrichmentProgress: "External enrichment",
     submit: "Send and validate",
     securityCheck: "Security check",
     securityCheckHelp: "Protects the backend before accepting large VCF files.",
@@ -171,6 +181,7 @@ const COPY = {
     matchStarting: "Starting VCF-Canon match...",
     matching: "Matching VCF against canon...",
     preparing: "Preparing audit CSVs...",
+    enriching: "Enriching observed variants...",
     matchFailed: "Could not complete the VCF-Canon match.",
     validationFailed: "Validation failed.",
     uploadFailed: "Could not complete the upload.",
@@ -178,6 +189,7 @@ const COPY = {
     complete: "Validation finished.",
     matchComplete: "VCF-Canon match finished.",
     preparationComplete: "Match preparation finished.",
+    enrichmentComplete: "External enrichment finished.",
     resultValid: "VCF validated",
     resultWarning: "Validated with warnings",
     resultInvalid: "Invalid VCF",
@@ -205,11 +217,16 @@ const COPY = {
     checksum: "SHA-256",
     matchTitle: "VCF-Canon match",
     preparationTitle: "Match preparation",
+    enrichmentTitle: "Observed variant enrichment",
     preparationRows: "Prepared rows",
     preparationObserved: "Observed genotypes",
     preparationHigh: "High confidence",
     preparationModerate: "Moderate confidence",
     preparationLow: "Low confidence",
+    enrichmentObserved: "Enriched rows",
+    enrichmentUniqueRsids: "Unique rsIDs",
+    enrichmentCacheHits: "Cache hits",
+    enrichmentSourceErrors: "Source errors",
     matchStatusStrict: "Strict matches",
     matchStatusAltReview: "Matches needing ALT review",
     matchStatusNoPosition: "No position match",
@@ -237,6 +254,7 @@ const COPY = {
     matchDownload: "Download matches CSV",
     matchPreparationAuditDownload: "Download prepared CSV",
     matchPreparationMinimalDownload: "Download minimal CSV",
+    enrichmentDownload: "Download enriched CSV",
     matchDownloadFailed: "Could not download matches CSV.",
     canonDownloadFailed: "Could not download canon.",
     close: "Close",
@@ -269,12 +287,20 @@ function clampVariantCount(value) {
   return Math.min(100, Math.max(1, parsed));
 }
 
-function ProgressBar({ label, value, tone = "blue" }) {
+function ProgressBar({ label, value, tone = "blue", downloadLabel = "", onDownload = null }) {
+  const complete = Math.round(value) >= 100;
   return (
     <div className="progress-block">
       <div className="progress-row">
         <span>{label}</span>
-        <strong>{Math.round(value)}%</strong>
+        <span className="progress-value">
+          <strong>{Math.round(value)}%</strong>
+          {complete && onDownload && (
+            <button className="progress-download-button" type="button" onClick={onDownload} aria-label={downloadLabel || label}>
+              <Download size={16} />
+            </button>
+          )}
+        </span>
       </div>
       <div className="progress-track" aria-label={label} aria-valuemin="0" aria-valuemax="100" aria-valuenow={value}>
         <div className={`progress-fill ${tone}`} style={{ width: `${Math.min(100, Math.max(0, value))}%` }} />
@@ -295,10 +321,17 @@ function PipelineStepper({ phase, t }) {
       ? 0
       : phase === "validating"
         ? 1
-        : phase === "matching" || phase === "preparing" || phase === "done"
+        : phase === "matching" || phase === "preparing" || phase === "enriching" || phase === "done"
           ? 2
           : 0;
-  const completeIndex = phase === "done" ? 2 : phase === "matching" || phase === "preparing" ? 1 : phase === "validating" ? 0 : -1;
+  const completeIndex =
+    phase === "done"
+      ? 2
+      : phase === "matching" || phase === "preparing" || phase === "enriching"
+        ? 1
+        : phase === "validating"
+          ? 0
+          : -1;
 
   return (
     <section className="pipeline" aria-label={t.pipelineLabel}>
@@ -829,6 +862,11 @@ function MatchResultPanel({ result, locale, t }) {
   const statusCounts = metadata.match_status_counts || {};
   const preparation = result.matchPreparation?.metadata || {};
   const confidenceCounts = preparation.confidence_level_counts || {};
+  const enrichment = result.variantEnrichment?.metadata || {};
+  const enrichmentSourceErrors = Object.values(enrichment.source_error_counts || {}).reduce(
+    (total, value) => total + Number(value || 0),
+    0,
+  );
   const fileLabel = metadata.file_name || metadata.upload_id || "";
   const cards = [
     [t.matchTargets, formatNumber(metadata.target_keys, locale)],
@@ -847,6 +885,14 @@ function MatchResultPanel({ result, locale, t }) {
         [t.preparationHigh, formatNumber(confidenceCounts.High || 0, locale)],
         [t.preparationModerate, formatNumber(confidenceCounts.Moderate || 0, locale)],
         [t.preparationLow, formatNumber(confidenceCounts.Low || 0, locale)],
+      ]
+    : [];
+  const enrichmentCards = result.variantEnrichment
+    ? [
+        [t.enrichmentObserved, formatNumber(enrichment.output_rows, locale)],
+        [t.enrichmentUniqueRsids, formatNumber(enrichment.unique_rsids, locale)],
+        [t.enrichmentCacheHits, formatNumber(enrichment.cache_hits, locale)],
+        [t.enrichmentSourceErrors, formatNumber(enrichmentSourceErrors, locale)],
       ]
     : [];
 
@@ -894,6 +940,10 @@ function MatchResultPanel({ result, locale, t }) {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/preparation-minimal`, "heal-match-preparation-minimal.csv");
   }
 
+  async function downloadEnrichment() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/enrichment`, "heal-observed-variant-enrichment.csv");
+  }
+
   return (
     <section className="result-panel">
       <div className="result-heading">
@@ -918,6 +968,16 @@ function MatchResultPanel({ result, locale, t }) {
           </div>
         </>
       )}
+      {enrichmentCards.length > 0 && (
+        <>
+          <h3 className="result-subtitle">{t.enrichmentTitle}</h3>
+          <div className="metrics-grid">
+            {enrichmentCards.map(([label, value]) => (
+              <MetricCard label={label} value={value} key={label} />
+            ))}
+          </div>
+        </>
+      )}
       <div className="match-download-actions">
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadMatches}>
           <Download size={17} />
@@ -930,6 +990,10 @@ function MatchResultPanel({ result, locale, t }) {
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadPreparedMinimal}>
           <Download size={17} />
           {t.matchPreparationMinimalDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadEnrichment}>
+          <Download size={17} />
+          {t.enrichmentDownload}
         </button>
       </div>
       {downloadError && <p className="error-message">{downloadError}</p>}
@@ -961,6 +1025,7 @@ function App() {
   const [validationProgress, setValidationProgress] = useState(0);
   const [matchProgress, setMatchProgress] = useState(0);
   const [preparationProgress, setPreparationProgress] = useState(0);
+  const [enrichmentProgress, setEnrichmentProgress] = useState(0);
   const [maxVariants, setMaxVariants] = useState(20);
   const [phase, setPhase] = useState("idle");
   const [messageKey, setMessageKey] = useState("initialMessage");
@@ -975,7 +1040,10 @@ function App() {
 
   const t = COPY[language];
   const locale = language === "es" ? "es-AR" : "en-US";
-  const canSend = useMemo(() => file && !["uploading", "validating", "matching", "preparing"].includes(phase), [file, phase]);
+  const canSend = useMemo(
+    () => file && !["uploading", "validating", "matching", "preparing", "enriching"].includes(phase),
+    [file, phase],
+  );
   const statusMessage = customMessage || t[messageKey] || t.initialMessage;
 
   function pickFile(nextFile) {
@@ -984,6 +1052,7 @@ function App() {
     setValidationProgress(0);
     setMatchProgress(0);
     setPreparationProgress(0);
+    setEnrichmentProgress(0);
     setResult(null);
     setMatchResult(null);
     setError(null);
@@ -1001,6 +1070,48 @@ function App() {
       return text ? JSON.parse(text) : {};
     } catch {
       return { error: text };
+    }
+  }
+
+  async function downloadCsv(endpoint, fallbackName) {
+    const response = await fetch(`${API_BASE}${endpoint}`);
+    if (!response.ok) {
+      const payload = await readJsonResponse(response);
+      throw new Error(payload.error || t.matchDownloadFailed);
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="?([^"]+)"?/i);
+    const fileName = match?.[1] || fallbackName;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function downloadMatchArtifact(kind) {
+    if (!matchResult?.jobId) return;
+    setError(null);
+    try {
+      if (kind === "matches") {
+        await downloadCsv(`/api/vcf-canon-matches/${matchResult.jobId}/download`, "heal-vcf-canon-matches.csv");
+      } else if (kind === "preparation") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/preparation-audit`,
+          "heal-match-preparation-audit.csv",
+        );
+      } else if (kind === "enrichment") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/enrichment`,
+          "heal-observed-variant-enrichment.csv",
+        );
+      }
+    } catch (caught) {
+      setError(caught.message || String(caught));
     }
   }
 
@@ -1087,6 +1198,12 @@ function App() {
         setMatchProgress(100);
         setPreparationProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.preparing);
+      } else if (job.stage === "enriching") {
+        setPhase("enriching");
+        setMatchProgress(100);
+        setPreparationProgress(100);
+        setEnrichmentProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.enriching);
       } else {
         setMatchProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.matching);
@@ -1094,6 +1211,7 @@ function App() {
 
       if (job.status === "complete") {
         setPreparationProgress(100);
+        setEnrichmentProgress(100);
         return { ...(job.result || {}), jobId: job.id };
       }
       if (job.status === "failed") throw new Error(job.error || t.matchFailed);
@@ -1120,6 +1238,7 @@ function App() {
     setValidationProgress(0);
     setMatchProgress(0);
     setPreparationProgress(0);
+    setEnrichmentProgress(0);
     setDuplicateCandidate(null);
 
     try {
@@ -1136,6 +1255,7 @@ function App() {
             setValidationProgress(0);
             setMatchProgress(0);
             setPreparationProgress(0);
+            setEnrichmentProgress(0);
             setDuplicateCandidate(existingUpload);
             setMessageKey("fileReady");
             return;
@@ -1179,6 +1299,7 @@ function App() {
       setMessageKey("matchStarting");
       setMatchProgress(5);
       setPreparationProgress(0);
+      setEnrichmentProgress(0);
 
       const matchStart = await fetch(`${API_BASE}/api/vcf-canon-matches`, {
         method: "POST",
@@ -1195,6 +1316,7 @@ function App() {
       setCustomMessage("");
       setMatchProgress(100);
       setPreparationProgress(100);
+      setEnrichmentProgress(100);
       setTurnstileToken("");
       setTurnstileResetKey((current) => current + 1);
     } catch (caught) {
@@ -1270,7 +1392,7 @@ function App() {
 
       <section className="action-panel">
         <div className="status-line">
-          {phase === "validating" || phase === "matching" || phase === "preparing" ? (
+          {phase === "validating" || phase === "matching" || phase === "preparing" || phase === "enriching" ? (
             <Loader2 className="spin" size={20} />
           ) : (
             <ShieldCheck size={20} />
@@ -1301,8 +1423,27 @@ function App() {
 
         <ProgressBar label={t.uploadProgress} value={uploadProgress} tone="green" />
         <ProgressBar label={t.validationProgress} value={validationProgress} tone="blue" />
-        <ProgressBar label={t.matchProgress} value={matchProgress} tone="blue" />
-        <ProgressBar label={t.preparationProgress} value={preparationProgress} tone="blue" />
+        <ProgressBar
+          label={t.matchProgress}
+          value={matchProgress}
+          tone="blue"
+          downloadLabel={t.matchDownload}
+          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("matches") : null}
+        />
+        <ProgressBar
+          label={t.preparationProgress}
+          value={preparationProgress}
+          tone="blue"
+          downloadLabel={t.matchPreparationAuditDownload}
+          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("preparation") : null}
+        />
+        <ProgressBar
+          label={t.enrichmentProgress}
+          value={enrichmentProgress}
+          tone="blue"
+          downloadLabel={t.enrichmentDownload}
+          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("enrichment") : null}
+        />
         {error && <p className="error-message">{error}</p>}
         <button className="primary-button" type="button" disabled={!canSend} onClick={submit}>
           <Send size={18} />

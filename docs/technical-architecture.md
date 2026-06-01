@@ -2,9 +2,9 @@
 
 ## Scope
 
-This repository contains the first production-facing slice of HEAL by FON: a web interface and backend API for receiving large VCF files, validating their integrity, maintaining the current interpretation canon, matching VCF rows against the canon, and preparing match outputs for audit.
+This repository contains the first production-facing slice of HEAL by FON: a web interface and backend API for receiving large VCF files, validating their integrity, maintaining the current interpretation canon, matching VCF rows against the canon, preparing match outputs for audit, and enriching observed variants with public external sources.
 
-Clinical/genomic interpretation, report generation, and multi-user accounts are not implemented here yet. The current downstream implementation stops after match preparation; later interpretation is still represented as a placeholder.
+Clinical/genomic interpretation, report generation, and multi-user accounts are not implemented here yet. The current downstream implementation stops after observed variant enrichment; later interpretation is still represented as a placeholder.
 
 ## Public Components
 
@@ -28,7 +28,7 @@ The frontend is a static application. It does not process, store, or validate VC
 - Tunnel: Cloudflare Tunnel, dedicated to HEAL API
 - Upload storage root: configured by `HEAL_UPLOAD_ROOT`
 
-The backend receives VCF chunks, assembles files on disk, starts streaming validation, orchestrates canon processing, starts the VCF-canon match, and prepares audit/download artifacts.
+The backend receives VCF chunks, assembles files on disk, starts streaming validation, orchestrates canon processing, starts the VCF-canon match, prepares audit/download artifacts, and starts observed variant enrichment.
 
 ### VCF Validator
 
@@ -75,6 +75,7 @@ GET  /api/vcf-canon-matches/:jobId
 GET  /api/vcf-canon-matches/:jobId/download
 GET  /api/vcf-canon-matches/:jobId/preparation-audit
 GET  /api/vcf-canon-matches/:jobId/preparation-minimal
+GET  /api/vcf-canon-matches/:jobId/enrichment
 ```
 
 Default chunk size:
@@ -148,7 +149,7 @@ The API returns validation results without exposing local filesystem paths. Publ
 
 Local paths remain internal to the backend and n8n integration.
 
-The VCF-canon match download endpoint serves the per-job `sheet_final_consolidated.csv` artifact for QA after the job completes. Match preparation download endpoints serve audit-ready and minimal deliverable-style CSVs. The browser receives CSV attachments; JSON results and download responses do not expose internal filesystem paths.
+The VCF-canon match download endpoint serves the per-job `sheet_final_consolidated.csv` artifact for QA after the job completes. Match preparation download endpoints serve audit-ready and minimal deliverable-style CSVs. The enrichment download endpoint serves the observed variant enrichment CSV. The browser receives CSV attachments; JSON results and download responses do not expose internal filesystem paths.
 
 ## n8n Integration Points
 
@@ -160,6 +161,7 @@ HEAL_N8N_VALIDATION_WEBHOOK_URL
 HEAL_N8N_CANON_WEBHOOK_URL
 HEAL_N8N_RSID_RESOLUTION_WEBHOOK_URL
 HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL
+HEAL_N8N_VARIANT_ENRICHMENT_WEBHOOK_URL
 ```
 
 Current status:
@@ -170,6 +172,7 @@ n8nValidationWebhookConfigured: true
 n8nCanonWebhookConfigured: true
 n8nRsidResolutionWebhookConfigured: true
 n8nVcfCanonMatchWebhookConfigured: true
+n8nVariantEnrichmentWebhookConfigured: true
 ```
 
 Workflow responsibilities:
@@ -178,13 +181,14 @@ Workflow responsibilities:
 - `HEAL - Canon Sheet Intake`: cleans the uploaded canon and creates `rsid_master.csv`.
 - `HEAL - rsID Coordinate Resolution`: runs only after canon changes and creates the match-ready rsID table.
 - `HEAL - VCF Canon Match`: runs after a VCF passes validation, performs the targeted VCF scan, matches against the current canon, and creates audit/minimal CSV outputs for QA and downstream review.
+- `HEAL - Variant Enrichment`: runs after match preparation and enriches observed genotype rows with Ensembl, ClinVar, and MyVariant.info data.
 - `HEAL - Match Preparation`: superseded as a standalone workflow and left inactive; its script now runs inside `HEAL - VCF Canon Match`.
 
 Natural usage path:
 
 ```text
 Canon change -> clean canon -> resolve rsID coordinates
-VCF upload -> integrity validation -> VCF-canon match, targeted scan, and preparation -> downstream analysis placeholder
+VCF upload -> integrity validation -> VCF-canon match, targeted scan, preparation, and observed enrichment -> downstream analysis placeholder
 ```
 
 Webhook secrets, if added later, must stay outside GitHub and outside Cloudflare Pages.

@@ -1,6 +1,6 @@
 # HEAL VCF Upload
 
-Local React prototype for uploading a VCF file, validating HEAL by FON VCF integrity, and starting the first downstream canon match.
+Local React prototype for uploading a VCF file, validating HEAL by FON VCF integrity, matching against the current canon, and enriching observed variants for audit.
 
 ## Documentation
 
@@ -71,6 +71,7 @@ GET  /api/vcf-canon-matches/:jobId
 GET  /api/vcf-canon-matches/:jobId/download
 GET  /api/vcf-canon-matches/:jobId/preparation-audit
 GET  /api/vcf-canon-matches/:jobId/preparation-minimal
+GET  /api/vcf-canon-matches/:jobId/enrichment
 ```
 
 Default chunk size is 8 MiB. This keeps every request well below Cloudflare's common proxied request body limits while allowing multi-GB VCF files to land on the server by streaming each chunk to disk. The browser only receives an `uploadId`; local server paths stay on the backend.
@@ -101,7 +102,15 @@ VCF upload -> Integrity validation -> VCF-Canon match -> Downstream analysis
 
 The VCF-canon match step internally includes the targeted VCF scan and match preparation. The fourth step is a placeholder for the next interpretation workflows.
 
-When the match finishes, the UI exposes CSV downloads for QA. The API serves the per-job consolidated match CSV plus the prepared audit/minimal CSVs without exposing local server paths.
+When the match finishes, the UI exposes CSV downloads for QA. The API serves the per-job consolidated match CSV, the prepared audit/minimal CSVs, and the observed variant enrichment CSV without exposing local server paths.
+
+After match preparation, the backend invokes:
+
+```text
+HEAL_N8N_VARIANT_ENRICHMENT_WEBHOOK_URL
+```
+
+That stage enriches only observed genotype rows with public Ensembl, ClinVar, and MyVariant.info data. It uses a local cache under `C:\ServerCIT\services\heal-variant-enrichment\cache` so repeated audits do not re-query the same rsIDs.
 
 ## Canon Flow
 

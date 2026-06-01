@@ -28,6 +28,9 @@ const VCF_CANON_MATCH_ROOT =
 const MATCH_PREPARATION_ROOT =
   process.env.HEAL_MATCH_PREPARATION_ROOT ||
   "C:\\ServerCIT\\services\\heal-match-preparation";
+const VARIANT_ENRICHMENT_ROOT =
+  process.env.HEAL_VARIANT_ENRICHMENT_ROOT ||
+  "C:\\ServerCIT\\services\\heal-variant-enrichment";
 const PYTHON_EXE = process.env.HEAL_PYTHON_EXE || "python";
 const MAX_UPLOADS = Math.max(1, Number.parseInt(process.env.HEAL_MAX_UPLOADS || "12", 10) || 12);
 const UPLOAD_TTL_MS =
@@ -61,6 +64,7 @@ const N8N_VALIDATION_WEBHOOK_URL =
 const N8N_CANON_WEBHOOK_URL = process.env.HEAL_N8N_CANON_WEBHOOK_URL || "";
 const N8N_RSID_RESOLUTION_WEBHOOK_URL = process.env.HEAL_N8N_RSID_RESOLUTION_WEBHOOK_URL || "";
 const N8N_VCF_CANON_MATCH_WEBHOOK_URL = process.env.HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL || "";
+const N8N_VARIANT_ENRICHMENT_WEBHOOK_URL = process.env.HEAL_N8N_VARIANT_ENRICHMENT_WEBHOOK_URL || "";
 const N8N_WEBHOOK_TOKEN = process.env.HEAL_N8N_WEBHOOK_TOKEN || "";
 const ALLOWED_ORIGINS = (process.env.HEAL_ALLOWED_ORIGINS ||
   "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173")
@@ -162,6 +166,15 @@ function matchPreparationPaths() {
   return {
     root,
     runs: path.join(root, "runs"),
+  };
+}
+
+function variantEnrichmentPaths() {
+  const root = path.resolve(VARIANT_ENRICHMENT_ROOT);
+  return {
+    root,
+    runs: path.join(root, "runs"),
+    cache: path.join(root, "cache"),
   };
 }
 
@@ -284,6 +297,15 @@ function sanitizeMatchPreparationResult(result) {
   const publicResult = JSON.parse(JSON.stringify(result || {}));
   delete publicResult.inputPath;
   delete publicResult.outputDir;
+  delete publicResult.outputs;
+  return publicResult;
+}
+
+function sanitizeVariantEnrichmentResult(result) {
+  const publicResult = JSON.parse(JSON.stringify(result || {}));
+  delete publicResult.inputPath;
+  delete publicResult.outputDir;
+  delete publicResult.cacheDir;
   delete publicResult.outputs;
   return publicResult;
 }
@@ -525,6 +547,13 @@ async function processMatchPreparation(payload) {
   return await runBase64JsonScript(path.join(MATCH_PREPARATION_ROOT, "prepare_match_deliverable.py"), payload);
 }
 
+async function processVariantEnrichment(payload) {
+  return (
+    (await postWorkflowForSummary(N8N_VARIANT_ENRICHMENT_WEBHOOK_URL, payload, "n8n variant enrichment")) ||
+    (await runBase64JsonScript(path.join(VARIANT_ENRICHMENT_ROOT, "enrich_observed_variants.py"), payload))
+  );
+}
+
 async function loadCurrentCanon() {
   const manifest = await loadCurrentCanonManifest();
   if (!manifest) return publicCanon(null, null, null);
@@ -697,6 +726,7 @@ app.get("/api/health", (_req, res) => {
     rsidResolutionRoot: RSID_RESOLUTION_ROOT,
     vcfCanonMatchRoot: VCF_CANON_MATCH_ROOT,
     matchPreparationRoot: MATCH_PREPARATION_ROOT,
+    variantEnrichmentRoot: VARIANT_ENRICHMENT_ROOT,
     maxCanonFileSizeBytes: MAX_CANON_FILE_SIZE_BYTES,
     maxCanons: MAX_CANONS,
     maxUploads: MAX_UPLOADS,
@@ -713,6 +743,7 @@ app.get("/api/health", (_req, res) => {
     n8nCanonWebhookConfigured: Boolean(N8N_CANON_WEBHOOK_URL),
     n8nRsidResolutionWebhookConfigured: Boolean(N8N_RSID_RESOLUTION_WEBHOOK_URL),
     n8nVcfCanonMatchWebhookConfigured: Boolean(N8N_VCF_CANON_MATCH_WEBHOOK_URL),
+    n8nVariantEnrichmentWebhookConfigured: Boolean(N8N_VARIANT_ENRICHMENT_WEBHOOK_URL),
   });
 });
 
@@ -1350,20 +1381,56 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
       }
       job.artifacts.deliverableMinCsv = preparationSummary.outputs?.deliverableMinCsv || "";
       job.artifacts.deliverableAuditCsv = preparationSummary.outputs?.deliverableAuditCsv || "";
+      job.progress = 86;
+      job.stage = "enriching";
+      job.stageProgress = 12;
+      job.message = "Enriching observed variants with external sources";
+      job.updatedAt = new Date().toISOString();
+
+      const enrichmentPaths = variantEnrichmentPaths();
+      await mkdir(enrichmentPaths.runs, { recursive: true });
+      await mkdir(enrichmentPaths.cache, { recursive: true });
+      const enrichmentRunId = `variant-enrichment-${runId}`;
+      const enrichmentOutputDir = path.join(enrichmentPaths.runs, enrichmentRunId);
+      await mkdir(enrichmentOutputDir, { recursive: true });
+      const auditCsvPath = path.resolve(job.artifacts.deliverableAuditCsv || "");
+      const preparationPaths = matchPreparationPaths();
+      if (!isPathInside(preparationPaths.root, auditCsvPath)) {
+        throw new Error("Variant enrichment input is outside the allowed match preparation root.");
+      }
+      const enrichmentPayload = {
+        event: "heal.variant_enrichment.requested",
+        runId: enrichmentRunId,
+        matchRunId: runId,
+        uploadId: upload.uploadId,
+        fileName: upload.fileName,
+        inputPath: auditCsvPath,
+        outputDir: enrichmentOutputDir,
+        cacheDir: enrichmentPaths.cache,
+        requestedAt: new Date().toISOString(),
+      };
+      const enrichmentSummary = await processVariantEnrichment(enrichmentPayload);
+      job.artifacts.observedVariantEnrichmentCsv = enrichmentSummary.outputs?.observedVariantEnrichmentCsv || "";
       job.result = {
         ...sanitizeVcfCanonMatchResult(summary, upload),
         matchPreparation: sanitizeMatchPreparationResult(preparationSummary),
+        variantEnrichment: sanitizeVariantEnrichmentResult(enrichmentSummary),
       };
       job.status = "complete";
       job.progress = 100;
-      job.stage = "preparing";
+      job.stage = "enriching";
       job.stageProgress = 100;
-      job.message = "Match preparation completed";
+      job.message = "Variant enrichment completed";
     } catch (error) {
       job.status = "failed";
       job.progress = 100;
       job.error = error.message || String(error);
-      job.message = job.stage === "preparing" ? "Match preparation failed" : "VCF-canon match failed";
+      job.message =
+        job.stage === "enriching"
+          ? "Variant enrichment failed"
+          : job.stage === "preparing"
+            ? "Match preparation failed"
+            : "VCF-canon match failed";
     } finally {
       job.updatedAt = new Date().toISOString();
     }
@@ -1465,6 +1532,45 @@ app.get("/api/vcf-canon-matches/:jobId/preparation-audit", async (req, res) => {
 
 app.get("/api/vcf-canon-matches/:jobId/preparation-minimal", async (req, res) => {
   await downloadMatchPreparationArtifact(req, res, "deliverableMinCsv", "match_preparation_minimal");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/enrichment", async (req, res) => {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (job.status !== "complete") {
+    res.status(409).json({ error: "Variant enrichment is not complete yet." });
+    return;
+  }
+
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+
+  const paths = variantEnrichmentPaths();
+  const csvPath = path.resolve(job.artifacts?.observedVariantEnrichmentCsv || "");
+  if (!isPathInside(paths.root, csvPath)) {
+    res.status(400).json({ error: "Variant enrichment CSV is outside the allowed root." });
+    return;
+  }
+  const csvStat = await stat(csvPath).catch(() => null);
+  if (!csvStat || csvStat.size <= 0) {
+    res.status(404).json({ error: "Variant enrichment CSV was not found." });
+    return;
+  }
+
+  const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.download(csvPath, `${baseName}_observed_variant_enrichment.csv`);
 });
 
 app.listen(PORT, "127.0.0.1", () => {
