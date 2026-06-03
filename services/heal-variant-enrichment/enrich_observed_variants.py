@@ -17,6 +17,7 @@ from pathlib import Path
 
 DEFAULT_TIMEOUT_SECONDS = 18
 DEFAULT_CACHE_TTL_DAYS = 14
+CACHE_SCHEMA_VERSION = 2
 USER_AGENT = "HEAL-by-FON-prototype/0.1"
 
 
@@ -74,7 +75,7 @@ def json_get(url: str, timeout_seconds: int) -> tuple[dict | list | None, str]:
         return None, str(error)
 
 
-def unique_join(values, limit: int = 8) -> str:
+def unique_join(values, limit: int = 8, sep: str = "|") -> str:
     out = []
     for value in values:
         text = clean_str(value)
@@ -82,7 +83,7 @@ def unique_join(values, limit: int = 8) -> str:
             out.append(text)
         if len(out) >= limit:
             break
-    return "|".join(out)
+    return sep.join(out)
 
 
 def compact_json(obj, max_len: int = 12000) -> str:
@@ -143,6 +144,8 @@ def load_cache(cache_dir: Path, rsid: str, ttl_days: int) -> dict | None:
         return None
     fetched_at = payload.get("fetchedAt")
     if not fetched_at:
+        return None
+    if int(payload.get("schemaVersion") or 1) != CACHE_SCHEMA_VERSION:
         return None
     try:
         fetched = dt.datetime.fromisoformat(str(fetched_at).replace("Z", "+00:00"))
@@ -264,9 +267,10 @@ def fetch_ensembl_vep(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
 def fetch_myvariant(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
     params = urllib.parse.urlencode(
         {
-            "q": f"dbsnp.rsid:{rsid}",
-            "fields": "clinvar,dbsnp,cadd,dbnsfp",
-            "size": "1",
+            "q": rsid,
+            "scopes": "dbsnp.rsid",
+            "fields": "dbsnp,clinvar,cadd,gnomad,dbnsfp,snpeff,_id,_score",
+            "size": "3",
         }
     )
     payload, error = json_get(f"https://myvariant.info/v1/query?{params}", timeout_seconds)
@@ -283,37 +287,48 @@ def fetch_myvariant(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
     else:
         rcv = clinvar.get("rcv") or {}
     return {
-        "hits": clean_str(payload.get("total")),
+        "hits": clean_str(len(hits)),
+        "total_hits": clean_str(payload.get("total")),
+        "best_id": clean_str(first.get("_id")) if isinstance(first, dict) else "",
+        "best_score": clean_str(first.get("_score")) if isinstance(first, dict) else "",
+        "top_level_fields": unique_join(list(first.keys()) if isinstance(first, dict) else [], limit=40, sep=" | "),
         "clinvar_significance": clean_str(rcv.get("clinical_significance") or clinvar.get("clinical_significance")),
         "clinvar_review_status": clean_str(rcv.get("review_status") or clinvar.get("review_status")),
         "cadd_phred": clean_str(cadd.get("phred")),
         "dbsnp_gene": clean_str(dbsnp.get("gene") or dbsnp.get("genes")),
         "dbsnp_alleles": clean_str(dbsnp.get("alleles")),
         "dbnsfp_gene_name": clean_str(dbnsfp.get("genename")),
-        "raw_json": compact_json(first or payload),
+        "raw_json": compact_json(payload),
     }, ""
 
 
 def fetch_clinvar(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
-    term = urllib.parse.quote(f"{rsid}[All Fields]")
-    url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=clinvar&retmode=json&retmax=5&term={term}"
-    payload, error = json_get(url, timeout_seconds)
-    if not isinstance(payload, dict):
-        return {}, error or "empty_response"
-    result = payload.get("esearchresult") or {}
-    ids = result.get("idlist") or []
+    payload = {}
+    ids = []
+    error = ""
+    for term_text in [f'"{rsid}"[Variant Name]', rsid]:
+        term = urllib.parse.quote(term_text)
+        url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=clinvar&retmode=json&retmax=5&tool=heal_fon_service&term={term}"
+        payload, error = json_get(url, timeout_seconds)
+        if not isinstance(payload, dict):
+            return {}, error or "empty_response"
+        result = payload.get("esearchresult") or {}
+        ids = result.get("idlist") or []
+        if ids:
+            break
+        time.sleep(0.36)
     summary_payload = {}
     if ids:
-        ids_param = urllib.parse.quote(",".join(ids[:5]))
+        ids_param = urllib.parse.quote(",".join(ids[:3]))
         summary_url = (
             "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
-            f"?db=clinvar&retmode=json&id={ids_param}"
+            f"?db=clinvar&retmode=json&tool=heal_fon_service&id={ids_param}"
         )
         summary_payload, summary_error = json_get(summary_url, timeout_seconds)
         if summary_error:
             return {
-                "count": clean_str(result.get("count")),
-                "ids": unique_join(ids, limit=5),
+                "count": clean_str(len(ids)),
+                "ids": unique_join(ids, limit=5, sep=","),
                 "summary_error": summary_error,
                 "esearch_raw_json": compact_json(payload),
             }, ""
@@ -325,18 +340,30 @@ def fetch_clinvar(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
             if not isinstance(item, dict):
                 continue
             summary_items.append(item)
+    accessions = []
+    record_types = []
+    for item in summary_items:
+        accession = item.get("accession")
+        if isinstance(accession, dict):
+            accession = accession.get("accession")
+        accessions.append(accession)
+        record_types.append(item.get("record_type") or item.get("recordtype"))
     return {
-        "count": clean_str(result.get("count")),
-        "ids": unique_join(ids, limit=5),
-        "titles": unique_join([item.get("title") for item in summary_items], limit=5),
+        "count": clean_str(len(ids)),
+        "ids": unique_join(ids, limit=5, sep=","),
+        "titles": unique_join([item.get("title") for item in summary_items], limit=3, sep=" || "),
+        "accessions": unique_join(accessions, limit=3, sep=" | "),
         "clinical_significance": unique_join(
             [clinvar_classification(item) for item in summary_items],
-            limit=5,
+            limit=8,
+            sep=" | ",
         ),
         "review_status": unique_join(
             [clinvar_review_status(item) for item in summary_items],
-            limit=5,
+            limit=8,
+            sep=" | ",
         ),
+        "record_types": unique_join(record_types, limit=5, sep=" | "),
         "trait_names": unique_join(
             [clinvar_trait_name(item) for item in summary_items],
             limit=8,
@@ -370,6 +397,7 @@ def fetch_external(rsid: str, cache_dir: Path, timeout_seconds: int, ttl_days: i
 
     payload = {
         "rsid": rsid,
+        "schemaVersion": CACHE_SCHEMA_VERSION,
         "fetchedAt": utc_now(),
         "cacheHit": False,
         "errors": errors,
@@ -413,6 +441,50 @@ def external_support_summary(enrichment: dict) -> str:
     if errors:
         support.append(f"Source errors: {','.join(sorted(errors.keys()))}")
     return " | ".join(support)
+
+
+def colab_allele_match_summary(row: dict) -> str:
+    observed = split_alleles(observed_alt_alleles(row))
+    if not observed:
+        return "no_observed_alt_allele_detected"
+
+    known_alt = split_alleles(first_present(row.get("alt_vcf"), row.get("alt")))
+    if known_alt:
+        observed_set = set(observed)
+        known_set = set(known_alt)
+        if observed_set.issubset(known_set):
+            return "observed_patient_alt_within_internal_alt_catalog"
+        if observed_set.intersection(known_set):
+            return "partial_overlap_with_internal_alt_catalog"
+        return "observed_patient_alt_not_in_internal_alt_catalog"
+
+    return "internal_alt_catalog_missing"
+
+
+def colab_external_support_summary(row: dict) -> str:
+    parts = []
+    checks = [
+        ("vep_most_severe_consequence", "VEP most severe consequence"),
+        ("ensembl_var_class", "Ensembl variant class"),
+        ("ensembl_clin_sig", "Ensembl clinical significance"),
+        ("clinvar_germline_classification", "ClinVar classification"),
+        ("clinvar_review_status", "ClinVar review status"),
+        ("ensembl_phenotypes", "Ensembl phenotypes"),
+        ("vep_transcript_summary", "VEP transcript summary"),
+        ("myvariant_top_level_fields", "MyVariant fields present"),
+    ]
+    for key, label in checks:
+        value = clean_str(row.get(key))
+        if value:
+            parts.append(f"{label}: {value}")
+    return " || ".join(parts)
+
+
+def display_pipe_list(value: str) -> str:
+    text = clean_str(value)
+    if not text:
+        return ""
+    return " | ".join(part.strip() for part in text.split("|") if part.strip())
 
 
 def clinvar_classification(item: dict) -> str:
@@ -493,6 +565,9 @@ def build_output_row(row: dict, enrichment: dict) -> dict:
         "clinvar_review_status": clean_str(clinvar.get("review_status")),
         "clinvar_trait_names": clean_str(clinvar.get("trait_names")),
         "myvariant_hits": clean_str(myvariant.get("hits")),
+        "myvariant_best_id": clean_str(myvariant.get("best_id")),
+        "myvariant_best_score": clean_str(myvariant.get("best_score")),
+        "myvariant_top_level_fields": clean_str(myvariant.get("top_level_fields")),
         "myvariant_clinvar_significance": clean_str(myvariant.get("clinvar_significance")),
         "myvariant_clinvar_review_status": clean_str(myvariant.get("clinvar_review_status")),
         "myvariant_cadd_phred": clean_str(myvariant.get("cadd_phred")),
@@ -507,6 +582,73 @@ def build_output_row(row: dict, enrichment: dict) -> dict:
         "clinvar_esummary_raw_json": clean_str(clinvar.get("esummary_raw_json")),
         "myvariant_raw_json": clean_str(myvariant.get("raw_json")),
     }
+
+
+def build_colab_output_row(row: dict, enrichment: dict) -> dict:
+    ensembl_variation = enrichment.get("ensemblVariation") or {}
+    ensembl_vep = enrichment.get("ensemblVep") or {}
+    myvariant = enrichment.get("myVariant") or {}
+    clinvar = enrichment.get("clinVar") or {}
+
+    base = {
+        "row_id": clean_str(row.get("row_id")),
+        "Gene": clean_str(row.get("Gene")),
+        "SNP (rsID)": normalize_rsid(row.get("SNP (rsID)")),
+        "Category / Module": clean_str(row.get("Category / Module")),
+        "Genotype": clean_str(row.get("Genotype")),
+        "gt_alleles": clean_str(row.get("gt_alleles") or row.get("Genotype")),
+        "patient_gt_alleles": clean_str(row.get("gt_alleles") or row.get("Genotype")),
+        "Zygosity": clean_str(row.get("Zygosity")),
+        "Ref/Alt": clean_str(row.get("Ref/Alt")),
+        "patient_ref": first_present(row.get("ref_vcf"), row.get("ref")),
+        "patient_alt_catalog": first_present(row.get("alt_vcf"), row.get("alt")),
+        "patient_observed_alt_alleles": observed_alt_alleles(row),
+        "allele_match_summary": colab_allele_match_summary(row),
+        "source_group": clean_str(row.get("source_group")),
+        "match_status": clean_str(row.get("match_status")),
+        "Confidence Level": clean_str(row.get("Confidence Level")),
+        "Review Status": clean_str(row.get("Review Status")),
+        "Notes": clean_str(row.get("Notes")),
+        "ensembl_var_class": clean_str(ensembl_variation.get("var_class") or ensembl_vep.get("variant_class")),
+        "ensembl_minor_allele": clean_str(ensembl_variation.get("minor_allele")),
+        "ensembl_minor_allele_freq": clean_str(ensembl_variation.get("maf")),
+        "ensembl_clin_sig": display_pipe_list(ensembl_variation.get("clinical_significance")),
+        "ensembl_evidence": display_pipe_list(ensembl_variation.get("evidence")),
+        "vep_most_severe_consequence": clean_str(ensembl_vep.get("most_severe_consequence")),
+        "vep_variant_class": clean_str(ensembl_vep.get("variant_class")),
+        "clinvar_uid_count": clean_str(clinvar.get("count")),
+        "clinvar_germline_classification": display_pipe_list(clinvar.get("clinical_significance")),
+        "clinvar_review_status": display_pipe_list(clinvar.get("review_status")),
+        "clinvar_titles": clean_str(clinvar.get("titles")),
+        "myvariant_hit_count": clean_str(myvariant.get("hits")),
+        "myvariant_best_id": clean_str(myvariant.get("best_id")),
+        "myvariant_best_score": clean_str(myvariant.get("best_score")),
+        "external_support_summary": "",
+        "Interpretation (1 sentence)": clean_str(row.get("Interpretation (1 sentence)")),
+        "gt_raw": clean_str(row.get("gt_raw")),
+        "ref": clean_str(row.get("ref")),
+        "alt": clean_str(row.get("alt")),
+        "ref_vcf": clean_str(row.get("ref_vcf")),
+        "alt_vcf": clean_str(row.get("alt_vcf")),
+        "has_genotype": clean_str(row.get("has_genotype")),
+        "found_in_vcf_by_chr_pos": clean_str(row.get("found_in_vcf_by_chr_pos")),
+        "ensembl_phenotypes": clean_str(ensembl_variation.get("phenotypes")),
+        "ensembl_populations": clean_str(ensembl_variation.get("populations")),
+        "ensembl_mappings": clean_str(ensembl_variation.get("mappings_summary")),
+        "ensembl_raw_json": clean_str(ensembl_variation.get("raw_json")),
+        "vep_transcript_summary": clean_str(ensembl_vep.get("transcript_summary")),
+        "vep_colocated_variants": clean_str(ensembl_vep.get("colocated_variants")),
+        "vep_raw_json": clean_str(ensembl_vep.get("raw_json")),
+        "clinvar_uids": clean_str(clinvar.get("ids")),
+        "clinvar_accessions": clean_str(clinvar.get("accessions")),
+        "clinvar_record_types": clean_str(clinvar.get("record_types")),
+        "clinvar_esearch_json": clean_str(clinvar.get("esearch_raw_json")),
+        "clinvar_esummary_json": clean_str(clinvar.get("esummary_raw_json")),
+        "myvariant_top_level_fields": clean_str(myvariant.get("top_level_fields")),
+        "myvariant_raw_json": clean_str(myvariant.get("raw_json")),
+    }
+    base["external_support_summary"] = colab_external_support_summary(base)
+    return base
 
 
 def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds: int, ttl_days: int) -> dict:
@@ -532,7 +674,10 @@ def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds
             warnings.append(f"{rsid}: {','.join(sorted(enrichments[rsid]['errors'].keys()))}")
 
     output_rows = [build_output_row(row, enrichments[normalize_rsid(row.get("SNP (rsID)"))]) for row in observed_rows]
-    fieldnames = [
+    colab_output_rows = [
+        build_colab_output_row(row, enrichments[normalize_rsid(row.get("SNP (rsID)"))]) for row in observed_rows
+    ]
+    qa_fieldnames = [
         "Gene",
         "SNP (rsID)",
         "Genotype",
@@ -575,6 +720,9 @@ def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds
         "clinvar_review_status",
         "clinvar_trait_names",
         "myvariant_hits",
+        "myvariant_best_id",
+        "myvariant_best_score",
+        "myvariant_top_level_fields",
         "myvariant_clinvar_significance",
         "myvariant_clinvar_review_status",
         "myvariant_cadd_phred",
@@ -589,8 +737,67 @@ def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds
         "clinvar_esummary_raw_json",
         "myvariant_raw_json",
     ]
+    colab_fieldnames = [
+        "row_id",
+        "Gene",
+        "SNP (rsID)",
+        "Category / Module",
+        "Genotype",
+        "gt_alleles",
+        "patient_gt_alleles",
+        "Zygosity",
+        "Ref/Alt",
+        "patient_ref",
+        "patient_alt_catalog",
+        "patient_observed_alt_alleles",
+        "allele_match_summary",
+        "source_group",
+        "match_status",
+        "Confidence Level",
+        "Review Status",
+        "Notes",
+        "ensembl_var_class",
+        "ensembl_minor_allele",
+        "ensembl_minor_allele_freq",
+        "ensembl_clin_sig",
+        "ensembl_evidence",
+        "vep_most_severe_consequence",
+        "vep_variant_class",
+        "clinvar_uid_count",
+        "clinvar_germline_classification",
+        "clinvar_review_status",
+        "clinvar_titles",
+        "myvariant_hit_count",
+        "myvariant_best_id",
+        "myvariant_best_score",
+        "external_support_summary",
+        "Interpretation (1 sentence)",
+        "gt_raw",
+        "ref",
+        "alt",
+        "ref_vcf",
+        "alt_vcf",
+        "has_genotype",
+        "found_in_vcf_by_chr_pos",
+        "ensembl_phenotypes",
+        "ensembl_populations",
+        "ensembl_mappings",
+        "ensembl_raw_json",
+        "vep_transcript_summary",
+        "vep_colocated_variants",
+        "vep_raw_json",
+        "clinvar_uids",
+        "clinvar_accessions",
+        "clinvar_record_types",
+        "clinvar_esearch_json",
+        "clinvar_esummary_json",
+        "myvariant_top_level_fields",
+        "myvariant_raw_json",
+    ]
     output_csv = output_dir / "heal_observed_variant_enrichment.csv"
-    write_csv(output_csv, output_rows, fieldnames)
+    colab_output_csv = output_dir / "heal_fon_interpretation_enriched_observed69.csv"
+    write_csv(output_csv, output_rows, qa_fieldnames)
+    write_csv(colab_output_csv, colab_output_rows, colab_fieldnames)
 
     source_errors = {}
     for enrichment in enrichments.values():
@@ -620,6 +827,7 @@ def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds
         },
         "outputs": {
             "observedVariantEnrichmentCsv": str(output_csv),
+            "observedVariantInterpretiveCsv": str(colab_output_csv),
         },
         "timestamps": {"startedAt": started_at, "completedAt": utc_now()},
     }

@@ -275,3 +275,36 @@ Validation:
   - `heal_fon_deliverable_presentation_audit.csv`
   - `heal_fon_interpretation_enriched_observed69.csv`
 - Documented the next recommended workflow in `docs/final-interpretation-next-step.md`.
+
+## 2026-06-03
+
+### Colab-Style Interpretive Enrichment Output
+
+- Re-reviewed the notebook cell that generates `heal_fon_interpretation_enriched_observed69.csv`.
+- Kept `heal_observed_variant_enrichment.csv` as the technical QA enrichment output.
+- Added a second enrichment artifact:
+  - `heal_fon_interpretation_enriched_observed69.csv`
+  - preserves the Colab column names and ordering
+  - restores the narrative `external_support_summary`
+  - includes `myvariant_best_id`, `myvariant_best_score`, and `myvariant_top_level_fields`
+  - preserves `Notes` and `Interpretation (1 sentence)` from match preparation
+- Aligned external source behavior more closely with the notebook:
+  - MyVariant now queries by `scopes=dbsnp.rsid`, returns up to 3 hits, and requests the broader Colab field set.
+  - ClinVar now tries a stricter Variant Name search before the broader rsID fallback.
+  - Enrichment cache is schema-versioned so older cache entries are refreshed when output fields change.
+- Added API endpoint:
+  - `GET /api/vcf-canon-matches/:jobId/enrichment-interpretive`
+- Updated the frontend:
+  - the enrichment progress-bar download icon now downloads the interpretive CSV
+  - the previous technical CSV is exposed as a separate QA download button
+
+Validation:
+
+- `python -m py_compile` passed for the deployed enrichment script.
+- `node --check server\dev-api.js` passed.
+- Full enrichment smoke with a fresh cache produced:
+  - technical QA CSV: 69 rows, 58 columns
+  - Colab-style interpretive CSV: 69 rows, 55 columns
+  - unique rsIDs: 56
+  - MyVariant best-id/best-score/top-level fields populated for 69 rows
+- The fresh-cache smoke returned warnings for transient Ensembl sources on 4 rsIDs; the stage still produced both CSVs and recorded the source errors in summary metadata.

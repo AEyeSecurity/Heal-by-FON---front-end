@@ -152,7 +152,8 @@ const COPY = {
     matchDownload: "Descargar CSV de matches",
     matchPreparationAuditDownload: "Descargar CSV preparado",
     matchPreparationMinimalDownload: "Descargar CSV minimo",
-    enrichmentDownload: "Descargar CSV enriquecido",
+    enrichmentDownload: "Descargar CSV interpretativo",
+    enrichmentQaDownload: "Descargar CSV tecnico QA",
     matchDownloadFailed: "No se pudo descargar el CSV de matches.",
     canonDownloadFailed: "No se pudo descargar el canon.",
     close: "Cerrar",
@@ -289,7 +290,8 @@ const COPY = {
     matchDownload: "Download matches CSV",
     matchPreparationAuditDownload: "Download prepared CSV",
     matchPreparationMinimalDownload: "Download minimal CSV",
-    enrichmentDownload: "Download enriched CSV",
+    enrichmentDownload: "Download interpretive CSV",
+    enrichmentQaDownload: "Download technical QA CSV",
     matchDownloadFailed: "Could not download matches CSV.",
     canonDownloadFailed: "Could not download canon.",
     close: "Close",
@@ -1029,6 +1031,13 @@ function MatchResultPanel({ result, locale, t }) {
   }
 
   async function downloadEnrichment() {
+    await downloadCsv(
+      `/api/vcf-canon-matches/${result.jobId}/enrichment-interpretive`,
+      "heal-fon-interpretation-enriched-observed69.csv",
+    );
+  }
+
+  async function downloadEnrichmentQa() {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/enrichment`, "heal-observed-variant-enrichment.csv");
   }
 
@@ -1086,6 +1095,10 @@ function MatchResultPanel({ result, locale, t }) {
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadEnrichment}>
           <Download size={17} />
           {t.enrichmentDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadEnrichmentQa}>
+          <Download size={17} />
+          {t.enrichmentQaDownload}
         </button>
       </div>
       <h3 className="result-subtitle">{t.debugDownloads}</h3>
@@ -1149,7 +1162,13 @@ function App() {
   const [customMessage, setCustomMessage] = useState("");
   const [result, setResult] = useState(null);
   const [matchResult, setMatchResult] = useState(null);
-  const [matchArtifactsReady, setMatchArtifactsReady] = useState({ matches: false, debug: false, preparation: false, enrichment: false });
+  const [matchArtifactsReady, setMatchArtifactsReady] = useState({
+    matches: false,
+    debug: false,
+    preparation: false,
+    enrichment: false,
+    enrichmentInterpretive: false,
+  });
   const [error, setError] = useState(null);
   const [errorDialog, setErrorDialog] = useState(null);
   const [turnstileToken, setTurnstileToken] = useState("");
@@ -1174,7 +1193,13 @@ function App() {
     setEnrichmentProgress(0);
     setResult(null);
     setMatchResult(null);
-    setMatchArtifactsReady({ matches: false, debug: false, preparation: false, enrichment: false });
+    setMatchArtifactsReady({
+      matches: false,
+      debug: false,
+      preparation: false,
+      enrichment: false,
+      enrichmentInterpretive: false,
+    });
     setError(null);
     setErrorDialog(null);
     setDuplicateCandidate(null);
@@ -1228,8 +1253,8 @@ function App() {
         );
       } else if (kind === "enrichment") {
         await downloadCsv(
-          `/api/vcf-canon-matches/${matchResult.jobId}/enrichment`,
-          "heal-observed-variant-enrichment.csv",
+          `/api/vcf-canon-matches/${matchResult.jobId}/enrichment-interpretive`,
+          "heal-fon-interpretation-enriched-observed69.csv",
         );
       }
     } catch (caught) {
@@ -1316,8 +1341,9 @@ function App() {
       debug: Boolean(ready.debug),
       preparation: Boolean(ready.preparation),
       enrichment: Boolean(ready.enrichment),
+      enrichmentInterpretive: Boolean(ready.enrichmentInterpretive),
     });
-    if (job.result || ready.matches || ready.preparation || ready.enrichment) {
+    if (job.result || ready.matches || ready.preparation || ready.enrichment || ready.enrichmentInterpretive) {
       setMatchResult({
         ...(job.result || {}),
         jobId: job.id,
@@ -1391,7 +1417,13 @@ function App() {
           setMatchProgress(0);
           setPreparationProgress(0);
           setEnrichmentProgress(0);
-          setMatchArtifactsReady({ matches: false, debug: false, preparation: false, enrichment: false });
+          setMatchArtifactsReady({
+            matches: false,
+            debug: false,
+            preparation: false,
+            enrichment: false,
+            enrichmentInterpretive: false,
+          });
           setDuplicateCandidate(existingUpload);
           setMessageKey("fileReady");
           return null;
@@ -1517,7 +1549,13 @@ function App() {
     setErrorDialog(null);
     setResult(null);
     setMatchResult(null);
-    setMatchArtifactsReady({ matches: false, debug: false, preparation: false, enrichment: false });
+    setMatchArtifactsReady({
+      matches: false,
+      debug: false,
+      preparation: false,
+      enrichment: false,
+      enrichmentInterpretive: false,
+    });
     setUploadProgress(0);
     setValidationProgress(0);
     setMatchProgress(0);
@@ -1697,7 +1735,7 @@ function App() {
           tone="blue"
           downloadLabel={t.enrichmentDownload}
           onDownload={matchResult?.jobId ? () => downloadMatchArtifact("enrichment") : null}
-          downloadReady={matchArtifactsReady.enrichment}
+          downloadReady={matchArtifactsReady.enrichmentInterpretive}
           onPlay={analysisMode === "qa" ? runQaMatch : null}
           playLabel={`${t.playStage}: ${t.enrichmentProgress}`}
           playDisabled={!uploadRecord || !result || result.status === "invalid" || ["uploading", "validating", "matching", "preparing", "enriching"].includes(phase)}

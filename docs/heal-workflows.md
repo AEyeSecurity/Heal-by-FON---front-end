@@ -120,14 +120,18 @@ Scope:
 - enrich with ClinVar E-utilities `esearch` and `esummary`
 - enrich with MyVariant.info summaries
 - use a local rsID cache so repeated audits do not re-query public APIs
-- produce an enriched audit CSV for interpretation review
+- produce a technical enriched audit CSV for QA
+- produce a Colab-style interpretive enriched CSV for user/AI review
 
-The enrichment CSV now mirrors the Colab more closely. It includes patient allele context, `allele_match_summary`, `external_support_summary`, Ensembl mapping/phenotype/population/VEP transcript summaries, colocated variants, ClinVar details, MyVariant CADD/dbSNP/dbNSFP-derived fields, and compact raw JSON columns for source-level QA.
+The technical QA CSV keeps the broad source-level detail needed for debugging: patient allele context, `allele_match_summary`, generic `external_support_summary`, Ensembl mapping/phenotype/population/VEP transcript summaries, colocated variants, ClinVar details, MyVariant CADD/dbSNP/dbNSFP-derived fields, and compact raw JSON columns.
+
+The interpretive CSV mirrors the deterministic Colab output shape. It writes `heal_fon_interpretation_enriched_observed69.csv` with the Colab column names and ordering, including the more narrative `external_support_summary`, `myvariant_best_id`, `myvariant_best_score`, `myvariant_top_level_fields`, `Notes`, and `Interpretation (1 sentence)`.
 
 Outputs:
 
 ```text
 heal_observed_variant_enrichment.csv
+heal_fon_interpretation_enriched_observed69.csv
 observed_variant_enrichment_summary.json
 ```
 
@@ -155,12 +159,13 @@ GET /api/vcf-canon-matches/:jobId/download
 GET /api/vcf-canon-matches/:jobId/preparation-audit
 GET /api/vcf-canon-matches/:jobId/preparation-minimal
 GET /api/vcf-canon-matches/:jobId/enrichment
+GET /api/vcf-canon-matches/:jobId/enrichment-interpretive
 GET /api/vcf-canon-matches/:jobId/debug/:artifact
 ```
 
-The match and preparation CSVs are downloadable as soon as their files exist, even if external enrichment is still running or later fails. Enrichment remains downloadable only after its own CSV exists. The API verifies job ownership and allowed filesystem roots before serving any artifact. Local paths are not exposed in browser JSON.
+The match and preparation CSVs are downloadable as soon as their files exist, even if external enrichment is still running or later fails. The technical QA enrichment and interpretive enrichment CSVs remain downloadable only after their own files exist. The API verifies job ownership and allowed filesystem roots before serving any artifact. Local paths are not exposed in browser JSON.
 
-The polling response exposes `artifactsReady.matches`, `artifactsReady.preparation`, and `artifactsReady.enrichment` so the frontend can show each progress-bar download icon as soon as the corresponding audit CSV is ready.
+The polling response exposes `artifactsReady.matches`, `artifactsReady.preparation`, `artifactsReady.enrichment`, and `artifactsReady.enrichmentInterpretive` so the frontend can show each progress-bar download icon as soon as the corresponding audit/review CSV is ready.
 
 ## Colab Output Boundary
 

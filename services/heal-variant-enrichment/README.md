@@ -11,6 +11,7 @@ Processing:
 - Keeps rows where `has_genotype=true`.
 - Deduplicates rsIDs for external lookups.
 - Uses a local rsID cache to avoid repeating public API calls.
+  - The cache is schema-versioned, so old entries are refreshed when the output schema changes.
 - Queries public sources without API keys:
   - Ensembl Variation
   - Ensembl VEP
@@ -20,9 +21,12 @@ Processing:
 Outputs:
 
 - `heal_observed_variant_enrichment.csv`
+- `heal_fon_interpretation_enriched_observed69.csv`
 - `observed_variant_enrichment_summary.json`
 
-The enriched CSV includes patient allele context, allele/external support summaries, Ensembl Variation/VEP summaries, ClinVar `esearch` plus `esummary`, MyVariant-derived fields, and compact raw JSON snippets for source-level QA.
+`heal_observed_variant_enrichment.csv` is the technical QA output. It includes patient allele context, allele/external support summaries, Ensembl Variation/VEP summaries, ClinVar `esearch` plus `esummary`, MyVariant-derived fields, and compact raw JSON snippets for source-level QA.
+
+`heal_fon_interpretation_enriched_observed69.csv` is the Colab-style interpretive output. It keeps the deterministic notebook column names and ordering, restores the narrative `external_support_summary`, and is the preferred input for downstream user-facing interpretation or AI review.
 
 Example:
 
