@@ -104,7 +104,7 @@ VCF upload -> Integrity validation -> VCF-Canon match -> Downstream analysis
 
 The VCF-canon match step internally includes the targeted VCF scan and match preparation. The fourth step is a placeholder for the next interpretation workflows.
 
-When the match finishes, the UI exposes CSV downloads for QA. The API serves the per-job consolidated match CSV, the prepared audit/minimal CSVs, and the observed variant enrichment CSV without exposing local server paths.
+As each stage finishes, the UI exposes CSV downloads for QA. The API serves the per-job consolidated match CSV and prepared audit/minimal CSVs as soon as those artifacts exist, even if later enrichment is still running. The observed variant enrichment CSV becomes available once enrichment finishes. Local server paths are not exposed.
 
 After match preparation, the backend invokes:
 
@@ -113,6 +113,8 @@ HEAL_N8N_VARIANT_ENRICHMENT_WEBHOOK_URL
 ```
 
 That stage enriches only observed genotype rows with public Ensembl, ClinVar, and MyVariant.info data. It uses a local cache under `C:\ServerCIT\services\heal-variant-enrichment\cache` so repeated audits do not re-query the same rsIDs.
+
+The original Colab does not generate a final `.docx` or PDF report. Its deterministic final coded output is the enriched observed-variant CSV plus deliverable-style CSV tables. The next planned stage is a controlled final interpretation/report workflow; see `docs/final-interpretation-next-step.md`.
 
 ## Canon Flow
 

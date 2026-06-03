@@ -148,7 +148,7 @@ For the current test canon, Workflow 4 produces 149 consolidated rows. The inter
 
 ## Audit Downloads
 
-After a VCF job completes:
+As each stage creates an artifact:
 
 ```text
 GET /api/vcf-canon-matches/:jobId/download
@@ -158,7 +158,22 @@ GET /api/vcf-canon-matches/:jobId/enrichment
 GET /api/vcf-canon-matches/:jobId/debug/:artifact
 ```
 
-The API verifies job ownership and allowed filesystem roots before serving any artifact. Local paths are not exposed in browser JSON.
+The match and preparation CSVs are downloadable as soon as their files exist, even if external enrichment is still running or later fails. Enrichment remains downloadable only after its own CSV exists. The API verifies job ownership and allowed filesystem roots before serving any artifact. Local paths are not exposed in browser JSON.
+
+The polling response exposes `artifactsReady.matches`, `artifactsReady.preparation`, and `artifactsReady.enrichment` so the frontend can show each progress-bar download icon as soon as the corresponding audit CSV is ready.
+
+## Colab Output Boundary
+
+The Colab code reaches these deterministic outputs:
+
+```text
+sheet_final_consolidated.csv
+heal_fon_deliverable_presentation_min.csv
+heal_fon_deliverable_presentation_audit.csv
+heal_fon_interpretation_enriched_observed69.csv
+```
+
+The notebook then documents that the final interpretation of the 69 observed variants was done as a downstream manual/AI-assisted step, not as a fully coded notebook output. The next workflow should therefore be treated as a new controlled interpretation/report workflow, using the enriched observed rows and the full 149-row deliverable table as inputs.
 
 ## Operational Notes
 

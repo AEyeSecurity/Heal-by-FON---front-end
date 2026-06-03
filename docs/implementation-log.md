@@ -230,3 +230,48 @@ Validation:
 - Validator `pysam` fallback smoke passed.
 - VCF-canon match `pysam` fallback smoke passed.
 - Enrichment parity smoke with `rs429358` passed and produced the expanded columns.
+
+## 2026-06-02
+
+### Stage Artifact Downloads and Enrichment Resilience
+
+- Added `artifactsReady` to VCF-canon match polling responses.
+- Match, debug, and preparation CSV download endpoints now allow downloads as soon as the corresponding artifact exists, instead of requiring the entire job to be `complete`.
+- The frontend now tracks stage artifact readiness separately from final job completion and shows progress-bar download icons as soon as each stage can be audited.
+- Validation completion now records a `validation` object in the upload manifest and refreshes upload retention immediately after validation finishes.
+- Added backend-level enrichment retry:
+  - first normal attempt
+  - up to two additional attempts
+  - failure message includes all attempt errors
+- Added a clean frontend popup for enrichment-stage failure after retries while preserving any earlier match/preparation downloads.
+
+Validation:
+
+- `node --check server\dev-api.js` passed.
+- `npm run build` passed.
+- Restarted only the HEAL API with `C:\ServerCIT\services\heal-vcf-api\start_heal_vcf_api.ps1`.
+- HEAL API health returned `ok=true` with all production webhook flags configured.
+- Local controlled fixture test using `valid_small.vcf` passed:
+  - validation status: `valid`
+  - upload manifest recorded `validation.status=valid`
+  - match job completed
+  - `artifactsReady.matches=true`
+  - `artifactsReady.preparation=true`
+  - `artifactsReady.enrichment=true`
+  - match, preparation, and enrichment downloads returned HTTP `200`
+- Local browser UI check passed:
+  - page loads
+  - five progress bars render
+  - three analysis modes render
+  - no download icons show before artifacts exist
+
+### Colab Final Output Review
+
+- Reviewed `TEST PROJECT_ Genomics x AI Interpretation Sprint.ipynb`.
+- Reviewed `Resumen integral.docx`, `TEST Project & Prototype_English.docx`, and `Heal by FON — Genetics Product Specification.docx`.
+- Confirmed the notebook does not generate a final `.docx` or PDF clinical report.
+- Confirmed deterministic notebook outputs stop at CSV artifacts, especially:
+  - `heal_fon_deliverable_presentation_min.csv`
+  - `heal_fon_deliverable_presentation_audit.csv`
+  - `heal_fon_interpretation_enriched_observed69.csv`
+- Documented the next recommended workflow in `docs/final-interpretation-next-step.md`.

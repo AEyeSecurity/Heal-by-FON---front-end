@@ -152,7 +152,20 @@ The API returns validation results without exposing local filesystem paths. Publ
 
 Local paths remain internal to the backend and n8n integration.
 
-The VCF-canon match download endpoint serves the per-job `sheet_final_consolidated.csv` artifact for QA after the job completes. Match preparation download endpoints serve audit-ready and minimal deliverable-style CSVs. The enrichment download endpoint serves the observed variant enrichment CSV. The browser receives CSV attachments; JSON results and download responses do not expose internal filesystem paths.
+The VCF-canon match download endpoint serves the per-job `sheet_final_consolidated.csv` artifact for QA as soon as that artifact exists. Match preparation download endpoints similarly become available as soon as the preparation CSVs exist, even while downstream enrichment is still running. The enrichment download endpoint serves the observed variant enrichment CSV once that stage finishes. The browser receives CSV attachments; JSON results and download responses do not expose internal filesystem paths.
+
+The match polling response includes an `artifactsReady` object:
+
+```json
+{
+  "matches": true,
+  "debug": true,
+  "preparation": true,
+  "enrichment": false
+}
+```
+
+This lets the frontend show the compact download icon next to each progress bar as each stage becomes auditable, instead of waiting for the full downstream chain to finish.
 
 Control de Calidad mode exposes additional debug downloads through whitelisted endpoints:
 
@@ -208,6 +221,17 @@ VCF upload -> integrity validation -> VCF-canon match, targeted scan, preparatio
 ```
 
 Webhook secrets, if added later, must stay outside GitHub and outside Cloudflare Pages.
+
+## Final Interpretation Gap
+
+The original Colab did not generate a final `.docx` or PDF clinical report. Its coded outputs stop at structured CSV files:
+
+- `sheet_final_consolidated.csv`
+- `heal_fon_deliverable_presentation_min.csv`
+- `heal_fon_deliverable_presentation_audit.csv`
+- `heal_fon_interpretation_enriched_observed69.csv`
+
+The downstream interpretation described in the project documents was performed manually/with AI assistance outside the notebook. The next implementation stage should therefore create a controlled interpretation/report workflow that consumes the enriched observed-variant CSV plus the 149-row deliverable/audit table and writes a final presentable table/report under HEAL language constraints.
 
 ## Production Domains
 

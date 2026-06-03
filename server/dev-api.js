@@ -240,6 +240,7 @@ function publicUpload(upload) {
     uploadedBytes: Math.min(upload.sizeBytes, receivedChunks * upload.chunkSizeBytes),
     progress: upload.totalChunks > 0 ? Math.round((receivedChunks / upload.totalChunks) * 100) : 0,
     status: upload.status,
+    validation: upload.validation || null,
     createdAt: upload.createdAt,
     updatedAt: upload.updatedAt,
   };
@@ -309,6 +310,22 @@ function sanitizeVariantEnrichmentResult(result) {
   delete publicResult.cacheDir;
   delete publicResult.outputs;
   return publicResult;
+}
+
+function publicArtifactsReady(job) {
+  const artifacts = job.artifacts || {};
+  return {
+    matches: Boolean(artifacts.sheetFinalConsolidatedCsv),
+    debug: Boolean(
+      artifacts.vcfCandidatesCsv ||
+        artifacts.sheetFinalMatchStrictCsv ||
+        artifacts.sheetFinalMatchLikelyNeedsAltReviewCsv ||
+        artifacts.sheetFinalMatchByPositionNeedsReviewCsv ||
+        artifacts.sheetFinalNoVcfMatchByChrPosCsv,
+    ),
+    preparation: Boolean(artifacts.deliverableAuditCsv || artifacts.deliverableMinCsv),
+    enrichment: Boolean(artifacts.observedVariantEnrichmentCsv),
+  };
 }
 
 function normalizeVcfParser(value) {
@@ -569,6 +586,27 @@ async function processVariantEnrichment(payload) {
   );
 }
 
+async function processVariantEnrichmentWithRetry(payload, job, attempts = 3) {
+  const errors = [];
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      job.stage = "enriching";
+      job.stageProgress = Math.max(job.stageProgress || 12, attempt === 1 ? 12 : 18);
+      job.message =
+        attempt === 1
+          ? "Enriching observed variants with external sources"
+          : `Retrying variant enrichment (${attempt}/${attempts})`;
+      job.updatedAt = new Date().toISOString();
+      return await processVariantEnrichment(payload);
+    } catch (error) {
+      errors.push(error.message || String(error));
+      if (attempt >= attempts) break;
+      await new Promise((resolve) => setTimeout(resolve, 1200 * attempt));
+    }
+  }
+  throw new Error(`Variant enrichment failed after ${attempts} attempts: ${errors.join(" | ")}`);
+}
+
 async function loadCurrentCanon() {
   const manifest = await loadCurrentCanonManifest();
   if (!manifest) return publicCanon(null, null, null);
@@ -682,6 +720,7 @@ function publicJob(job) {
     fileName: job.fileName,
     sizeBytes: job.sizeBytes,
     result: job.result,
+    artifactsReady: publicArtifactsReady(job),
     stage: job.stage || null,
     stageProgress: job.stageProgress ?? null,
     error: job.error,
@@ -1285,6 +1324,12 @@ app.post("/api/validations", async (req, res) => {
               : result.status === "warning"
                 ? "Validation completed with warnings"
                 : "Validation failed";
+          upload.validation = {
+            jobId: job.id,
+            status: result.status,
+            completedAt: new Date().toISOString(),
+          };
+          await refreshUploadRetention(upload);
           await notifyN8nValidation(job, upload);
         } catch (error) {
           job.status = "failed";
@@ -1424,6 +1469,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         sheetFinalMatchByPositionNeedsReviewCsv: summary.outputs?.sheetFinalMatchByPositionNeedsReviewCsv || "",
         sheetFinalNoVcfMatchByChrPosCsv: summary.outputs?.sheetFinalNoVcfMatchByChrPosCsv || "",
       };
+      job.result = sanitizeVcfCanonMatchResult(summary, upload);
       const matchCsvPath = path.resolve(job.artifacts.sheetFinalConsolidatedCsv);
       if (!isPathInside(paths.root, matchCsvPath)) {
         throw new Error("Match preparation input is outside the allowed match root.");
@@ -1453,6 +1499,10 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
       }
       job.artifacts.deliverableMinCsv = preparationSummary.outputs?.deliverableMinCsv || "";
       job.artifacts.deliverableAuditCsv = preparationSummary.outputs?.deliverableAuditCsv || "";
+      job.result = {
+        ...sanitizeVcfCanonMatchResult(summary, upload),
+        matchPreparation: sanitizeMatchPreparationResult(preparationSummary),
+      };
       job.progress = 86;
       job.stage = "enriching";
       job.stageProgress = 12;
@@ -1481,7 +1531,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         cacheDir: enrichmentPaths.cache,
         requestedAt: new Date().toISOString(),
       };
-      const enrichmentSummary = await processVariantEnrichment(enrichmentPayload);
+      const enrichmentSummary = await processVariantEnrichmentWithRetry(enrichmentPayload, job, 3);
       job.artifacts.observedVariantEnrichmentCsv = enrichmentSummary.outputs?.observedVariantEnrichmentCsv || "";
       job.result = {
         ...sanitizeVcfCanonMatchResult(summary, upload),
@@ -1531,8 +1581,8 @@ app.get("/api/vcf-canon-matches/:jobId/download", async (req, res) => {
     res.status(404).json({ error: "VCF-canon match job not found." });
     return;
   }
-  if (job.status !== "complete") {
-    res.status(409).json({ error: "VCF-canon match is not complete yet." });
+  if (!job.artifacts?.sheetFinalConsolidatedCsv) {
+    res.status(409).json({ error: "VCF-canon match CSV is not ready yet." });
     return;
   }
 
@@ -1583,8 +1633,8 @@ app.get("/api/vcf-canon-matches/:jobId/debug/:artifact", async (req, res) => {
     res.status(404).json({ error: "VCF-canon match job not found." });
     return;
   }
-  if (job.status !== "complete") {
-    res.status(409).json({ error: "VCF-canon match is not complete yet." });
+  if (!job.artifacts?.[artifactKey]) {
+    res.status(409).json({ error: "VCF-canon debug CSV is not ready yet." });
     return;
   }
 
@@ -1622,8 +1672,8 @@ async function downloadMatchPreparationArtifact(req, res, artifactKey, suffix) {
     res.status(404).json({ error: "VCF-canon match job not found." });
     return;
   }
-  if (job.status !== "complete") {
-    res.status(409).json({ error: "Match preparation is not complete yet." });
+  if (!job.artifacts?.[artifactKey]) {
+    res.status(409).json({ error: "Match preparation CSV is not ready yet." });
     return;
   }
 
@@ -1669,8 +1719,8 @@ app.get("/api/vcf-canon-matches/:jobId/enrichment", async (req, res) => {
     res.status(404).json({ error: "VCF-canon match job not found." });
     return;
   }
-  if (job.status !== "complete") {
-    res.status(409).json({ error: "Variant enrichment is not complete yet." });
+  if (!job.artifacts?.observedVariantEnrichmentCsv) {
+    res.status(409).json({ error: "Variant enrichment CSV is not ready yet." });
     return;
   }
 

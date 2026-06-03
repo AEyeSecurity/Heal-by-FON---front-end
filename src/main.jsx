@@ -79,6 +79,7 @@ const COPY = {
     matching: "Matcheando VCF contra canon...",
     preparing: "Preparando CSVs de auditoria...",
     enriching: "Enriqueciendo variantes observadas...",
+    enrichmentFailed: "No se pudo completar el enriquecimiento externo.",
     matchFailed: "No se pudo completar el match VCF-Canon.",
     validationFailed: "La validacion fallo.",
     uploadFailed: "No se pudo completar la carga.",
@@ -155,6 +156,8 @@ const COPY = {
     matchDownloadFailed: "No se pudo descargar el CSV de matches.",
     canonDownloadFailed: "No se pudo descargar el canon.",
     close: "Cerrar",
+    errorPopupTitle: "Proceso interrumpido",
+    errorPopupClose: "Entendido",
   },
   en: {
     languageLabel: "Language",
@@ -213,6 +216,7 @@ const COPY = {
     matching: "Matching VCF against canon...",
     preparing: "Preparing audit CSVs...",
     enriching: "Enriching observed variants...",
+    enrichmentFailed: "Could not complete external enrichment.",
     matchFailed: "Could not complete the VCF-Canon match.",
     validationFailed: "Validation failed.",
     uploadFailed: "Could not complete the upload.",
@@ -289,6 +293,8 @@ const COPY = {
     matchDownloadFailed: "Could not download matches CSV.",
     canonDownloadFailed: "Could not download canon.",
     close: "Close",
+    errorPopupTitle: "Process interrupted",
+    errorPopupClose: "Got it",
   },
 };
 
@@ -324,11 +330,13 @@ function ProgressBar({
   tone = "blue",
   downloadLabel = "",
   onDownload = null,
+  downloadReady = null,
   onPlay = null,
   playLabel = "",
   playDisabled = false,
 }) {
   const complete = Math.round(value) >= 100;
+  const canDownload = onDownload && (downloadReady ?? complete);
   return (
     <div className="progress-block">
       <div className="progress-row">
@@ -349,7 +357,7 @@ function ProgressBar({
         </span>
         <span className="progress-value">
           <strong>{Math.round(value)}%</strong>
-          {complete && onDownload && (
+          {canDownload && (
             <button className="progress-download-button" type="button" onClick={onDownload} aria-label={downloadLabel || label}>
               <Download size={16} />
             </button>
@@ -435,6 +443,28 @@ function ModeSelector({ mode, setMode, t }) {
         </button>
       </div>
     </section>
+  );
+}
+
+function ErrorDialog({ message, onClose, t }) {
+  if (!message) return null;
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="error-dialog" role="alertdialog" aria-modal="true" aria-labelledby="error-dialog-title">
+        <div className="result-heading compact">
+          <XCircle size={22} />
+          <div>
+            <h2 id="error-dialog-title">{t.errorPopupTitle}</h2>
+            <p>{message}</p>
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button className="primary-button" type="button" onClick={onClose}>
+            {t.errorPopupClose}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1119,7 +1149,9 @@ function App() {
   const [customMessage, setCustomMessage] = useState("");
   const [result, setResult] = useState(null);
   const [matchResult, setMatchResult] = useState(null);
+  const [matchArtifactsReady, setMatchArtifactsReady] = useState({ matches: false, debug: false, preparation: false, enrichment: false });
   const [error, setError] = useState(null);
+  const [errorDialog, setErrorDialog] = useState(null);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileResetKey, setTurnstileResetKey] = useState(0);
   const [duplicateCandidate, setDuplicateCandidate] = useState(null);
@@ -1142,7 +1174,9 @@ function App() {
     setEnrichmentProgress(0);
     setResult(null);
     setMatchResult(null);
+    setMatchArtifactsReady({ matches: false, debug: false, preparation: false, enrichment: false });
     setError(null);
+    setErrorDialog(null);
     setDuplicateCandidate(null);
     setUploadRecord(null);
     setPhase("idle");
@@ -1275,11 +1309,29 @@ function App() {
     }
   }
 
+  function updateMatchSnapshot(job) {
+    const ready = job.artifactsReady || {};
+    setMatchArtifactsReady({
+      matches: Boolean(ready.matches),
+      debug: Boolean(ready.debug),
+      preparation: Boolean(ready.preparation),
+      enrichment: Boolean(ready.enrichment),
+    });
+    if (job.result || ready.matches || ready.preparation || ready.enrichment) {
+      setMatchResult({
+        ...(job.result || {}),
+        jobId: job.id,
+        artifactsReady: ready,
+      });
+    }
+  }
+
   async function pollMatch(jobId) {
     for (;;) {
       const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${jobId}`);
       if (!response.ok) throw new Error(await response.text());
       const job = await response.json();
+      updateMatchSnapshot(job);
       setMatchProgress(job.progress || 0);
       if (job.stage === "preparing") {
         setPhase("preparing");
@@ -1300,9 +1352,16 @@ function App() {
       if (job.status === "complete") {
         setPreparationProgress(100);
         setEnrichmentProgress(100);
-        return { ...(job.result || {}), jobId: job.id };
+        return { ...(job.result || {}), jobId: job.id, artifactsReady: job.artifactsReady || {} };
       }
-      if (job.status === "failed") throw new Error(job.error || t.matchFailed);
+      if (job.status === "failed") {
+        const failed = new Error(job.error || (job.stage === "enriching" ? t.enrichmentFailed : t.matchFailed));
+        failed.stage = job.stage;
+        failed.jobId = job.id;
+        failed.artifactsReady = job.artifactsReady || {};
+        failed.result = job.result || null;
+        throw failed;
+      }
       await new Promise((resolve) => setTimeout(resolve, 900));
     }
   }
@@ -1332,6 +1391,7 @@ function App() {
           setMatchProgress(0);
           setPreparationProgress(0);
           setEnrichmentProgress(0);
+          setMatchArtifactsReady({ matches: false, debug: false, preparation: false, enrichment: false });
           setDuplicateCandidate(existingUpload);
           setMessageKey("fileReady");
           return null;
@@ -1401,6 +1461,7 @@ function App() {
 
   async function runQaUpload() {
     setError(null);
+    setErrorDialog(null);
     try {
       const upload = await resolveUpload({ skipDuplicateCheck: false });
       if (!upload) return;
@@ -1417,6 +1478,7 @@ function App() {
 
   async function runQaValidation() {
     setError(null);
+    setErrorDialog(null);
     try {
       const upload = uploadRecord || (await resolveUpload({ skipDuplicateCheck: false }));
       if (!upload) return;
@@ -1434,6 +1496,7 @@ function App() {
 
   async function runQaMatch() {
     setError(null);
+    setErrorDialog(null);
     try {
       const upload = uploadRecord;
       if (!upload) throw new Error(t.qaRunUploadFirst);
@@ -1442,6 +1505,7 @@ function App() {
     } catch (caught) {
       setPhase("error");
       setError(caught.message || String(caught));
+      if (caught.stage === "enriching") setErrorDialog(caught.message || t.enrichmentFailed);
       setMessageKey("processFailed");
       setCustomMessage("");
     }
@@ -1450,8 +1514,10 @@ function App() {
   async function submit({ skipDuplicateCheck = false, reuseUpload = null } = {}) {
     if (!file) return;
     setError(null);
+    setErrorDialog(null);
     setResult(null);
     setMatchResult(null);
+    setMatchArtifactsReady({ matches: false, debug: false, preparation: false, enrichment: false });
     setUploadProgress(0);
     setValidationProgress(0);
     setMatchProgress(0);
@@ -1477,6 +1543,7 @@ function App() {
     } catch (caught) {
       setPhase("error");
       setError(caught.message || String(caught));
+      if (caught.stage === "enriching") setErrorDialog(caught.message || t.enrichmentFailed);
       setMessageKey("processFailed");
       setCustomMessage("");
       setTurnstileToken("");
@@ -1608,6 +1675,7 @@ function App() {
           tone="blue"
           downloadLabel={t.matchDownload}
           onDownload={matchResult?.jobId ? () => downloadMatchArtifact("matches") : null}
+          downloadReady={matchArtifactsReady.matches}
           onPlay={analysisMode === "qa" ? runQaMatch : null}
           playLabel={`${t.playStage}: ${t.matchProgress}`}
           playDisabled={!uploadRecord || !result || result.status === "invalid" || ["uploading", "validating", "matching", "preparing", "enriching"].includes(phase)}
@@ -1618,6 +1686,7 @@ function App() {
           tone="blue"
           downloadLabel={t.matchPreparationAuditDownload}
           onDownload={matchResult?.jobId ? () => downloadMatchArtifact("preparation") : null}
+          downloadReady={matchArtifactsReady.preparation}
           onPlay={analysisMode === "qa" ? runQaMatch : null}
           playLabel={`${t.playStage}: ${t.preparationProgress}`}
           playDisabled={!uploadRecord || !result || result.status === "invalid" || ["uploading", "validating", "matching", "preparing", "enriching"].includes(phase)}
@@ -1628,6 +1697,7 @@ function App() {
           tone="blue"
           downloadLabel={t.enrichmentDownload}
           onDownload={matchResult?.jobId ? () => downloadMatchArtifact("enrichment") : null}
+          downloadReady={matchArtifactsReady.enrichment}
           onPlay={analysisMode === "qa" ? runQaMatch : null}
           playLabel={`${t.playStage}: ${t.enrichmentProgress}`}
           playDisabled={!uploadRecord || !result || result.status === "invalid" || ["uploading", "validating", "matching", "preparing", "enriching"].includes(phase)}
@@ -1657,6 +1727,7 @@ function App() {
         }}
         t={t}
       />
+      <ErrorDialog message={errorDialog} onClose={() => setErrorDialog(null)} t={t} />
       <CanonModal open={canonOpen} onClose={() => setCanonOpen(false)} language={language} locale={locale} t={t} />
     </main>
   );
