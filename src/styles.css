@@ -665,6 +665,16 @@ h1 {
   box-shadow: 0 24px 70px rgba(18, 22, 19, 0.2);
 }
 
+.error-dialog-heading {
+  margin-bottom: 18px;
+}
+
+.error-dialog-heading p {
+  margin-top: 8px;
+  color: #425348;
+  line-height: 1.45;
+}
+
 .result-heading.compact {
   margin-bottom: 18px;
 }

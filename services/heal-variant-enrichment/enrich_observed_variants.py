@@ -17,7 +17,7 @@ from pathlib import Path
 
 DEFAULT_TIMEOUT_SECONDS = 18
 DEFAULT_CACHE_TTL_DAYS = 14
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
 USER_AGENT = "HEAL-by-FON-prototype/0.1"
 
 
@@ -147,6 +147,8 @@ def load_cache(cache_dir: Path, rsid: str, ttl_days: int) -> dict | None:
         return None
     if int(payload.get("schemaVersion") or 1) != CACHE_SCHEMA_VERSION:
         return None
+    if payload.get("errors"):
+        return None
     try:
         fetched = dt.datetime.fromisoformat(str(fetched_at).replace("Z", "+00:00"))
     except ValueError:
@@ -189,6 +191,7 @@ def fetch_ensembl_variation(rsid: str, timeout_seconds: int) -> tuple[dict, str]
             population_parts.append(f"pop={name}; allele={allele}; freq={frequency}")
     return {
         "var_class": clean_str(payload.get("var_class")),
+        "most_severe_consequence": clean_str(payload.get("most_severe_consequence")),
         "clinical_significance": unique_join(payload.get("clinical_significance") or []),
         "evidence": unique_join(payload.get("evidence") or []),
         "phenotypes": unique_join(phenotype_parts, limit=8),
@@ -406,7 +409,8 @@ def fetch_external(rsid: str, cache_dir: Path, timeout_seconds: int, ttl_days: i
         "myVariant": myvariant,
         "clinVar": clinvar,
     }
-    save_cache(cache_dir, rsid, payload)
+    if not errors:
+        save_cache(cache_dir, rsid, payload)
     return payload
 
 
@@ -542,7 +546,10 @@ def build_output_row(row: dict, enrichment: dict) -> dict:
         "ref_vcf": clean_str(row.get("ref_vcf")),
         "alt_vcf": clean_str(row.get("alt_vcf")),
         "gt_raw": clean_str(row.get("gt_raw")),
-        "ensembl_most_severe_consequence": clean_str(ensembl_vep.get("most_severe_consequence")),
+        "ensembl_most_severe_consequence": first_present(
+            ensembl_vep.get("most_severe_consequence"),
+            ensembl_variation.get("most_severe_consequence"),
+        ),
         "ensembl_variant_class": clean_str(ensembl_vep.get("variant_class") or ensembl_variation.get("var_class")),
         "ensembl_gene_symbols": clean_str(ensembl_vep.get("gene_symbols")),
         "ensembl_consequence_terms": clean_str(ensembl_vep.get("consequence_terms")),
@@ -614,7 +621,10 @@ def build_colab_output_row(row: dict, enrichment: dict) -> dict:
         "ensembl_minor_allele_freq": clean_str(ensembl_variation.get("maf")),
         "ensembl_clin_sig": display_pipe_list(ensembl_variation.get("clinical_significance")),
         "ensembl_evidence": display_pipe_list(ensembl_variation.get("evidence")),
-        "vep_most_severe_consequence": clean_str(ensembl_vep.get("most_severe_consequence")),
+        "vep_most_severe_consequence": first_present(
+            ensembl_vep.get("most_severe_consequence"),
+            ensembl_variation.get("most_severe_consequence"),
+        ),
         "vep_variant_class": clean_str(ensembl_vep.get("variant_class")),
         "clinvar_uid_count": clean_str(clinvar.get("count")),
         "clinvar_germline_classification": display_pipe_list(clinvar.get("clinical_significance")),

@@ -308,3 +308,36 @@ Validation:
   - unique rsIDs: 56
   - MyVariant best-id/best-score/top-level fields populated for 69 rows
 - The fresh-cache smoke returned warnings for transient Ensembl sources on 4 rsIDs; the stage still produced both CSVs and recorded the source errors in summary metadata.
+
+## 2026-06-06
+
+### Enrichment Cache Robustness and Error Modal UX
+
+- Reviewed the user-downloaded `heal-fon-interpretation-enriched-observed69.csv` against the Colab-style column contract.
+- Confirmed the CSV had the expected 69 rows and 55 Colab-style columns.
+- Found the practical mismatch: some VEP-derived interpretive fields were empty because a transient Ensembl VEP timeout had been stored in the enrichment cache.
+- Updated enrichment cache behavior:
+  - source-error payloads are no longer reused from cache
+  - partial source-error payloads are not written to cache
+  - cache schema version bumped to refresh older entries
+  - Ensembl Variation `most_severe_consequence` is stored and used as fallback when VEP is temporarily unavailable
+- Updated the frontend error dialog:
+  - no raw backend error text in the popup
+  - fixed retry-oriented text
+  - added a top-right close button
+  - enrichment inline error is now concise
+
+Validation:
+
+- Full fresh-cache enrichment smoke passed with status `valid`.
+- Generated Colab-style interpretive CSV:
+  - 69 rows
+  - 55 columns
+  - `vep_most_severe_consequence` populated for 69 rows
+  - `external_support_summary` includes the narrative VEP/Ensembl/ClinVar/MyVariant summary again
+- Copied a corrected comparison CSV to:
+  - `C:\Users\Usuario\Downloads\heal-fon-interpretation-enriched-observed69-fixed.csv`
+- `python -m py_compile` passed for the deployed enrichment script.
+- `node --check server\dev-api.js` passed.
+- `npm run build` passed.
+- Local UI smoke loaded successfully at `http://127.0.0.1:5173/`.

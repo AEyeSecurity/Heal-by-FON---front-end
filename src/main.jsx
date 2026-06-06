@@ -158,6 +158,7 @@ const COPY = {
     canonDownloadFailed: "No se pudo descargar el canon.",
     close: "Cerrar",
     errorPopupTitle: "Proceso interrumpido",
+    errorPopupRetry: "Volve a intentarlo. Si el problema se repite, revisaremos los logs del servidor.",
     errorPopupClose: "Entendido",
   },
   en: {
@@ -296,6 +297,7 @@ const COPY = {
     canonDownloadFailed: "Could not download canon.",
     close: "Close",
     errorPopupTitle: "Process interrupted",
+    errorPopupRetry: "Please try again. If the problem repeats, we will review the server logs.",
     errorPopupClose: "Got it",
   },
 };
@@ -453,12 +455,14 @@ function ErrorDialog({ message, onClose, t }) {
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="error-dialog" role="alertdialog" aria-modal="true" aria-labelledby="error-dialog-title">
-        <div className="result-heading compact">
-          <XCircle size={22} />
+        <div className="modal-heading error-dialog-heading">
           <div>
             <h2 id="error-dialog-title">{t.errorPopupTitle}</h2>
-            <p>{message}</p>
+            <p>{t.errorPopupRetry}</p>
           </div>
+          <button className="icon-button" type="button" onClick={onClose} aria-label={t.close}>
+            <X size={18} />
+          </button>
         </div>
         <div className="modal-actions">
           <button className="primary-button" type="button" onClick={onClose}>
@@ -1536,8 +1540,12 @@ function App() {
       await runMatch(upload);
     } catch (caught) {
       setPhase("error");
-      setError(caught.message || String(caught));
-      if (caught.stage === "enriching") setErrorDialog(caught.message || t.enrichmentFailed);
+      if (caught.stage === "enriching") {
+        setError(t.enrichmentFailed);
+        setErrorDialog(true);
+      } else {
+        setError(caught.message || String(caught));
+      }
       setMessageKey("processFailed");
       setCustomMessage("");
     }
@@ -1580,8 +1588,12 @@ function App() {
       setTurnstileResetKey((current) => current + 1);
     } catch (caught) {
       setPhase("error");
-      setError(caught.message || String(caught));
-      if (caught.stage === "enriching") setErrorDialog(caught.message || t.enrichmentFailed);
+      if (caught.stage === "enriching") {
+        setError(t.enrichmentFailed);
+        setErrorDialog(true);
+      } else {
+        setError(caught.message || String(caught));
+      }
       setMessageKey("processFailed");
       setCustomMessage("");
       setTurnstileToken("");
