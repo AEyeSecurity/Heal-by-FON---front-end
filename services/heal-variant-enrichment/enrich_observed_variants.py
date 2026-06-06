@@ -17,7 +17,7 @@ from pathlib import Path
 
 DEFAULT_TIMEOUT_SECONDS = 18
 DEFAULT_CACHE_TTL_DAYS = 14
-CACHE_SCHEMA_VERSION = 4
+CACHE_SCHEMA_VERSION = 5
 USER_AGENT = "HEAL-by-FON-prototype/0.1"
 
 
@@ -118,6 +118,34 @@ def first_present(*values) -> str:
     return ""
 
 
+def get_nested(obj, *keys):
+    current = obj
+    for key in keys:
+        if not isinstance(current, dict):
+            return ""
+        current = current.get(key)
+    return current
+
+
+def compact_number(value) -> str:
+    text = clean_str(value)
+    if not text:
+        return ""
+    try:
+        number = float(text)
+    except ValueError:
+        return text
+    if number == 0:
+        return "0"
+    if abs(number) < 0.001 or abs(number) >= 100000:
+        return f"{number:.3e}"
+    return f"{number:.6g}"
+
+
+def is_http_not_found(error: str) -> bool:
+    return clean_str(error).startswith("http_404")
+
+
 def observed_alt_alleles(row: dict) -> str:
     patient_ref = first_present(row.get("ref_vcf"), row.get("ref"))
     gt_alleles = first_present(row.get("gt_alleles"), row.get("Genotype"))
@@ -214,19 +242,52 @@ def fetch_ensembl_variation(rsid: str, timeout_seconds: int) -> tuple[dict, str]
 
 
 def fetch_ensembl_vep(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
-    url = f"https://rest.ensembl.org/vep/human/id/{urllib.parse.quote(rsid)}?content-type=application/json"
+    params = urllib.parse.urlencode(
+        {
+            "content-type": "application/json",
+            "Phenotypes": "1",
+            "CADD": "1",
+            "AlphaMissense": "1",
+            "REVEL": "1",
+            "SpliceAI": "2",
+            "canonical": "1",
+            "domains": "1",
+            "hgvs": "1",
+            "mane": "1",
+            "numbers": "1",
+            "protein": "1",
+            "uniprot": "1",
+            "variant_class": "1",
+        }
+    )
+    url = f"https://rest.ensembl.org/vep/human/id/{urllib.parse.quote(rsid)}?{params}"
     payload, error = json_get(url, timeout_seconds)
     if not isinstance(payload, list) or not payload:
         return {}, error or "empty_response"
     item = payload[0]
     transcript_consequences = item.get("transcript_consequences") or []
     colocated_variants = item.get("colocated_variants") or []
+    canonical_entry = next((entry for entry in transcript_consequences if clean_str(entry.get("canonical")) == "1"), {})
+    mane_entry = next((entry for entry in transcript_consequences if clean_str(entry.get("mane_select"))), {})
+    picked_entry = mane_entry or canonical_entry or (transcript_consequences[0] if transcript_consequences else {})
     gene_symbols = [entry.get("gene_symbol") for entry in transcript_consequences]
     impacts = [entry.get("impact") for entry in transcript_consequences]
     consequence_terms = []
     transcript_summary = []
+    domains_summary = []
     for entry in transcript_consequences:
         consequence_terms.extend(entry.get("consequence_terms") or [])
+        domains = entry.get("domains") or []
+        domains_text = unique_join(
+            [
+                f"{clean_str(domain.get('db'))}:{clean_str(domain.get('name'))}"
+                for domain in domains
+                if isinstance(domain, dict)
+            ],
+            limit=8,
+        )
+        if domains_text:
+            domains_summary.append(domains_text)
         transcript_summary.append(
             "; ".join(
                 part
@@ -247,6 +308,13 @@ def fetch_ensembl_vep(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
                     f"amino_acids={clean_str(entry.get('amino_acids'))}" if clean_str(entry.get("amino_acids")) else "",
                     f"protein_start={clean_str(entry.get('protein_start'))}" if clean_str(entry.get("protein_start")) else "",
                     f"protein_end={clean_str(entry.get('protein_end'))}" if clean_str(entry.get("protein_end")) else "",
+                    f"hgvsc={clean_str(entry.get('hgvsc'))}" if clean_str(entry.get("hgvsc")) else "",
+                    f"hgvsp={clean_str(entry.get('hgvsp'))}" if clean_str(entry.get("hgvsp")) else "",
+                    f"cadd_phred={clean_str(entry.get('cadd_phred'))}" if clean_str(entry.get("cadd_phred")) else "",
+                    f"revel={clean_str(entry.get('revel_score'))}" if clean_str(entry.get("revel_score")) else "",
+                    f"alphamissense={clean_str(entry.get('alphamissense_score'))}"
+                    if clean_str(entry.get("alphamissense_score"))
+                    else "",
                 ]
                 if part
             )
@@ -272,6 +340,54 @@ def fetch_ensembl_vep(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
         "impacts": unique_join(impacts),
         "consequence_terms": unique_join(consequence_terms, limit=12),
         "transcript_summary": unique_join(transcript_summary, limit=10),
+        "picked_gene_symbol": clean_str(picked_entry.get("gene_symbol")),
+        "picked_transcript_id": clean_str(picked_entry.get("transcript_id")),
+        "picked_canonical": clean_str(picked_entry.get("canonical")),
+        "picked_mane_select": clean_str(picked_entry.get("mane_select")),
+        "picked_hgvsc": clean_str(picked_entry.get("hgvsc")),
+        "picked_hgvsp": clean_str(picked_entry.get("hgvsp")),
+        "picked_protein_id": clean_str(picked_entry.get("protein_id")),
+        "picked_exon": clean_str(picked_entry.get("exon")),
+        "picked_intron": clean_str(picked_entry.get("intron")),
+        "picked_cdna": "-".join(
+            item
+            for item in [clean_str(picked_entry.get("cdna_start")), clean_str(picked_entry.get("cdna_end"))]
+            if item
+        ),
+        "picked_cds": "-".join(
+            item
+            for item in [clean_str(picked_entry.get("cds_start")), clean_str(picked_entry.get("cds_end"))]
+            if item
+        ),
+        "picked_amino_acids": clean_str(picked_entry.get("amino_acids")),
+        "picked_protein_position": "-".join(
+            item
+            for item in [clean_str(picked_entry.get("protein_start")), clean_str(picked_entry.get("protein_end"))]
+            if item
+        ),
+        "picked_sift_prediction": clean_str(picked_entry.get("sift_prediction") or picked_entry.get("sift_pred")),
+        "picked_sift_score": clean_str(picked_entry.get("sift_score")),
+        "picked_polyphen_prediction": clean_str(
+            picked_entry.get("polyphen_prediction") or picked_entry.get("polyphen2_hdiv_pred")
+        ),
+        "picked_polyphen_score": clean_str(picked_entry.get("polyphen_score")),
+        "picked_cadd_phred": clean_str(picked_entry.get("cadd_phred")),
+        "picked_revel_score": clean_str(picked_entry.get("revel_score") or picked_entry.get("revel")),
+        "picked_alphamissense_score": clean_str(picked_entry.get("alphamissense_score") or picked_entry.get("alphamissense")),
+        "picked_alphamissense_pred": clean_str(picked_entry.get("alphamissense_pred")),
+        "picked_mutationtaster_pred": clean_str(picked_entry.get("mutationtaster_pred")),
+        "picked_metasvm_pred": clean_str(picked_entry.get("metasvm_pred")),
+        "picked_spliceai": clean_str(picked_entry.get("spliceai")),
+        "picked_uniprot": unique_join(
+            [
+                picked_entry.get("swissprot"),
+                picked_entry.get("trembl"),
+                picked_entry.get("uniparc"),
+                picked_entry.get("uniprot_isoform"),
+            ],
+            limit=8,
+        ),
+        "domains_summary": unique_join(domains_summary, limit=8),
         "colocated_variants": unique_join(colocated_summary, limit=10),
         "raw_json": compact_json(payload),
     }, ""
@@ -386,6 +502,206 @@ def fetch_clinvar(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
     }, ""
 
 
+def fetch_gwas_catalog(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
+    params = urllib.parse.urlencode({"projection": "associationBySnp", "size": "20"})
+    url = (
+        "https://www.ebi.ac.uk/gwas/rest/api/singleNucleotidePolymorphisms/"
+        f"{urllib.parse.quote(rsid)}/associations?{params}"
+    )
+    payload, error = json_get(url, timeout_seconds)
+    if not isinstance(payload, dict):
+        if is_http_not_found(error):
+            return {
+                "association_count": "0",
+                "top_traits": "",
+                "reported_genes": "",
+                "min_pvalue": "",
+                "top_associations": "",
+                "raw_json": "",
+            }, ""
+        return {}, error or "empty_response"
+    associations = ((payload.get("_embedded") or {}).get("associations") or [])
+    traits = []
+    genes = []
+    association_parts = []
+    min_pvalue = ""
+    for association in associations[:20]:
+        if not isinstance(association, dict):
+            continue
+        pvalue = association.get("pvalue")
+        if pvalue is None and association.get("pvalueMantissa") is not None and association.get("pvalueExponent") is not None:
+            try:
+                pvalue = float(association.get("pvalueMantissa")) * (10 ** int(association.get("pvalueExponent")))
+            except Exception:
+                pvalue = None
+        if pvalue is not None:
+            pvalue_text = compact_number(pvalue)
+            if not min_pvalue:
+                min_pvalue = pvalue_text
+            else:
+                try:
+                    if float(pvalue) < float(min_pvalue):
+                        min_pvalue = pvalue_text
+                except Exception:
+                    pass
+        else:
+            pvalue_text = ""
+        association_traits = [item.get("trait") for item in association.get("efoTraits") or [] if isinstance(item, dict)]
+        traits.extend(association_traits)
+        locus_genes = []
+        for locus in association.get("loci") or []:
+            if not isinstance(locus, dict):
+                continue
+            for gene in locus.get("authorReportedGenes") or []:
+                if isinstance(gene, dict):
+                    locus_genes.append(gene.get("geneName"))
+        genes.extend(locus_genes)
+        effect = first_present(
+            f"beta={compact_number(association.get('betaNum'))} {clean_str(association.get('betaDirection'))}".strip()
+            if association.get("betaNum") is not None
+            else "",
+            f"OR={compact_number(association.get('orPerCopyNum'))}" if association.get("orPerCopyNum") is not None else "",
+        )
+        association_parts.append(
+            "; ".join(
+                part
+                for part in [
+                    f"trait={unique_join(association_traits, limit=3, sep=',')}" if association_traits else "",
+                    f"p={pvalue_text}" if pvalue_text else "",
+                    effect,
+                    f"genes={unique_join(locus_genes, limit=4, sep=',')}" if locus_genes else "",
+                ]
+                if part
+            )
+        )
+    return {
+        "association_count": clean_str(len(associations)),
+        "top_traits": unique_join(traits, limit=12, sep=" | "),
+        "reported_genes": unique_join(genes, limit=12, sep=" | "),
+        "min_pvalue": min_pvalue,
+        "top_associations": unique_join(association_parts, limit=8, sep=" || "),
+        "raw_json": compact_json(payload),
+    }, ""
+
+
+def fetch_clinpgx(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
+    base_url = "https://api.pharmgkb.org/v1"
+    variant_payload, variant_error = json_get(
+        f"{base_url}/data/variant/?{urllib.parse.urlencode({'symbol': rsid, 'view': 'max'})}",
+        timeout_seconds,
+    )
+    if variant_error and not is_http_not_found(variant_error):
+        return {}, f"variant_lookup: {variant_error}"
+    if is_http_not_found(variant_error):
+        variant_payload = {"data": []}
+    time.sleep(0.35)
+    clinical_payload, clinical_error = json_get(
+        f"{base_url}/data/clinicalAnnotation?{urllib.parse.urlencode({'location.fingerprint': rsid, 'view': 'max'})}",
+        timeout_seconds,
+    )
+    time.sleep(0.35)
+    variant_annotation_payload, variant_annotation_error = json_get(
+        f"{base_url}/data/variantAnnotation?{urllib.parse.urlencode({'location.fingerprint': rsid, 'view': 'max'})}",
+        timeout_seconds,
+    )
+    errors = []
+    if is_http_not_found(clinical_error):
+        clinical_payload = {"data": []}
+    elif clinical_error:
+        errors.append(f"clinicalAnnotation: {clinical_error}")
+    if is_http_not_found(variant_annotation_error):
+        variant_annotation_payload = {"data": []}
+    elif variant_annotation_error:
+        errors.append(f"variantAnnotation: {variant_annotation_error}")
+    variant_rows = variant_payload.get("data") if isinstance(variant_payload, dict) else []
+    clinical_rows = clinical_payload.get("data") if isinstance(clinical_payload, dict) else []
+    annotation_rows = variant_annotation_payload.get("data") if isinstance(variant_annotation_payload, dict) else []
+    variant = variant_rows[0] if variant_rows else {}
+
+    clinical_parts = []
+    clinical_chemicals = []
+    evidence_levels = []
+    allele_phenotypes = []
+    for item in clinical_rows[:12]:
+        if not isinstance(item, dict):
+            continue
+        level = clean_str(get_nested(item, "levelOfEvidence", "term"))
+        if level:
+            evidence_levels.append(level)
+        chemicals = [chem.get("name") for chem in item.get("relatedChemicals") or [] if isinstance(chem, dict)]
+        clinical_chemicals.extend(chemicals)
+        allele_text = unique_join(
+            [
+                f"{clean_str(ap.get('allele'))}: {clean_str(ap.get('phenotype'))[:220]}"
+                for ap in item.get("allelePhenotypes") or []
+                if isinstance(ap, dict)
+            ],
+            limit=3,
+            sep=" || ",
+        )
+        if allele_text:
+            allele_phenotypes.append(allele_text)
+        clinical_parts.append(
+            "; ".join(
+                part
+                for part in [
+                    f"name={clean_str(item.get('name'))}" if clean_str(item.get("name")) else "",
+                    f"level={level}" if level else "",
+                    f"chemicals={unique_join(chemicals, limit=4, sep=',')}" if chemicals else "",
+                ]
+                if part
+            )
+        )
+
+    variant_annotation_parts = []
+    annotation_chemicals = []
+    pmids = []
+    for item in annotation_rows[:15]:
+        if not isinstance(item, dict):
+            continue
+        chemicals = [chem.get("name") for chem in item.get("relatedChemicals") or [] if isinstance(chem, dict)]
+        annotation_chemicals.extend(chemicals)
+        for cross_ref in get_nested(item, "literature", "crossReferences") or []:
+            if isinstance(cross_ref, dict) and cross_ref.get("resource") == "PubMed":
+                pmids.append(cross_ref.get("resourceId"))
+        variant_annotation_parts.append(
+            "; ".join(
+                part
+                for part in [
+                    f"genotype={clean_str(item.get('alleleGenotype'))}" if clean_str(item.get("alleleGenotype")) else "",
+                    f"chemicals={unique_join(chemicals, limit=3, sep=',')}" if chemicals else "",
+                    f"sentence={clean_str(item.get('sentence'))[:240]}" if clean_str(item.get("sentence")) else "",
+                    f"score={compact_number(item.get('score'))}" if item.get("score") is not None else "",
+                ]
+                if part
+            )
+        )
+
+    result = {
+        "variant_id": clean_str(variant.get("id")),
+        "variant_symbol": clean_str(variant.get("symbol")),
+        "variant_name": clean_str(variant.get("name")),
+        "variant_type": clean_str(variant.get("type")),
+        "variant_change_classification": clean_str(variant.get("changeClassification")),
+        "variant_clinical_significance": clean_str(variant.get("clinicalSignificance")),
+        "variant_rare": clean_str(variant.get("rare")),
+        "variant_rarity_source": clean_str(variant.get("raritySource")),
+        "clinical_annotation_count": clean_str(len(clinical_rows)),
+        "clinical_evidence_levels": unique_join(evidence_levels, limit=8),
+        "clinical_chemicals": unique_join(clinical_chemicals, limit=15, sep=" | "),
+        "clinical_summary": unique_join(clinical_parts, limit=8, sep=" || "),
+        "clinical_allele_phenotypes": unique_join(allele_phenotypes, limit=8, sep=" || "),
+        "variant_annotation_count": clean_str(len(annotation_rows)),
+        "variant_annotation_chemicals": unique_join(annotation_chemicals, limit=15, sep=" | "),
+        "variant_annotation_summary": unique_join(variant_annotation_parts, limit=10, sep=" || "),
+        "pmids": unique_join(pmids, limit=12, sep=" | "),
+        "variant_raw_json": compact_json(variant_payload),
+        "clinical_raw_json": compact_json(clinical_payload),
+        "variant_annotation_raw_json": compact_json(variant_annotation_payload),
+    }
+    return result, " | ".join(errors)
+
+
 def fetch_external(rsid: str, cache_dir: Path, timeout_seconds: int, ttl_days: int, delay_seconds: float) -> dict:
     cached = load_cache(cache_dir, rsid, ttl_days)
     if cached:
@@ -407,6 +723,14 @@ def fetch_external(rsid: str, cache_dir: Path, timeout_seconds: int, ttl_days: i
     clinvar, error = fetch_clinvar(rsid, timeout_seconds)
     if error:
         errors["clinvar"] = error
+    time.sleep(delay_seconds)
+    gwas_catalog, error = fetch_gwas_catalog(rsid, timeout_seconds)
+    if error:
+        errors["gwas_catalog"] = error
+    time.sleep(max(delay_seconds, 0.35))
+    clinpgx, error = fetch_clinpgx(rsid, timeout_seconds)
+    if error:
+        errors["clinpgx"] = error
 
     payload = {
         "rsid": rsid,
@@ -418,6 +742,8 @@ def fetch_external(rsid: str, cache_dir: Path, timeout_seconds: int, ttl_days: i
         "ensemblVep": ensembl_vep,
         "myVariant": myvariant,
         "clinVar": clinvar,
+        "gwasCatalog": gwas_catalog,
+        "clinPgx": clinpgx,
     }
     if not errors:
         save_cache(cache_dir, rsid, payload)
@@ -528,6 +854,102 @@ def clinvar_trait_name(item: dict) -> str:
         if isinstance(first, dict):
             return clean_str(first.get("trait_name"))
     return ""
+
+
+def normalize_clinvar_classification(value: str) -> str:
+    text = clean_str(value).lower()
+    if not text:
+        return "not_reported"
+    if "pathogenic" in text and "conflicting" in text:
+        return "conflicting_pathogenicity"
+    if "pathogenic" in text:
+        return "pathogenic_or_likely_pathogenic"
+    if "uncertain" in text or "vus" in text:
+        return "uncertain_significance"
+    if "drug response" in text:
+        return "drug_response"
+    if "risk factor" in text:
+        return "risk_factor"
+    if "benign" in text:
+        return "benign_or_likely_benign"
+    return "other"
+
+
+def clinvar_evidence_strength(review_status: str) -> str:
+    text = clean_str(review_status).lower()
+    if not text:
+        return "not_reported"
+    if "practice guideline" in text:
+        return "practice_guideline"
+    if "expert panel" in text:
+        return "expert_panel"
+    if "multiple submitters" in text and "no conflicts" in text:
+        return "multi_submitter_no_conflict"
+    if "conflicting" in text:
+        return "conflicting"
+    if "single submitter" in text:
+        return "single_submitter"
+    return "limited_or_unclear"
+
+
+def population_frequency_summary(populations: str) -> dict:
+    max_frequency = -1.0
+    max_population = ""
+    max_allele = ""
+    count = 0
+    for chunk in clean_str(populations).split("|"):
+        values = {}
+        for part in chunk.split(";"):
+            if "=" not in part:
+                continue
+            key, value = part.split("=", 1)
+            values[key.strip()] = value.strip()
+        frequency = values.get("freq")
+        if frequency is None:
+            continue
+        try:
+            number = float(frequency)
+        except ValueError:
+            continue
+        count += 1
+        if number > max_frequency:
+            max_frequency = number
+            max_population = values.get("pop", "")
+            max_allele = values.get("allele", "")
+    if max_frequency < 0:
+        return {"max_frequency": "", "max_population": "", "max_allele": "", "count": "0", "summary": ""}
+    frequency_text = compact_number(max_frequency)
+    return {
+        "max_frequency": frequency_text,
+        "max_population": max_population,
+        "max_allele": max_allele,
+        "count": clean_str(count),
+        "summary": f"max_freq={frequency_text}; population={max_population}; allele={max_allele}",
+    }
+
+
+def interpretation_readiness(row: dict, plus_row: dict) -> str:
+    flags = []
+    if plus_row.get("Canon Effect"):
+        flags.append("canon_context")
+    if plus_row.get("vep_hgvsp") or plus_row.get("vep_hgvsc"):
+        flags.append("hgvs")
+    if plus_row.get("vep_cadd_phred") or plus_row.get("vep_revel_score") or plus_row.get("vep_alphamissense_score"):
+        flags.append("deleteriousness_scores")
+    if plus_row.get("clinvar_normalized_classification") not in {"", "not_reported"}:
+        flags.append("clinvar")
+    if plus_row.get("gwas_association_count") not in {"", "0"}:
+        flags.append("gwas")
+    if plus_row.get("pharmgkb_clinical_annotation_count") not in {"", "0"} or plus_row.get("pharmgkb_variant_annotation_count") not in {"", "0"}:
+        flags.append("pharmacogenomics")
+    if plus_row.get("population_frequency_summary"):
+        flags.append("population_frequency")
+    confidence = clean_str(row.get("Confidence Level"))
+    if confidence == "High" and len(flags) >= 4:
+        return f"high_interpretability: {', '.join(flags)}"
+    if len(flags) >= 3:
+        return f"moderate_interpretability: {', '.join(flags)}"
+    return f"limited_interpretability: {', '.join(flags) if flags else 'minimal_external_context'}"
 
 
 def build_output_row(row: dict, enrichment: dict) -> dict:
@@ -673,6 +1095,85 @@ def build_colab_output_row(row: dict, enrichment: dict) -> dict:
     return base
 
 
+def build_plus_output_row(row: dict, enrichment: dict) -> dict:
+    base = build_colab_output_row(row, enrichment)
+    ensembl_variation = enrichment.get("ensemblVariation") or {}
+    ensembl_vep = enrichment.get("ensemblVep") or {}
+    clinvar = enrichment.get("clinVar") or {}
+    myvariant = enrichment.get("myVariant") or {}
+    gwas = enrichment.get("gwasCatalog") or {}
+    clinpgx = enrichment.get("clinPgx") or {}
+    population = population_frequency_summary(ensembl_variation.get("populations"))
+    clinvar_conflict_text = (
+        f"{clean_str(clinvar.get('clinical_significance'))} {clean_str(clinvar.get('review_status'))}".lower()
+    )
+
+    plus = {
+        **base,
+        "clinvar_normalized_classification": normalize_clinvar_classification(clinvar.get("clinical_significance")),
+        "clinvar_evidence_strength": clinvar_evidence_strength(clinvar.get("review_status")),
+        "clinvar_conflict_flag": "true" if "conflict" in clinvar_conflict_text else "false",
+        "clinvar_trait_names": clean_str(clinvar.get("trait_names")),
+        "population_frequency_summary": population["summary"],
+        "population_max_frequency": population["max_frequency"],
+        "population_max_frequency_population": population["max_population"],
+        "population_max_frequency_allele": population["max_allele"],
+        "population_frequency_observations": population["count"],
+        "vep_picked_gene_symbol": clean_str(ensembl_vep.get("picked_gene_symbol")),
+        "vep_picked_transcript": clean_str(ensembl_vep.get("picked_transcript_id")),
+        "vep_canonical": clean_str(ensembl_vep.get("picked_canonical")),
+        "vep_mane_select": clean_str(ensembl_vep.get("picked_mane_select")),
+        "vep_hgvsc": clean_str(ensembl_vep.get("picked_hgvsc")),
+        "vep_hgvsp": clean_str(ensembl_vep.get("picked_hgvsp")),
+        "vep_protein_id": clean_str(ensembl_vep.get("picked_protein_id")),
+        "vep_exon": clean_str(ensembl_vep.get("picked_exon")),
+        "vep_intron": clean_str(ensembl_vep.get("picked_intron")),
+        "vep_cdna_position": clean_str(ensembl_vep.get("picked_cdna")),
+        "vep_cds_position": clean_str(ensembl_vep.get("picked_cds")),
+        "vep_amino_acids": clean_str(ensembl_vep.get("picked_amino_acids")),
+        "vep_protein_position": clean_str(ensembl_vep.get("picked_protein_position")),
+        "vep_sift_prediction": clean_str(ensembl_vep.get("picked_sift_prediction")),
+        "vep_sift_score": clean_str(ensembl_vep.get("picked_sift_score")),
+        "vep_polyphen_prediction": clean_str(ensembl_vep.get("picked_polyphen_prediction")),
+        "vep_polyphen_score": clean_str(ensembl_vep.get("picked_polyphen_score")),
+        "vep_cadd_phred": clean_str(ensembl_vep.get("picked_cadd_phred") or myvariant.get("cadd_phred")),
+        "vep_revel_score": clean_str(ensembl_vep.get("picked_revel_score")),
+        "vep_alphamissense_score": clean_str(ensembl_vep.get("picked_alphamissense_score")),
+        "vep_alphamissense_pred": clean_str(ensembl_vep.get("picked_alphamissense_pred")),
+        "vep_mutationtaster_pred": clean_str(ensembl_vep.get("picked_mutationtaster_pred")),
+        "vep_metasvm_pred": clean_str(ensembl_vep.get("picked_metasvm_pred")),
+        "vep_spliceai": clean_str(ensembl_vep.get("picked_spliceai")),
+        "vep_uniprot": clean_str(ensembl_vep.get("picked_uniprot")),
+        "vep_domains": clean_str(ensembl_vep.get("domains_summary")),
+        "gwas_association_count": clean_str(gwas.get("association_count")),
+        "gwas_top_traits": clean_str(gwas.get("top_traits")),
+        "gwas_reported_genes": clean_str(gwas.get("reported_genes")),
+        "gwas_min_pvalue": clean_str(gwas.get("min_pvalue")),
+        "gwas_top_associations": clean_str(gwas.get("top_associations")),
+        "pharmgkb_variant_id": clean_str(clinpgx.get("variant_id")),
+        "pharmgkb_change_classification": clean_str(clinpgx.get("variant_change_classification")),
+        "pharmgkb_clinical_significance": clean_str(clinpgx.get("variant_clinical_significance")),
+        "pharmgkb_rare": clean_str(clinpgx.get("variant_rare")),
+        "pharmgkb_rarity_source": clean_str(clinpgx.get("variant_rarity_source")),
+        "pharmgkb_clinical_annotation_count": clean_str(clinpgx.get("clinical_annotation_count")),
+        "pharmgkb_clinical_evidence_levels": clean_str(clinpgx.get("clinical_evidence_levels")),
+        "pharmgkb_clinical_chemicals": clean_str(clinpgx.get("clinical_chemicals")),
+        "pharmgkb_clinical_summary": clean_str(clinpgx.get("clinical_summary")),
+        "pharmgkb_allele_phenotypes": clean_str(clinpgx.get("clinical_allele_phenotypes")),
+        "pharmgkb_variant_annotation_count": clean_str(clinpgx.get("variant_annotation_count")),
+        "pharmgkb_variant_annotation_chemicals": clean_str(clinpgx.get("variant_annotation_chemicals")),
+        "pharmgkb_variant_annotation_summary": clean_str(clinpgx.get("variant_annotation_summary")),
+        "pharmgkb_pmids": clean_str(clinpgx.get("pmids")),
+        "plus_source_error_sources": "|".join(sorted((enrichment.get("errors") or {}).keys())),
+        "gwas_raw_json": clean_str(gwas.get("raw_json")),
+        "pharmgkb_variant_raw_json": clean_str(clinpgx.get("variant_raw_json")),
+        "pharmgkb_clinical_raw_json": clean_str(clinpgx.get("clinical_raw_json")),
+        "pharmgkb_variant_annotation_raw_json": clean_str(clinpgx.get("variant_annotation_raw_json")),
+    }
+    plus["interpretation_readiness_summary"] = interpretation_readiness(row, plus)
+    return plus
+
+
 def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds: int, ttl_days: int) -> dict:
     started_at = utc_now()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -698,6 +1199,9 @@ def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds
     output_rows = [build_output_row(row, enrichments[normalize_rsid(row.get("SNP (rsID)"))]) for row in observed_rows]
     colab_output_rows = [
         build_colab_output_row(row, enrichments[normalize_rsid(row.get("SNP (rsID)"))]) for row in observed_rows
+    ]
+    plus_output_rows = [
+        build_plus_output_row(row, enrichments[normalize_rsid(row.get("SNP (rsID)"))]) for row in observed_rows
     ]
     qa_fieldnames = [
         "Gene",
@@ -820,8 +1324,72 @@ def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds
     ]
     output_csv = output_dir / "heal_observed_variant_enrichment.csv"
     colab_output_csv = output_dir / "heal_fon_interpretation_enriched_observed69.csv"
+    plus_output_csv = output_dir / "heal_fon_interpretation_enrichment_plus.csv"
+    plus_fieldnames = colab_fieldnames + [
+        "clinvar_normalized_classification",
+        "clinvar_evidence_strength",
+        "clinvar_conflict_flag",
+        "clinvar_trait_names",
+        "population_frequency_summary",
+        "population_max_frequency",
+        "population_max_frequency_population",
+        "population_max_frequency_allele",
+        "population_frequency_observations",
+        "vep_picked_gene_symbol",
+        "vep_picked_transcript",
+        "vep_canonical",
+        "vep_mane_select",
+        "vep_hgvsc",
+        "vep_hgvsp",
+        "vep_protein_id",
+        "vep_exon",
+        "vep_intron",
+        "vep_cdna_position",
+        "vep_cds_position",
+        "vep_amino_acids",
+        "vep_protein_position",
+        "vep_sift_prediction",
+        "vep_sift_score",
+        "vep_polyphen_prediction",
+        "vep_polyphen_score",
+        "vep_cadd_phred",
+        "vep_revel_score",
+        "vep_alphamissense_score",
+        "vep_alphamissense_pred",
+        "vep_mutationtaster_pred",
+        "vep_metasvm_pred",
+        "vep_spliceai",
+        "vep_uniprot",
+        "vep_domains",
+        "gwas_association_count",
+        "gwas_top_traits",
+        "gwas_reported_genes",
+        "gwas_min_pvalue",
+        "gwas_top_associations",
+        "pharmgkb_variant_id",
+        "pharmgkb_change_classification",
+        "pharmgkb_clinical_significance",
+        "pharmgkb_rare",
+        "pharmgkb_rarity_source",
+        "pharmgkb_clinical_annotation_count",
+        "pharmgkb_clinical_evidence_levels",
+        "pharmgkb_clinical_chemicals",
+        "pharmgkb_clinical_summary",
+        "pharmgkb_allele_phenotypes",
+        "pharmgkb_variant_annotation_count",
+        "pharmgkb_variant_annotation_chemicals",
+        "pharmgkb_variant_annotation_summary",
+        "pharmgkb_pmids",
+        "interpretation_readiness_summary",
+        "plus_source_error_sources",
+        "gwas_raw_json",
+        "pharmgkb_variant_raw_json",
+        "pharmgkb_clinical_raw_json",
+        "pharmgkb_variant_annotation_raw_json",
+    ]
     write_csv(output_csv, output_rows, qa_fieldnames)
     write_csv(colab_output_csv, colab_output_rows, colab_fieldnames)
+    write_csv(plus_output_csv, plus_output_rows, plus_fieldnames)
 
     source_errors = {}
     for enrichment in enrichments.values():
@@ -847,11 +1415,20 @@ def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds
             "output_rows": len(output_rows),
             "cache_hits": sum(1 for item in enrichments.values() if item.get("cacheHit")),
             "source_error_counts": source_errors,
-            "sources": ["Ensembl variation", "Ensembl VEP", "ClinVar E-utilities", "MyVariant.info"],
+            "plus_rows": len(plus_output_rows),
+            "sources": [
+                "Ensembl variation",
+                "Ensembl VEP",
+                "ClinVar E-utilities",
+                "MyVariant.info",
+                "GWAS Catalog",
+                "ClinPGx/PharmGKB",
+            ],
         },
         "outputs": {
             "observedVariantEnrichmentCsv": str(output_csv),
             "observedVariantInterpretiveCsv": str(colab_output_csv),
+            "observedVariantEnrichmentPlusCsv": str(plus_output_csv),
         },
         "timestamps": {"startedAt": started_at, "completedAt": utc_now()},
     }

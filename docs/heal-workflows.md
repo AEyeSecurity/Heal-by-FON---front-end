@@ -162,14 +162,27 @@ GET /api/vcf-canon-matches/:jobId/preparation-audit
 GET /api/vcf-canon-matches/:jobId/preparation-minimal
 GET /api/vcf-canon-matches/:jobId/enrichment
 GET /api/vcf-canon-matches/:jobId/enrichment-interpretive
+GET /api/vcf-canon-matches/:jobId/enrichment-plus
 GET /api/vcf-canon-matches/:jobId/debug/:artifact
 ```
 
 The `debug/:artifact` whitelist includes `vcf_candidates` and `vcf_joined_chr_pos`. `vcf_candidates` is the raw targeted VCF extraction; `vcf_joined_chr_pos` is the Colab-style debug table that joins those VCF hits back to rsID, source rows, categories, genes, and resolved coordinate metadata.
 
-The match and preparation CSVs are downloadable as soon as their files exist, even if external enrichment is still running or later fails. The technical QA enrichment and interpretive enrichment CSVs remain downloadable only after their own files exist. The API verifies job ownership and allowed filesystem roots before serving any artifact. Local paths are not exposed in browser JSON.
+The match and preparation CSVs are downloadable as soon as their files exist, even if external enrichment is still running or later fails. The technical QA enrichment, Colab-style interpretive enrichment, and Enrichment Plus CSVs remain downloadable only after their own files exist. The API verifies job ownership and allowed filesystem roots before serving any artifact. Local paths are not exposed in browser JSON.
 
-The polling response exposes `artifactsReady.matches`, `artifactsReady.preparation`, `artifactsReady.enrichment`, and `artifactsReady.enrichmentInterpretive` so the frontend can show each progress-bar download icon as soon as the corresponding audit/review CSV is ready.
+The polling response exposes `artifactsReady.matches`, `artifactsReady.preparation`, `artifactsReady.enrichment`, `artifactsReady.enrichmentInterpretive`, and `artifactsReady.enrichmentPlus` so the frontend can show each progress-bar download icon as soon as the corresponding audit/review CSV is ready.
+
+## Enrichment Plus Output
+
+Workflow 5 still runs as one external enrichment stage, but it now emits three levels of CSV:
+
+```text
+heal_observed_variant_enrichment.csv
+heal_fon_interpretation_enriched_observed69.csv
+heal_fon_interpretation_enrichment_plus.csv
+```
+
+`heal_observed_variant_enrichment.csv` remains the technical QA artifact. `heal_fon_interpretation_enriched_observed69.csv` remains the Colab-style interpretive artifact. `heal_fon_interpretation_enrichment_plus.csv` is the richer LLM-facing artifact, adding normalized ClinVar classification/evidence, population-frequency summary, selected VEP transcript/HGVS/MANE/protein fields, CADD/REVEL/AlphaMissense/SIFT/PolyPhen signals when available, GWAS Catalog associations, ClinPGx/PharmGKB clinical and variant annotations, PubMed IDs, source error flags, and compact raw JSON snippets for audit.
 
 ## Colab Output Boundary
 

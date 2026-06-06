@@ -326,6 +326,7 @@ function publicArtifactsReady(job) {
     preparation: Boolean(artifacts.deliverableAuditCsv || artifacts.deliverableMinCsv),
     enrichment: Boolean(artifacts.observedVariantEnrichmentCsv),
     enrichmentInterpretive: Boolean(artifacts.observedVariantInterpretiveCsv),
+    enrichmentPlus: Boolean(artifacts.observedVariantEnrichmentPlusCsv),
   };
 }
 
@@ -1536,6 +1537,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
       const enrichmentSummary = await processVariantEnrichmentWithRetry(enrichmentPayload, job, 3);
       job.artifacts.observedVariantEnrichmentCsv = enrichmentSummary.outputs?.observedVariantEnrichmentCsv || "";
       job.artifacts.observedVariantInterpretiveCsv = enrichmentSummary.outputs?.observedVariantInterpretiveCsv || "";
+      job.artifacts.observedVariantEnrichmentPlusCsv = enrichmentSummary.outputs?.observedVariantEnrichmentPlusCsv || "";
       job.result = {
         ...sanitizeVcfCanonMatchResult(summary, upload),
         matchPreparation: sanitizeMatchPreparationResult(preparationSummary),
@@ -1788,6 +1790,45 @@ app.get("/api/vcf-canon-matches/:jobId/enrichment-interpretive", async (req, res
   const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.download(csvPath, `${baseName}_interpretive_enrichment.csv`);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/enrichment-plus", async (req, res) => {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (!job.artifacts?.observedVariantEnrichmentPlusCsv) {
+    res.status(409).json({ error: "Enrichment Plus CSV is not ready yet." });
+    return;
+  }
+
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+
+  const paths = variantEnrichmentPaths();
+  const csvPath = path.resolve(job.artifacts?.observedVariantEnrichmentPlusCsv || "");
+  if (!isPathInside(paths.root, csvPath)) {
+    res.status(400).json({ error: "Enrichment Plus CSV is outside the allowed root." });
+    return;
+  }
+  const csvStat = await stat(csvPath).catch(() => null);
+  if (!csvStat || csvStat.size <= 0) {
+    res.status(404).json({ error: "Enrichment Plus CSV was not found." });
+    return;
+  }
+
+  const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.download(csvPath, `${baseName}_interpretation_enrichment_plus.csv`);
 });
 
 app.listen(PORT, "127.0.0.1", () => {

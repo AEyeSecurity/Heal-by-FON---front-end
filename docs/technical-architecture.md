@@ -78,6 +78,7 @@ GET  /api/vcf-canon-matches/:jobId/preparation-audit
 GET  /api/vcf-canon-matches/:jobId/preparation-minimal
 GET  /api/vcf-canon-matches/:jobId/enrichment
 GET  /api/vcf-canon-matches/:jobId/enrichment-interpretive
+GET  /api/vcf-canon-matches/:jobId/enrichment-plus
 ```
 
 Default chunk size:
@@ -153,7 +154,7 @@ The API returns validation results without exposing local filesystem paths. Publ
 
 Local paths remain internal to the backend and n8n integration.
 
-The VCF-canon match download endpoint serves the per-job `sheet_final_consolidated.csv` artifact for QA as soon as that artifact exists. Match preparation download endpoints similarly become available as soon as the preparation CSVs exist, even while downstream enrichment is still running. The technical enrichment endpoint serves `heal_observed_variant_enrichment.csv` for source-level QA. The interpretive enrichment endpoint serves `heal_fon_interpretation_enriched_observed69.csv`, matching the deterministic Colab output shape for user/AI review while adding `Canon Effect` from the curated canon. The browser receives CSV attachments; JSON results and download responses do not expose internal filesystem paths.
+The VCF-canon match download endpoint serves the per-job `sheet_final_consolidated.csv` artifact for QA as soon as that artifact exists. Match preparation download endpoints similarly become available as soon as the preparation CSVs exist, even while downstream enrichment is still running. The technical enrichment endpoint serves `heal_observed_variant_enrichment.csv` for source-level QA. The interpretive enrichment endpoint serves `heal_fon_interpretation_enriched_observed69.csv`, matching the deterministic Colab output shape for user/AI review while adding `Canon Effect` from the curated canon. The Enrichment Plus endpoint serves `heal_fon_interpretation_enrichment_plus.csv`, which keeps the Colab-style fields and appends normalized clinical/evidence fields from VEP, ClinVar, population frequencies, GWAS Catalog, and ClinPGx/PharmGKB. The browser receives CSV attachments; JSON results and download responses do not expose internal filesystem paths.
 
 The match polling response includes an `artifactsReady` object:
 
@@ -163,7 +164,8 @@ The match polling response includes an `artifactsReady` object:
   "debug": true,
   "preparation": true,
   "enrichment": false,
-  "enrichmentInterpretive": false
+  "enrichmentInterpretive": false,
+  "enrichmentPlus": false
 }
 ```
 

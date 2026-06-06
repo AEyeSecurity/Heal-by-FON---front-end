@@ -154,6 +154,7 @@ const COPY = {
     matchPreparationAuditDownload: "Descargar CSV preparado",
     matchPreparationMinimalDownload: "Descargar CSV minimo",
     enrichmentDownload: "Descargar CSV interpretativo",
+    enrichmentPlusDownload: "Descargar CSV Enrichment Plus",
     enrichmentQaDownload: "Descargar CSV tecnico QA",
     matchDownloadFailed: "No se pudo descargar el CSV de matches.",
     canonDownloadFailed: "No se pudo descargar el canon.",
@@ -294,6 +295,7 @@ const COPY = {
     matchPreparationAuditDownload: "Download prepared CSV",
     matchPreparationMinimalDownload: "Download minimal CSV",
     enrichmentDownload: "Download interpretive CSV",
+    enrichmentPlusDownload: "Download Enrichment Plus CSV",
     enrichmentQaDownload: "Download technical QA CSV",
     matchDownloadFailed: "Could not download matches CSV.",
     canonDownloadFailed: "Could not download canon.",
@@ -1043,6 +1045,13 @@ function MatchResultPanel({ result, locale, t }) {
     );
   }
 
+  async function downloadEnrichmentPlus() {
+    await downloadCsv(
+      `/api/vcf-canon-matches/${result.jobId}/enrichment-plus`,
+      "heal-fon-interpretation-enrichment-plus.csv",
+    );
+  }
+
   async function downloadEnrichmentQa() {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/enrichment`, "heal-observed-variant-enrichment.csv");
   }
@@ -1101,6 +1110,10 @@ function MatchResultPanel({ result, locale, t }) {
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadEnrichment}>
           <Download size={17} />
           {t.enrichmentDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadEnrichmentPlus}>
+          <Download size={17} />
+          {t.enrichmentPlusDownload}
         </button>
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadEnrichmentQa}>
           <Download size={17} />

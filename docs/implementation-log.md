@@ -373,3 +373,23 @@ Validation:
   - technical QA CSV: 5 rows, 59 columns, including `canon_effect`
   - VEP transcript summary with SIFT/PolyPhen/amino-acid/protein-position detail
 - A full fresh-cache enrichment smoke was started but exceeded the interactive timeout; the targeted subset smoke reused the new schema cache entries generated before timeout.
+
+### Enrichment Plus Artifact
+
+- Kept the existing technical QA enrichment CSV unchanged as the low-level audit artifact.
+- Kept the Colab-style interpretive enrichment CSV as the notebook-parity artifact.
+- Added a third output, `heal_fon_interpretation_enrichment_plus.csv`, for richer downstream AI/clinical interpretation.
+- Expanded the enrichment source set with:
+  - GWAS Catalog associations by rsID.
+  - ClinPGx/PharmGKB variant, clinical annotation, and variant annotation lookups.
+  - VEP advanced fields including HGVS, MANE/canonical transcript, domains, CADD, REVEL, AlphaMissense, SIFT, PolyPhen, and protein-level coordinates when available.
+- Added normalized/derived interpretive helpers:
+  - ClinVar normalized classification.
+  - ClinVar evidence strength.
+  - ClinVar conflict flag.
+  - population max-frequency summary.
+  - interpretation readiness summary.
+- Added backend route:
+  - `GET /api/vcf-canon-matches/:jobId/enrichment-plus`
+- Added frontend download button:
+  - `Descargar CSV Enrichment Plus`

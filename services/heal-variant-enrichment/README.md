@@ -17,16 +17,21 @@ Processing:
   - Ensembl VEP
   - ClinVar E-utilities
   - MyVariant.info
+  - GWAS Catalog
+  - ClinPGx/PharmGKB
 
 Outputs:
 
 - `heal_observed_variant_enrichment.csv`
 - `heal_fon_interpretation_enriched_observed69.csv`
+- `heal_fon_interpretation_enrichment_plus.csv`
 - `observed_variant_enrichment_summary.json`
 
 `heal_observed_variant_enrichment.csv` is the technical QA output. It includes patient allele context, `canon_effect`, allele/external support summaries, Ensembl Variation/VEP summaries, ClinVar `esearch` plus `esummary`, MyVariant-derived fields, and compact raw JSON snippets for source-level QA.
 
 `heal_fon_interpretation_enriched_observed69.csv` is the Colab-style interpretive output. It keeps the deterministic notebook column names and ordering, restores the narrative `external_support_summary`, adds `Canon Effect` from the curated canon, and is the preferred input for downstream user-facing interpretation or AI review.
+
+`heal_fon_interpretation_enrichment_plus.csv` is the richer downstream interpretation artifact. It keeps the Colab-style columns and appends normalized ClinVar evidence, population-frequency summaries, VEP picked transcript/HGVS/MANE/protein fields, CADD/REVEL/AlphaMissense/SIFT/PolyPhen signals when available, GWAS Catalog associations, ClinPGx/PharmGKB pharmacogenomic annotations, PubMed IDs, source error flags, and compact raw JSON snippets for audit.
 
 The VEP transcript summary keeps transcript ID, consequence, impact, biotype, SIFT, PolyPhen, amino-acid change, and protein position when Ensembl provides those fields.
 

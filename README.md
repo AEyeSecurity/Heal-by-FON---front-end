@@ -73,6 +73,7 @@ GET  /api/vcf-canon-matches/:jobId/preparation-audit
 GET  /api/vcf-canon-matches/:jobId/preparation-minimal
 GET  /api/vcf-canon-matches/:jobId/enrichment
 GET  /api/vcf-canon-matches/:jobId/enrichment-interpretive
+GET  /api/vcf-canon-matches/:jobId/enrichment-plus
 ```
 
 Default chunk size is 8 MiB. This keeps every request well below Cloudflare's common proxied request body limits while allowing multi-GB VCF files to land on the server by streaming each chunk to disk. The browser only receives an `uploadId`; local server paths stay on the backend.
