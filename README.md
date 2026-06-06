@@ -107,6 +107,8 @@ The VCF-canon match step internally includes the targeted VCF scan and match pre
 
 As each stage finishes, the UI exposes CSV downloads for QA and review. The API serves the per-job consolidated match CSV and prepared audit/minimal CSVs as soon as those artifacts exist, even if later enrichment is still running. Once enrichment finishes, the current technical enrichment CSV remains available as a QA artifact and a second Colab-style interpretive CSV becomes available for user/AI review. Local server paths are not exposed.
 
+The interpretive CSV preserves the Colab-style enrichment fields and also carries the curated canon context as `Canon Effect`. This keeps the downstream interpretation layer from having to infer gene-level meaning from memory or external search when the canon already supplied that context.
+
 After match preparation, the backend invokes:
 
 ```text

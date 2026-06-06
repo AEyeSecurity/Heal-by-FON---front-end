@@ -341,3 +341,35 @@ Validation:
 - `node --check server\dev-api.js` passed.
 - `npm run build` passed.
 - Local UI smoke loaded successfully at `http://127.0.0.1:5173/`.
+
+### Canon Context and Colab Debug Parity
+
+- Compared the Colab intermediate files against the app-generated artifacts:
+  - `sheet_final_consolidated (master).csv`
+  - `vcf_joined_chr_pos (1).csv`
+  - `heal_fon_interpretation_enriched_observed69.csv`
+- Found that the app kept the canon `effect` column in `sheet_final_consolidated.csv` but dropped it before enrichment.
+- Added `Canon Effect` to match preparation outputs and the Colab-style interpretive enrichment CSV.
+- Added `canon_effect` to the technical QA enrichment CSV.
+- Expanded Ensembl VEP transcript summaries to include transcript ID, consequence, impact, biotype, SIFT, PolyPhen, amino-acid change, and protein positions when available.
+- Added `vcf_joined_chr_pos.csv` as a match debug artifact that joins targeted VCF hits back to rsID, source rows, source tables, categories, genes, and resolved coordinate metadata.
+- Exposed the new debug artifact through:
+  - `GET /api/vcf-canon-matches/:jobId/debug/vcf_joined_chr_pos`
+  - the frontend Control de Calidad download section.
+- Bumped enrichment cache schema version to refresh older VEP summaries.
+- Synced updated Python service scripts to `C:\ServerCIT\services`.
+
+Validation:
+
+- `python -m py_compile` passed for repository scripts and deployed runtime scripts.
+- `node --check server\dev-api.js` passed.
+- Real VCF-canon match smoke against the current sample VCF produced:
+  - 149 consolidated rows
+  - 56 raw VCF candidate rows
+  - 56 joined VCF candidate rows
+  - 4,902,011 scanned VCF variant rows
+- Enrichment subset smoke produced:
+  - interpretive CSV: 5 rows, 56 columns, including `Canon Effect`
+  - technical QA CSV: 5 rows, 59 columns, including `canon_effect`
+  - VEP transcript summary with SIFT/PolyPhen/amino-acid/protein-position detail
+- A full fresh-cache enrichment smoke was started but exceeded the interactive timeout; the targeted subset smoke reused the new schema cache entries generated before timeout.

@@ -153,7 +153,7 @@ The API returns validation results without exposing local filesystem paths. Publ
 
 Local paths remain internal to the backend and n8n integration.
 
-The VCF-canon match download endpoint serves the per-job `sheet_final_consolidated.csv` artifact for QA as soon as that artifact exists. Match preparation download endpoints similarly become available as soon as the preparation CSVs exist, even while downstream enrichment is still running. The technical enrichment endpoint serves `heal_observed_variant_enrichment.csv` for source-level QA. The interpretive enrichment endpoint serves `heal_fon_interpretation_enriched_observed69.csv`, matching the deterministic Colab output shape for user/AI review. The browser receives CSV attachments; JSON results and download responses do not expose internal filesystem paths.
+The VCF-canon match download endpoint serves the per-job `sheet_final_consolidated.csv` artifact for QA as soon as that artifact exists. Match preparation download endpoints similarly become available as soon as the preparation CSVs exist, even while downstream enrichment is still running. The technical enrichment endpoint serves `heal_observed_variant_enrichment.csv` for source-level QA. The interpretive enrichment endpoint serves `heal_fon_interpretation_enriched_observed69.csv`, matching the deterministic Colab output shape for user/AI review while adding `Canon Effect` from the curated canon. The browser receives CSV attachments; JSON results and download responses do not expose internal filesystem paths.
 
 The match polling response includes an `artifactsReady` object:
 
@@ -173,6 +173,7 @@ Control de Calidad mode exposes additional debug downloads through whitelisted e
 
 ```text
 GET /api/vcf-canon-matches/:jobId/debug/vcf_candidates
+GET /api/vcf-canon-matches/:jobId/debug/vcf_joined_chr_pos
 GET /api/vcf-canon-matches/:jobId/debug/match_strict
 GET /api/vcf-canon-matches/:jobId/debug/alt_review
 GET /api/vcf-canon-matches/:jobId/debug/position_review

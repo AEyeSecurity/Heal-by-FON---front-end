@@ -260,6 +260,7 @@ def process(canon_clean_path: Path, rsid_ready_path: Path, vcf_path: Path, outpu
     canon_rows = read_csv(canon_clean_path)
     rsid_ready_rows = read_csv(rsid_ready_path)
     ready_by_rsid = {}
+    ready_by_key = {}
     target_keys = set()
     for row in rsid_ready_rows:
         rsid = str(row.get("rsid", "")).strip().lower()
@@ -268,12 +269,78 @@ def process(canon_clean_path: Path, rsid_ready_path: Path, vcf_path: Path, outpu
         key = str(row.get("match_key_chr_pos", "")).strip()
         if key:
             target_keys.add(key)
+            ready_by_key.setdefault(key, []).append(row)
+
+    source_by_rsid = {}
+    for source in canon_rows:
+        rsid = str(source.get("rsid") or "").strip().lower()
+        if not rsid:
+            rsid = first_rsid(source.get("col_A"), source.get("col_B"), source.get("col_C"), source.get("col_D"))
+        if rsid:
+            source_by_rsid.setdefault(rsid, []).append(source)
 
     vcf_candidates, scan_meta, scan_warnings = scan_vcf(vcf_path, target_keys, vcf_parser)
     warnings.extend(scan_warnings)
     evidence_by_key = {}
     for row in vcf_candidates:
         evidence_by_key.setdefault(row["match_key_chr_pos"], row)
+
+    vcf_joined = []
+    for evidence in vcf_candidates:
+        key = evidence.get("match_key_chr_pos", "")
+        ready_rows = ready_by_key.get(key, [])
+        rsids = []
+        source_rows = []
+        source_tables = []
+        categories = []
+        genes = []
+        source_count = 0
+        for ready in ready_rows:
+            rsid = str(ready.get("rsid") or "").strip().lower()
+            if rsid and rsid not in rsids:
+                rsids.append(rsid)
+            for source in source_by_rsid.get(rsid, []):
+                source_count += 1
+                for target, value in [
+                    (source_rows, source.get("row_id")),
+                    (source_tables, source.get("source_group")),
+                    (categories, source.get("col_A") or source.get("category")),
+                    (genes, source.get("col_B") or source.get("gene")),
+                ]:
+                    text = str(value or "").strip()
+                    if text and text not in target:
+                        target.append(text)
+        first_ready = ready_rows[0] if ready_rows else {}
+        vcf_joined.append(
+            {
+                **evidence,
+                "rsid": "|".join(rsids),
+                "n_source_rows": str(source_count),
+                "source_rows": "|".join(source_rows),
+                "source_tables": "|".join(source_tables),
+                "categories": "|".join(categories),
+                "genes": "|".join(genes),
+                "assembly_name": first_ready.get("assembly_name", ""),
+                "chrom": first_ready.get("chrom", ""),
+                "pos": first_ready.get("pos", ""),
+                "end": first_ready.get("end", ""),
+                "ref": first_ready.get("ref", ""),
+                "alt": first_ready.get("alt", ""),
+                "allele_string": first_ready.get("allele_string", ""),
+                "api_status": first_ready.get("api_status", ""),
+                "api_note": first_ready.get("api_note", ""),
+                "chrom_match": first_ready.get("chrom_match", ""),
+                "pos_match": first_ready.get("pos_match", ""),
+                "end_match": first_ready.get("end_match", ""),
+                "ref_match": first_ready.get("ref_match", ""),
+                "alt_match": first_ready.get("alt_match", ""),
+                "match_key_full": first_ready.get("match_key_full", ""),
+                "has_chr_pos": "true" if first_ready.get("chrom_match") and first_ready.get("pos_match") else "false",
+                "has_full_match_fields": "true"
+                if first_ready.get("chrom_match") and first_ready.get("pos_match") and first_ready.get("ref_match") and first_ready.get("alt_match")
+                else "false",
+            }
+        )
 
     sheet_final = []
     for source in canon_rows:
@@ -378,7 +445,33 @@ def process(canon_clean_path: Path, rsid_ready_path: Path, vcf_path: Path, outpu
         "gt_alleles",
         "zygosity",
     ]
+    joined_fields = candidate_fields + [
+        "rsid",
+        "n_source_rows",
+        "source_rows",
+        "source_tables",
+        "categories",
+        "genes",
+        "assembly_name",
+        "chrom",
+        "pos",
+        "end",
+        "ref",
+        "alt",
+        "allele_string",
+        "api_status",
+        "api_note",
+        "chrom_match",
+        "pos_match",
+        "end_match",
+        "ref_match",
+        "alt_match",
+        "match_key_full",
+        "has_chr_pos",
+        "has_full_match_fields",
+    ]
     write_csv(output_dir / "vcf_candidates_chr_pos.csv", vcf_candidates, candidate_fields)
+    write_csv(output_dir / "vcf_joined_chr_pos.csv", vcf_joined, joined_fields)
     write_csv(output_dir / "sheet_final_consolidated.csv", sheet_final, final_fields)
     for status in [
         "match_strict",
@@ -407,6 +500,7 @@ def process(canon_clean_path: Path, rsid_ready_path: Path, vcf_path: Path, outpu
         "metadata": {
             "sheet_final_rows": len(sheet_final),
             "vcf_candidates_rows": len(vcf_candidates),
+            "vcf_joined_rows": len(vcf_joined),
             "target_keys": len(target_keys),
             "match_status_counts": dict(match_counts),
             "source_group_counts": dict(source_counts),
@@ -414,6 +508,7 @@ def process(canon_clean_path: Path, rsid_ready_path: Path, vcf_path: Path, outpu
         },
         "outputs": {
             "vcfCandidatesCsv": str(output_dir / "vcf_candidates_chr_pos.csv"),
+            "vcfJoinedChrPosCsv": str(output_dir / "vcf_joined_chr_pos.csv"),
             "sheetFinalConsolidatedCsv": str(output_dir / "sheet_final_consolidated.csv"),
             "sheetFinalMatchStrictCsv": str(output_dir / "sheet_final_match_strict.csv"),
             "sheetFinalMatchLikelyNeedsAltReviewCsv": str(output_dir / "sheet_final_match_likely_needs_alt_review.csv"),

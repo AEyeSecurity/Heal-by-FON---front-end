@@ -24,9 +24,11 @@ Outputs:
 - `heal_fon_interpretation_enriched_observed69.csv`
 - `observed_variant_enrichment_summary.json`
 
-`heal_observed_variant_enrichment.csv` is the technical QA output. It includes patient allele context, allele/external support summaries, Ensembl Variation/VEP summaries, ClinVar `esearch` plus `esummary`, MyVariant-derived fields, and compact raw JSON snippets for source-level QA.
+`heal_observed_variant_enrichment.csv` is the technical QA output. It includes patient allele context, `canon_effect`, allele/external support summaries, Ensembl Variation/VEP summaries, ClinVar `esearch` plus `esummary`, MyVariant-derived fields, and compact raw JSON snippets for source-level QA.
 
-`heal_fon_interpretation_enriched_observed69.csv` is the Colab-style interpretive output. It keeps the deterministic notebook column names and ordering, restores the narrative `external_support_summary`, and is the preferred input for downstream user-facing interpretation or AI review.
+`heal_fon_interpretation_enriched_observed69.csv` is the Colab-style interpretive output. It keeps the deterministic notebook column names and ordering, restores the narrative `external_support_summary`, adds `Canon Effect` from the curated canon, and is the preferred input for downstream user-facing interpretation or AI review.
+
+The VEP transcript summary keeps transcript ID, consequence, impact, biotype, SIFT, PolyPhen, amino-acid change, and protein position when Ensembl provides those fields.
 
 Example:
 

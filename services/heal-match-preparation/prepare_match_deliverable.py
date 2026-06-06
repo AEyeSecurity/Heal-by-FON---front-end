@@ -136,6 +136,7 @@ def build_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
             "Genotype": genotype_for_deliverable(row.get("gt_alleles")),
             "Zygosity": clean_str(row.get("zygosity")) or "NA",
             "Ref/Alt": ref_alt_for_deliverable(row),
+            "Canon Effect": clean_str(row.get("effect")),
             "Interpretation (1 sentence)": interpretation_placeholder(row),
             "Confidence Level": confidence_level(row),
         }
@@ -180,6 +181,7 @@ def process(input_path: Path, output_dir: Path) -> dict:
         "Genotype",
         "Zygosity",
         "Ref/Alt",
+        "Canon Effect",
         "Interpretation (1 sentence)",
         "Confidence Level",
     ]

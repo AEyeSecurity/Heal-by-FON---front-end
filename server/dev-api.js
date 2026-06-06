@@ -1465,6 +1465,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
       job.artifacts = {
         sheetFinalConsolidatedCsv: summary.outputs?.sheetFinalConsolidatedCsv || "",
         vcfCandidatesCsv: summary.outputs?.vcfCandidatesCsv || "",
+        vcfJoinedChrPosCsv: summary.outputs?.vcfJoinedChrPosCsv || "",
         sheetFinalMatchStrictCsv: summary.outputs?.sheetFinalMatchStrictCsv || "",
         sheetFinalMatchLikelyNeedsAltReviewCsv: summary.outputs?.sheetFinalMatchLikelyNeedsAltReviewCsv || "",
         sheetFinalMatchByPositionNeedsReviewCsv: summary.outputs?.sheetFinalMatchByPositionNeedsReviewCsv || "",
@@ -1619,6 +1620,7 @@ app.get("/api/vcf-canon-matches/:jobId/debug/:artifact", async (req, res) => {
 
   const artifactMap = {
     vcf_candidates: "vcfCandidatesCsv",
+    vcf_joined_chr_pos: "vcfJoinedChrPosCsv",
     match_strict: "sheetFinalMatchStrictCsv",
     alt_review: "sheetFinalMatchLikelyNeedsAltReviewCsv",
     position_review: "sheetFinalMatchByPositionNeedsReviewCsv",

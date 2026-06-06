@@ -93,7 +93,7 @@ The frontend exposes download buttons for:
 - the raw consolidated match CSV from Workflow 4
 - the audit-ready match preparation CSV from Workflow 4's internal preparation stage
 - the minimal deliverable-style CSV from Workflow 4's internal preparation stage
-- QA/debug match CSVs: VCF position candidates, strict matches, ALT-review matches, position-review matches, and no-position-match rows
+- QA/debug match CSVs: VCF position candidates, VCF candidates joined back to canon/rsID metadata, strict matches, ALT-review matches, position-review matches, and no-position-match rows
 
 ## Workflow 5 - External Variant Enrichment
 
@@ -123,9 +123,11 @@ Scope:
 - produce a technical enriched audit CSV for QA
 - produce a Colab-style interpretive enriched CSV for user/AI review
 
-The technical QA CSV keeps the broad source-level detail needed for debugging: patient allele context, `allele_match_summary`, generic `external_support_summary`, Ensembl mapping/phenotype/population/VEP transcript summaries, colocated variants, ClinVar details, MyVariant CADD/dbSNP/dbNSFP-derived fields, and compact raw JSON columns.
+The technical QA CSV keeps the broad source-level detail needed for debugging: patient allele context, curated `canon_effect`, `allele_match_summary`, generic `external_support_summary`, Ensembl mapping/phenotype/population/VEP transcript summaries, colocated variants, ClinVar details, MyVariant CADD/dbSNP/dbNSFP-derived fields, and compact raw JSON columns.
 
-The interpretive CSV mirrors the deterministic Colab output shape. It writes `heal_fon_interpretation_enriched_observed69.csv` with the Colab column names and ordering, including the more narrative `external_support_summary`, `myvariant_best_id`, `myvariant_best_score`, `myvariant_top_level_fields`, `Notes`, and `Interpretation (1 sentence)`.
+The interpretive CSV mirrors the deterministic Colab output shape and adds `Canon Effect` from the curated canon. It writes `heal_fon_interpretation_enriched_observed69.csv` with the Colab column names and ordering, including the more narrative `external_support_summary`, `myvariant_best_id`, `myvariant_best_score`, `myvariant_top_level_fields`, `Notes`, and `Interpretation (1 sentence)`. `Canon Effect` is intentionally carried forward so downstream AI/user-facing interpretation can use the canon's own biological context instead of inventing it.
+
+The VEP transcript summary now keeps transcript-level details when Ensembl returns them: transcript ID, consequence, impact, biotype, SIFT, PolyPhen, amino-acid change, and protein positions.
 
 Outputs:
 
@@ -162,6 +164,8 @@ GET /api/vcf-canon-matches/:jobId/enrichment
 GET /api/vcf-canon-matches/:jobId/enrichment-interpretive
 GET /api/vcf-canon-matches/:jobId/debug/:artifact
 ```
+
+The `debug/:artifact` whitelist includes `vcf_candidates` and `vcf_joined_chr_pos`. `vcf_candidates` is the raw targeted VCF extraction; `vcf_joined_chr_pos` is the Colab-style debug table that joins those VCF hits back to rsID, source rows, categories, genes, and resolved coordinate metadata.
 
 The match and preparation CSVs are downloadable as soon as their files exist, even if external enrichment is still running or later fails. The technical QA enrichment and interpretive enrichment CSVs remain downloadable only after their own files exist. The API verifies job ownership and allowed filesystem roots before serving any artifact. Local paths are not exposed in browser JSON.
 

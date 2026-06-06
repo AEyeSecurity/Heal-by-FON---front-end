@@ -17,7 +17,7 @@ from pathlib import Path
 
 DEFAULT_TIMEOUT_SECONDS = 18
 DEFAULT_CACHE_TTL_DAYS = 14
-CACHE_SCHEMA_VERSION = 3
+CACHE_SCHEMA_VERSION = 4
 USER_AGENT = "HEAL-by-FON-prototype/0.1"
 
 
@@ -232,11 +232,21 @@ def fetch_ensembl_vep(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
                 part
                 for part in [
                     f"gene={clean_str(entry.get('gene_symbol'))}" if clean_str(entry.get("gene_symbol")) else "",
-                    f"transcript={clean_str(entry.get('transcript_id'))}" if clean_str(entry.get("transcript_id")) else "",
-                    f"impact={clean_str(entry.get('impact'))}" if clean_str(entry.get("impact")) else "",
-                    f"terms={unique_join(entry.get('consequence_terms') or [], limit=4)}"
+                    f"tx={clean_str(entry.get('transcript_id'))}" if clean_str(entry.get("transcript_id")) else "",
+                    f"consequence={unique_join(entry.get('consequence_terms') or [], limit=6)}"
                     if entry.get("consequence_terms")
                     else "",
+                    f"impact={clean_str(entry.get('impact'))}" if clean_str(entry.get("impact")) else "",
+                    f"biotype={clean_str(entry.get('biotype'))}" if clean_str(entry.get("biotype")) else "",
+                    f"sift={clean_str(entry.get('sift_prediction'))}" if clean_str(entry.get("sift_prediction")) else "",
+                    f"sift_score={clean_str(entry.get('sift_score'))}" if clean_str(entry.get("sift_score")) else "",
+                    f"polyphen={clean_str(entry.get('polyphen_prediction'))}"
+                    if clean_str(entry.get("polyphen_prediction"))
+                    else "",
+                    f"polyphen_score={clean_str(entry.get('polyphen_score'))}" if clean_str(entry.get("polyphen_score")) else "",
+                    f"amino_acids={clean_str(entry.get('amino_acids'))}" if clean_str(entry.get("amino_acids")) else "",
+                    f"protein_start={clean_str(entry.get('protein_start'))}" if clean_str(entry.get("protein_start")) else "",
+                    f"protein_end={clean_str(entry.get('protein_end'))}" if clean_str(entry.get("protein_end")) else "",
                 ]
                 if part
             )
@@ -532,6 +542,7 @@ def build_output_row(row: dict, enrichment: dict) -> dict:
         "Genotype": clean_str(row.get("Genotype")),
         "Zygosity": clean_str(row.get("Zygosity")),
         "Ref/Alt": clean_str(row.get("Ref/Alt")),
+        "canon_effect": first_present(row.get("Canon Effect"), row.get("effect")),
         "patient_ref": first_present(row.get("ref_vcf"), row.get("ref")),
         "patient_alt_catalog": first_present(row.get("alt_vcf"), row.get("alt")),
         "patient_observed_alt_alleles": observed_alt_alleles(row),
@@ -602,6 +613,7 @@ def build_colab_output_row(row: dict, enrichment: dict) -> dict:
         "Gene": clean_str(row.get("Gene")),
         "SNP (rsID)": normalize_rsid(row.get("SNP (rsID)")),
         "Category / Module": clean_str(row.get("Category / Module")),
+        "Canon Effect": first_present(row.get("Canon Effect"), row.get("effect")),
         "Genotype": clean_str(row.get("Genotype")),
         "gt_alleles": clean_str(row.get("gt_alleles") or row.get("Genotype")),
         "patient_gt_alleles": clean_str(row.get("gt_alleles") or row.get("Genotype")),
@@ -700,6 +712,7 @@ def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds
         "external_support_summary",
         "Confidence Level",
         "Category / Module",
+        "canon_effect",
         "Review Status",
         "match_status",
         "source_group",
@@ -752,6 +765,7 @@ def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds
         "Gene",
         "SNP (rsID)",
         "Category / Module",
+        "Canon Effect",
         "Genotype",
         "gt_alleles",
         "patient_gt_alleles",

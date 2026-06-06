@@ -50,6 +50,7 @@ const COPY = {
     playStage: "Ejecutar etapa",
     debugDownloads: "Descargas QA",
     qaVcfCandidates: "Candidatos VCF por posicion",
+    qaVcfJoined: "VCF unido con canon",
     qaStrict: "QA matches estrictos",
     qaAltReview: "QA revision ALT",
     qaPositionReview: "QA revision por posicion",
@@ -189,6 +190,7 @@ const COPY = {
     playStage: "Run stage",
     debugDownloads: "QA downloads",
     qaVcfCandidates: "VCF position candidates",
+    qaVcfJoined: "VCF joined with canon",
     qaStrict: "QA strict matches",
     qaAltReview: "QA ALT review",
     qaPositionReview: "QA position review",
@@ -1110,6 +1112,10 @@ function MatchResultPanel({ result, locale, t }) {
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={() => downloadDebugArtifact("vcf_candidates", "heal-vcf-candidates.csv")}>
           <Download size={17} />
           {t.qaVcfCandidates}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={() => downloadDebugArtifact("vcf_joined_chr_pos", "heal-vcf-joined-chr-pos.csv")}>
+          <Download size={17} />
+          {t.qaVcfJoined}
         </button>
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={() => downloadDebugArtifact("match_strict", "heal-match-strict.csv")}>
           <Download size={17} />
