@@ -11,6 +11,8 @@ VCF upload
   -> Workflow 1: VCF Integrity Check
   -> Workflow 4: VCF-Canon Match, targeted scan, and match preparation
   -> Workflow 5: External Variant Enrichment
+  -> LLM1: Individual Variant Interpretation
+  -> Deterministic QA Normalization
   -> Downstream analysis placeholder
 ```
 
@@ -166,6 +168,8 @@ GET /api/vcf-canon-matches/:jobId/enrichment-plus
 POST /api/vcf-canon-matches/:jobId/retry-enrichment
 POST /api/vcf-canon-matches/:jobId/individual-interpretation
 GET /api/vcf-canon-matches/:jobId/individual-interpretations
+POST /api/vcf-canon-matches/:jobId/interpretation-normalization
+GET /api/vcf-canon-matches/:jobId/individual-interpretations-normalized
 GET /api/vcf-canon-matches/:jobId/debug/:artifact
 ```
 
@@ -173,7 +177,7 @@ The `debug/:artifact` whitelist includes `vcf_candidates` and `vcf_joined_chr_po
 
 The match and preparation CSVs are downloadable as soon as their files exist, even if external enrichment is still running or later fails. The technical QA enrichment, Colab-style interpretive enrichment, and Enrichment Plus CSVs remain downloadable only after their own files exist. The API verifies job ownership and allowed filesystem roots before serving any artifact. Local paths are not exposed in browser JSON.
 
-The polling response exposes `artifactsReady.matches`, `artifactsReady.preparation`, `artifactsReady.enrichment`, `artifactsReady.enrichmentInterpretive`, and `artifactsReady.enrichmentPlus` so the frontend can show each progress-bar download icon as soon as the corresponding audit/review CSV is ready.
+The polling response exposes `artifactsReady.matches`, `artifactsReady.preparation`, `artifactsReady.enrichment`, `artifactsReady.enrichmentInterpretive`, `artifactsReady.enrichmentPlus`, `artifactsReady.individualInterpretation`, and `artifactsReady.interpretationNormalization` so the frontend can show each progress-bar download icon as soon as the corresponding audit/review CSV is ready.
 
 ## Enrichment Plus Output
 
@@ -221,6 +225,43 @@ HEAL_INDIVIDUAL_INTERPRETATION_ROOT=C:\ServerCIT\services\heal-individual-interp
 ```
 
 This module does not group repeated rsIDs, create system-level summaries, or produce the final family/professional report. Those remain later modules.
+
+## Deterministic QA Normalization
+
+This stage runs after LLM1 and before deterministic grouping or LLM2. It is intentionally separate from LLM1 so prompt/model changes and QA rule changes can be audited independently.
+
+```text
+Input:  individual_variant_interpretations.csv
+Output: individual_variant_interpretations_normalized.csv
+```
+
+Runtime service:
+
+```text
+C:\ServerCIT\services\heal-interpretation-normalization
+```
+
+Repository source copy:
+
+```text
+services/heal-interpretation-normalization
+```
+
+Key script:
+
+```text
+normalize_individual_interpretations.py
+```
+
+Generalized rules:
+
+- normalize repeated `gene + rsID + observed genotype + zygosity + REF/ALT` groups so the core genetic confidence stays stable across modules;
+- cap high-confidence synonymous/non-diploid/context-limited rows to `Moderate` when evidence is benign/common/limited and no stronger support is present;
+- raise selected non-coding `Low` rows to `Moderate` only when the row has strong, explicit biomarker-style association evidence such as serum IgE, plasma/serum metabolites, or enzyme activity;
+- shorten overlong one-sentence Spanish/English summaries while preserving original text in `original_interpretation_one_sentence_*`;
+- add `original_final_confidence_level`, `normalization_status`, `normalization_reason`, `duplicate_group_size`, `qa_warnings`, and `normalized_at` columns for audit.
+
+The current smoke test against the 69-row LLM1 output adjusted or flagged 9 rows: COMT duplicate consistency, DRD2 duplicate/locus ambiguity, MAOA confidence cap, FCER1A biomarker association upgrade, and two long Spanish sentence shortenings. It does not use gene-specific or rsID-specific override lists.
 
 ## Colab Output Boundary
 

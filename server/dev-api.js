@@ -34,6 +34,9 @@ const VARIANT_ENRICHMENT_ROOT =
 const INDIVIDUAL_INTERPRETATION_ROOT =
   process.env.HEAL_INDIVIDUAL_INTERPRETATION_ROOT ||
   "C:\\ServerCIT\\services\\heal-individual-interpretation";
+const INTERPRETATION_NORMALIZATION_ROOT =
+  process.env.HEAL_INTERPRETATION_NORMALIZATION_ROOT ||
+  "C:\\ServerCIT\\services\\heal-interpretation-normalization";
 const PYTHON_EXE = process.env.HEAL_PYTHON_EXE || "python";
 const MAX_UPLOADS = Math.max(1, Number.parseInt(process.env.HEAL_MAX_UPLOADS || "12", 10) || 12);
 const UPLOAD_TTL_MS =
@@ -112,7 +115,7 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, X-Chunk-Index, X-Upload-Id, X-Canon-File-Name, X-Turnstile-Token",
+    "Content-Type, X-Chunk-Index, X-Upload-Id, X-Canon-File-Name, X-Turnstile-Token, X-HEAL-Access-Token",
   );
   if (req.method === "OPTIONS") {
     res.status(204).send();
@@ -195,6 +198,14 @@ function individualInterpretationPaths() {
   };
 }
 
+function interpretationNormalizationPaths() {
+  const root = path.resolve(INTERPRETATION_NORMALIZATION_ROOT);
+  return {
+    root,
+    runs: path.join(root, "runs"),
+  };
+}
+
 function clientIp(req) {
   const forwarded = req.headers["cf-connecting-ip"] || req.headers["x-forwarded-for"];
   if (Array.isArray(forwarded)) return forwarded[0];
@@ -205,6 +216,23 @@ function clientIp(req) {
 function clientFingerprint(req) {
   const source = `${clientIp(req)}|${req.headers["user-agent"] || ""}`;
   return crypto.createHash("sha256").update(source).digest("hex");
+}
+
+function requestAccessToken(req) {
+  return String(req.headers["x-heal-access-token"] || req.body?.accessToken || req.query?.accessToken || "");
+}
+
+function tokenMatches(expected, actual) {
+  if (!expected || !actual) return false;
+  const expectedBuffer = Buffer.from(String(expected));
+  const actualBuffer = Buffer.from(String(actual));
+  return expectedBuffer.length === actualBuffer.length && crypto.timingSafeEqual(expectedBuffer, actualBuffer);
+}
+
+function canAccessUpload(req, upload) {
+  if (!upload) return false;
+  if (tokenMatches(upload.accessToken, requestAccessToken(req))) return true;
+  return !upload.clientFingerprint || upload.clientFingerprint === clientFingerprint(req);
 }
 
 function checkInitRateLimit(req) {
@@ -248,6 +276,7 @@ function publicUpload(upload) {
   const receivedChunks = upload.receivedChunks.filter(Boolean).length;
   return {
     uploadId: upload.uploadId,
+    accessToken: upload.accessToken || null,
     fileName: upload.fileName,
     sizeBytes: upload.sizeBytes,
     chunkSizeBytes: upload.chunkSizeBytes,
@@ -336,6 +365,14 @@ function sanitizeIndividualInterpretationResult(result) {
   return publicResult;
 }
 
+function sanitizeInterpretationNormalizationResult(result) {
+  const publicResult = JSON.parse(JSON.stringify(result || {}));
+  delete publicResult.inputPath;
+  delete publicResult.outputDir;
+  delete publicResult.outputs;
+  return publicResult;
+}
+
 function publicArtifactsReady(job) {
   const artifacts = job.artifacts || {};
   return {
@@ -352,6 +389,7 @@ function publicArtifactsReady(job) {
     enrichmentInterpretive: Boolean(artifacts.observedVariantInterpretiveCsv),
     enrichmentPlus: Boolean(artifacts.observedVariantEnrichmentPlusCsv),
     individualInterpretation: Boolean(artifacts.individualVariantInterpretationsCsv),
+    interpretationNormalization: Boolean(artifacts.individualVariantInterpretationsNormalizedCsv),
   };
 }
 
@@ -694,6 +732,13 @@ async function processIndividualInterpretation(payload, job) {
   );
 }
 
+async function processInterpretationNormalization(payload) {
+  return await runBase64JsonScript(
+    path.join(INTERPRETATION_NORMALIZATION_ROOT, "normalize_individual_interpretations.py"),
+    payload,
+  );
+}
+
 async function processVariantEnrichmentWithRetry(payload, job, attempts = 3) {
   const errors = [];
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -859,7 +904,12 @@ function publicJob(job) {
 }
 
 function shouldPersistVcfCanonJob(job) {
-  return Boolean(job?.artifacts || ["matching", "preparing", "enriching"].includes(job?.stage || ""));
+  return Boolean(
+    job?.artifacts ||
+      ["matching", "preparing", "enriching", "individual_interpretation", "interpretation_normalization"].includes(
+        job?.stage || "",
+      ),
+  );
 }
 
 function vcfCanonJobPath(jobId) {
@@ -952,6 +1002,7 @@ app.get("/api/health", (_req, res) => {
     matchPreparationRoot: MATCH_PREPARATION_ROOT,
     variantEnrichmentRoot: VARIANT_ENRICHMENT_ROOT,
     individualInterpretationRoot: INDIVIDUAL_INTERPRETATION_ROOT,
+    interpretationNormalizationRoot: INTERPRETATION_NORMALIZATION_ROOT,
     individualInterpretationConfigured: Boolean(process.env.HEAL_OPENAI_API_KEY || process.env.OPENAI_API_KEY),
     individualInterpretationModel: LLM1_MODEL,
     maxCanonFileSizeBytes: MAX_CANON_FILE_SIZE_BYTES,
@@ -1207,6 +1258,7 @@ app.post("/api/uploads/lookup", async (req, res) => {
   res.json({
     match: {
       uploadId: upload.uploadId,
+      accessToken: upload.accessToken || null,
       fileName: upload.fileName,
       sizeBytes: upload.sizeBytes,
       createdAt: upload.createdAt,
@@ -1271,6 +1323,7 @@ app.post("/api/uploads/init", async (req, res) => {
   const now = new Date().toISOString();
   const upload = {
     uploadId,
+    accessToken: crypto.randomBytes(32).toString("base64url"),
     fileName,
     originalFileName: String(rawFileName || fileName),
     contentType,
@@ -1295,7 +1348,7 @@ app.put("/api/uploads/:uploadId/chunks/:chunkIndex", async (req, res) => {
     res.status(404).json({ error: "Upload not found." });
     return;
   }
-  if (upload.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+  if (!canAccessUpload(req, upload)) {
     res.status(403).json({ error: "Upload belongs to a different client." });
     return;
   }
@@ -1348,7 +1401,7 @@ app.post("/api/uploads/:uploadId/complete", async (req, res) => {
     res.status(404).json({ error: "Upload not found." });
     return;
   }
-  if (upload.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+  if (!canAccessUpload(req, upload)) {
     res.status(403).json({ error: "Upload belongs to a different client." });
     return;
   }
@@ -1375,7 +1428,7 @@ app.get("/api/uploads/:uploadId", async (req, res) => {
     res.status(404).json({ error: "Upload not found." });
     return;
   }
-  if (upload.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+  if (!canAccessUpload(req, upload)) {
     res.status(403).json({ error: "Upload belongs to a different client." });
     return;
   }
@@ -1401,7 +1454,7 @@ app.post("/api/validations", async (req, res) => {
     res.status(404).json({ error: "Upload not found." });
     return;
   }
-  if (upload.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+  if (!canAccessUpload(req, upload)) {
     res.status(403).json({ error: "Upload belongs to a different client." });
     return;
   }
@@ -1547,7 +1600,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
     res.status(404).json({ error: "Upload not found." });
     return;
   }
-  if (upload.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+  if (!canAccessUpload(req, upload)) {
     res.status(403).json({ error: "Upload belongs to a different client." });
     return;
   }
@@ -1764,7 +1817,7 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
   }
 
   const upload = await loadUpload(job.uploadId).catch(() => null);
-  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+  if (upload && !canAccessUpload(req, upload)) {
     res.status(403).json({ error: "Match belongs to a different client." });
     return;
   }
@@ -1854,7 +1907,7 @@ app.post("/api/vcf-canon-matches/:jobId/individual-interpretation", async (req, 
   }
 
   const upload = await loadUpload(job.uploadId).catch(() => null);
-  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+  if (upload && !canAccessUpload(req, upload)) {
     res.status(403).json({ error: "Match belongs to a different client." });
     return;
   }
@@ -1946,6 +1999,105 @@ app.post("/api/vcf-canon-matches/:jobId/individual-interpretation", async (req, 
   res.status(202).json(publicJob(job));
 });
 
+app.post("/api/vcf-canon-matches/:jobId/interpretation-normalization", async (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (job.status === "running") {
+    res.status(409).json({ error: "This job is already running." });
+    return;
+  }
+  if (!job.artifacts?.individualVariantInterpretationsCsv) {
+    res.status(409).json({ error: "Individual interpretation CSV is required before normalization." });
+    return;
+  }
+
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload && !canAccessUpload(req, upload)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+
+  const interpretationPaths = individualInterpretationPaths();
+  const inputCsvPath = path.resolve(job.artifacts.individualVariantInterpretationsCsv || "");
+  if (!isPathInside(interpretationPaths.root, inputCsvPath)) {
+    res.status(400).json({ error: "Individual interpretation CSV is outside the allowed root." });
+    return;
+  }
+  const inputStat = await stat(inputCsvPath).catch(() => null);
+  if (!inputStat || inputStat.size <= 0) {
+    res.status(404).json({ error: "Individual interpretation CSV was not found." });
+    return;
+  }
+
+  job.status = "running";
+  job.progress = Math.max(job.progress || 0, 98);
+  job.stage = "interpretation_normalization";
+  job.stageProgress = 10;
+  job.error = null;
+  job.message = "Normalizing individual interpretation QA";
+  job.updatedAt = new Date().toISOString();
+  await persistVcfCanonJob(job);
+
+  (async () => {
+    try {
+      const normalizationPaths = interpretationNormalizationPaths();
+      await mkdir(normalizationPaths.runs, { recursive: true });
+      const normalizationRunId = `interpretation-normalization-${crypto.randomUUID()}`;
+      const normalizationOutputDir = path.join(normalizationPaths.runs, normalizationRunId);
+      await mkdir(normalizationOutputDir, { recursive: true });
+      const normalizationPayload = {
+        event: "heal.individual_variant_interpretation.normalization_requested",
+        runId: normalizationRunId,
+        matchJobId: job.id,
+        uploadId: job.uploadId,
+        fileName: job.fileName,
+        inputPath: inputCsvPath,
+        outputDir: normalizationOutputDir,
+        requestedAt: new Date().toISOString(),
+      };
+      job.stageProgress = 40;
+      job.message = "Applying deterministic interpretation QA rules";
+      job.updatedAt = new Date().toISOString();
+      await persistVcfCanonJob(job);
+
+      const normalizationSummary = await processInterpretationNormalization(normalizationPayload);
+      job.artifacts.individualVariantInterpretationsNormalizedCsv =
+        normalizationSummary.outputs?.individualInterpretationsNormalizedCsv || "";
+      job.artifacts.individualVariantInterpretationNormalizationWarningsCsv =
+        normalizationSummary.outputs?.individualInterpretationNormalizationWarningsCsv || "";
+      job.artifacts.individualVariantInterpretationNormalizationSummaryJson =
+        normalizationSummary.outputs?.individualInterpretationNormalizationSummaryJson || "";
+      job.result = {
+        ...(job.result || {}),
+        interpretationNormalization: sanitizeInterpretationNormalizationResult(normalizationSummary),
+      };
+      job.status = normalizationSummary.status === "invalid" ? "failed" : "complete";
+      job.progress = 100;
+      job.stage = "interpretation_normalization";
+      job.stageProgress = 100;
+      job.message = "Interpretation QA normalization completed";
+      if (normalizationSummary.status === "invalid") {
+        job.error = normalizationSummary.errors?.[0] || "Interpretation normalization failed.";
+      }
+    } catch (error) {
+      job.status = "failed";
+      job.progress = 100;
+      job.stage = "interpretation_normalization";
+      job.stageProgress = 100;
+      job.error = error.message || String(error);
+      job.message = "Interpretation QA normalization failed";
+    } finally {
+      job.updatedAt = new Date().toISOString();
+      await persistVcfCanonJob(job);
+    }
+  })();
+
+  res.status(202).json(publicJob(job));
+});
+
 app.get("/api/vcf-canon-matches/:jobId/download", async (req, res) => {
   if (REQUIRE_ORIGIN && !req.headers.origin) {
     res.status(403).json({ error: "Origin header is required." });
@@ -1963,7 +2115,7 @@ app.get("/api/vcf-canon-matches/:jobId/download", async (req, res) => {
   }
 
   const upload = await loadUpload(job.uploadId).catch(() => null);
-  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+  if (upload && !canAccessUpload(req, upload)) {
     res.status(403).json({ error: "Match belongs to a different client." });
     return;
   }
@@ -2016,7 +2168,7 @@ app.get("/api/vcf-canon-matches/:jobId/debug/:artifact", async (req, res) => {
   }
 
   const upload = await loadUpload(job.uploadId).catch(() => null);
-  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+  if (upload && !canAccessUpload(req, upload)) {
     res.status(403).json({ error: "Match belongs to a different client." });
     return;
   }
@@ -2055,7 +2207,7 @@ async function downloadMatchPreparationArtifact(req, res, artifactKey, suffix) {
   }
 
   const upload = await loadUpload(job.uploadId).catch(() => null);
-  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+  if (upload && !canAccessUpload(req, upload)) {
     res.status(403).json({ error: "Match belongs to a different client." });
     return;
   }
@@ -2102,7 +2254,7 @@ app.get("/api/vcf-canon-matches/:jobId/enrichment", async (req, res) => {
   }
 
   const upload = await loadUpload(job.uploadId).catch(() => null);
-  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+  if (upload && !canAccessUpload(req, upload)) {
     res.status(403).json({ error: "Match belongs to a different client." });
     return;
   }
@@ -2141,7 +2293,7 @@ app.get("/api/vcf-canon-matches/:jobId/enrichment-interpretive", async (req, res
   }
 
   const upload = await loadUpload(job.uploadId).catch(() => null);
-  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+  if (upload && !canAccessUpload(req, upload)) {
     res.status(403).json({ error: "Match belongs to a different client." });
     return;
   }
@@ -2180,7 +2332,7 @@ app.get("/api/vcf-canon-matches/:jobId/enrichment-plus", async (req, res) => {
   }
 
   const upload = await loadUpload(job.uploadId).catch(() => null);
-  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+  if (upload && !canAccessUpload(req, upload)) {
     res.status(403).json({ error: "Match belongs to a different client." });
     return;
   }
@@ -2219,7 +2371,7 @@ app.get("/api/vcf-canon-matches/:jobId/individual-interpretations", async (req, 
   }
 
   const upload = await loadUpload(job.uploadId).catch(() => null);
-  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+  if (upload && !canAccessUpload(req, upload)) {
     res.status(403).json({ error: "Match belongs to a different client." });
     return;
   }
@@ -2239,6 +2391,45 @@ app.get("/api/vcf-canon-matches/:jobId/individual-interpretations", async (req, 
   const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.download(csvPath, `${baseName}_individual_variant_interpretations.csv`);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/individual-interpretations-normalized", async (req, res) => {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (!job.artifacts?.individualVariantInterpretationsNormalizedCsv) {
+    res.status(409).json({ error: "Normalized individual interpretation CSV is not ready yet." });
+    return;
+  }
+
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload && !canAccessUpload(req, upload)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+
+  const paths = interpretationNormalizationPaths();
+  const csvPath = path.resolve(job.artifacts?.individualVariantInterpretationsNormalizedCsv || "");
+  if (!isPathInside(paths.root, csvPath)) {
+    res.status(400).json({ error: "Normalized individual interpretation CSV is outside the allowed root." });
+    return;
+  }
+  const csvStat = await stat(csvPath).catch(() => null);
+  if (!csvStat || csvStat.size <= 0) {
+    res.status(404).json({ error: "Normalized individual interpretation CSV was not found." });
+    return;
+  }
+
+  const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.download(csvPath, `${baseName}_individual_variant_interpretations_normalized.csv`);
 });
 
 await loadPersistedVcfCanonJobs();

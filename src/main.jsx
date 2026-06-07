@@ -21,6 +21,44 @@ import "./styles.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8787";
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || "";
+const JOB_ACCESS_TOKENS_KEY = "heal.jobAccessTokens.v1";
+const BUSY_PHASES = [
+  "uploading",
+  "validating",
+  "matching",
+  "preparing",
+  "enriching",
+  "individual_interpretation",
+  "interpretation_normalization",
+];
+
+function isBusyPhase(phase) {
+  return BUSY_PHASES.includes(phase);
+}
+
+function readJobAccessTokens() {
+  try {
+    return JSON.parse(window.localStorage.getItem(JOB_ACCESS_TOKENS_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function storeJobAccessToken(jobId, accessToken) {
+  if (!jobId || !accessToken) return;
+  const tokens = readJobAccessTokens();
+  tokens[jobId] = accessToken;
+  window.localStorage.setItem(JOB_ACCESS_TOKENS_KEY, JSON.stringify(tokens));
+}
+
+function getJobAccessToken(jobId) {
+  if (!jobId) return "";
+  return readJobAccessTokens()[jobId] || "";
+}
+
+function accessHeaders(accessToken) {
+  return accessToken ? { "X-HEAL-Access-Token": accessToken } : {};
+}
 
 const COPY = {
   es: {
@@ -65,6 +103,7 @@ const COPY = {
     preparationProgress: "Preparacion del match",
     enrichmentProgress: "Enriquecimiento externo",
     individualInterpretationProgress: "Interpretacion individual",
+    interpretationNormalizationProgress: "Normalizacion QA",
     submit: "Enviar y validar",
     securityCheck: "Verificacion de seguridad",
     securityCheckHelp: "Protege el backend antes de aceptar VCFs grandes.",
@@ -88,6 +127,10 @@ const COPY = {
     individualInterpreting: "Interpretando variantes observadas una por una...",
     individualInterpretationComplete: "Interpretacion individual finalizada.",
     individualInterpretationFailed: "No se pudo completar la interpretacion individual.",
+    interpretationNormalizationStarting: "Iniciando normalizacion QA...",
+    interpretationNormalizing: "Aplicando reglas deterministicas post-LLM1...",
+    interpretationNormalizationComplete: "Normalizacion QA finalizada.",
+    interpretationNormalizationFailed: "No se pudo completar la normalizacion QA.",
     matchFailed: "No se pudo completar el match VCF-Canon.",
     validationFailed: "La validacion fallo.",
     uploadFailed: "No se pudo completar la carga.",
@@ -138,6 +181,11 @@ const COPY = {
     individualInterpretationErrors: "Filas con error",
     individualInterpretationModel: "Modelo LLM1",
     individualInterpretationDryRun: "Dry run",
+    interpretationNormalizationTitle: "Normalizacion QA",
+    interpretationNormalizationRows: "Filas normalizadas",
+    interpretationNormalizationChanged: "Filas ajustadas",
+    interpretationNormalizationDuplicates: "Duplicados normalizados",
+    interpretationNormalizationWarnings: "Warnings QA",
     matchStatusStrict: "Matches estrictos",
     matchStatusAltReview: "Matches con revision ALT",
     matchStatusNoPosition: "Sin match por posicion",
@@ -169,6 +217,7 @@ const COPY = {
     enrichmentPlusDownload: "Descargar CSV Enrichment Plus",
     enrichmentQaDownload: "Descargar CSV tecnico QA",
     individualInterpretationDownload: "Descargar CSV interpretacion individual",
+    interpretationNormalizationDownload: "Descargar CSV normalizado",
     matchDownloadFailed: "No se pudo descargar el CSV de matches.",
     canonDownloadFailed: "No se pudo descargar el canon.",
     close: "Cerrar",
@@ -218,6 +267,7 @@ const COPY = {
     preparationProgress: "Match preparation",
     enrichmentProgress: "External enrichment",
     individualInterpretationProgress: "Individual interpretation",
+    interpretationNormalizationProgress: "QA normalization",
     submit: "Send and validate",
     securityCheck: "Security check",
     securityCheckHelp: "Protects the backend before accepting large VCF files.",
@@ -241,6 +291,10 @@ const COPY = {
     individualInterpreting: "Interpreting observed variants one by one...",
     individualInterpretationComplete: "Individual interpretation finished.",
     individualInterpretationFailed: "Could not complete individual interpretation.",
+    interpretationNormalizationStarting: "Starting QA normalization...",
+    interpretationNormalizing: "Applying deterministic post-LLM1 rules...",
+    interpretationNormalizationComplete: "QA normalization finished.",
+    interpretationNormalizationFailed: "Could not complete QA normalization.",
     matchFailed: "Could not complete the VCF-Canon match.",
     validationFailed: "Validation failed.",
     uploadFailed: "Could not complete the upload.",
@@ -291,6 +345,11 @@ const COPY = {
     individualInterpretationErrors: "Rows with errors",
     individualInterpretationModel: "LLM1 model",
     individualInterpretationDryRun: "Dry run",
+    interpretationNormalizationTitle: "QA normalization",
+    interpretationNormalizationRows: "Normalized rows",
+    interpretationNormalizationChanged: "Adjusted rows",
+    interpretationNormalizationDuplicates: "Normalized duplicates",
+    interpretationNormalizationWarnings: "QA warnings",
     matchStatusStrict: "Strict matches",
     matchStatusAltReview: "Matches needing ALT review",
     matchStatusNoPosition: "No position match",
@@ -322,6 +381,7 @@ const COPY = {
     enrichmentPlusDownload: "Download Enrichment Plus CSV",
     enrichmentQaDownload: "Download technical QA CSV",
     individualInterpretationDownload: "Download individual interpretation CSV",
+    interpretationNormalizationDownload: "Download normalized CSV",
     matchDownloadFailed: "Could not download matches CSV.",
     canonDownloadFailed: "Could not download canon.",
     close: "Close",
@@ -416,13 +476,20 @@ function PipelineStepper({ phase, t }) {
       ? 0
       : phase === "validating"
         ? 1
-        : phase === "matching" || phase === "preparing" || phase === "enriching" || phase === "done"
+        : phase === "matching" || phase === "preparing"
           ? 2
-          : 0;
+          : phase === "enriching" ||
+              phase === "individual_interpretation" ||
+              phase === "interpretation_normalization" ||
+              phase === "done"
+            ? 3
+            : 0;
   const completeIndex =
     phase === "done"
-      ? 2
-      : phase === "matching" || phase === "preparing" || phase === "enriching"
+      ? 3
+      : phase === "enriching" || phase === "individual_interpretation" || phase === "interpretation_normalization"
+        ? 2
+        : phase === "matching" || phase === "preparing"
         ? 1
         : phase === "validating"
           ? 0
@@ -993,6 +1060,7 @@ function MatchResultPanel({ result, locale, t }) {
   const confidenceCounts = preparation.confidence_level_counts || {};
   const enrichment = result.variantEnrichment?.metadata || {};
   const individualInterpretation = result.individualInterpretation?.metadata || {};
+  const interpretationNormalization = result.interpretationNormalization?.metadata || {};
   const enrichmentSourceErrors = Object.values(enrichment.source_error_counts || {}).reduce(
     (total, value) => total + Number(value || 0),
     0,
@@ -1033,12 +1101,29 @@ function MatchResultPanel({ result, locale, t }) {
         [t.individualInterpretationDryRun, individualInterpretation.dry_run ? "true" : "false"],
       ]
     : [];
+  const normalizationWarnings = Object.values(interpretationNormalization.qa_warning_counts || {}).reduce(
+    (total, value) => total + Number(value || 0),
+    0,
+  );
+  const interpretationNormalizationCards = result.interpretationNormalization
+    ? [
+        [t.interpretationNormalizationRows, formatNumber(interpretationNormalization.output_rows, locale)],
+        [t.interpretationNormalizationChanged, formatNumber(interpretationNormalization.changed_rows, locale)],
+        [
+          t.interpretationNormalizationDuplicates,
+          formatNumber(interpretationNormalization.duplicate_groups_normalized, locale),
+        ],
+        [t.interpretationNormalizationWarnings, formatNumber(normalizationWarnings, locale)],
+      ]
+    : [];
 
   async function downloadCsv(endpoint, fallbackName) {
     if (!result.jobId) return;
     setDownloadError(null);
     try {
-      const response = await fetch(`${API_BASE}${endpoint}`);
+      const response = await fetch(`${API_BASE}${endpoint}`, {
+        headers: accessHeaders(result.accessToken || getJobAccessToken(result.jobId)),
+      });
       if (!response.ok) {
         const text = await response.text();
         let payload = {};
@@ -1103,6 +1188,13 @@ function MatchResultPanel({ result, locale, t }) {
     );
   }
 
+  async function downloadNormalizedInterpretations() {
+    await downloadCsv(
+      `/api/vcf-canon-matches/${result.jobId}/individual-interpretations-normalized`,
+      "heal-individual-variant-interpretations-normalized.csv",
+    );
+  }
+
   async function downloadDebugArtifact(artifact, fallbackName) {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/debug/${artifact}`, fallbackName);
   }
@@ -1151,6 +1243,16 @@ function MatchResultPanel({ result, locale, t }) {
           </div>
         </>
       )}
+      {interpretationNormalizationCards.length > 0 && (
+        <>
+          <h3 className="result-subtitle">{t.interpretationNormalizationTitle}</h3>
+          <div className="metrics-grid">
+            {interpretationNormalizationCards.map(([label, value]) => (
+              <MetricCard label={label} value={value} key={label} />
+            ))}
+          </div>
+        </>
+      )}
       <div className="match-download-actions">
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadMatches}>
           <Download size={17} />
@@ -1179,6 +1281,10 @@ function MatchResultPanel({ result, locale, t }) {
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadIndividualInterpretations}>
           <Download size={17} />
           {t.individualInterpretationDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadNormalizedInterpretations}>
+          <Download size={17} />
+          {t.interpretationNormalizationDownload}
         </button>
       </div>
       <h3 className="result-subtitle">{t.debugDownloads}</h3>
@@ -1241,6 +1347,7 @@ function App() {
   const [preparationProgress, setPreparationProgress] = useState(0);
   const [enrichmentProgress, setEnrichmentProgress] = useState(0);
   const [individualInterpretationProgress, setIndividualInterpretationProgress] = useState(0);
+  const [interpretationNormalizationProgress, setInterpretationNormalizationProgress] = useState(0);
   const [maxVariants, setMaxVariants] = useState(20);
   const [phase, setPhase] = useState("idle");
   const [messageKey, setMessageKey] = useState("initialMessage");
@@ -1255,6 +1362,7 @@ function App() {
     enrichmentInterpretive: false,
     enrichmentPlus: false,
     individualInterpretation: false,
+    interpretationNormalization: false,
   });
   const [error, setError] = useState(null);
   const [errorDialog, setErrorDialog] = useState(null);
@@ -1263,13 +1371,14 @@ function App() {
   const [turnstileResetKey, setTurnstileResetKey] = useState(0);
   const [duplicateCandidate, setDuplicateCandidate] = useState(null);
   const [canonOpen, setCanonOpen] = useState(false);
+  const activeAccessTokenRef = useRef("");
 
   const t = COPY[language];
   const locale = language === "es" ? "es-AR" : "en-US";
   const canSend = useMemo(
     () =>
       file &&
-      !["uploading", "validating", "matching", "preparing", "enriching", "individual_interpretation"].includes(phase),
+      !isBusyPhase(phase),
     [file, phase],
   );
   const statusMessage = customMessage || t[messageKey] || t.initialMessage;
@@ -1282,6 +1391,7 @@ function App() {
     setPreparationProgress(0);
     setEnrichmentProgress(0);
     setIndividualInterpretationProgress(0);
+    setInterpretationNormalizationProgress(0);
     setResult(null);
     setMatchResult(null);
     setMatchArtifactsReady({
@@ -1292,12 +1402,14 @@ function App() {
       enrichmentInterpretive: false,
       enrichmentPlus: false,
       individualInterpretation: false,
+      interpretationNormalization: false,
     });
     setError(null);
     setErrorDialog(null);
     setRetryEnrichmentJobId(null);
     setDuplicateCandidate(null);
     setUploadRecord(null);
+    activeAccessTokenRef.current = "";
     setPhase("idle");
     setCustomMessage("");
     setTurnstileToken("");
@@ -1315,7 +1427,9 @@ function App() {
   }
 
   async function downloadCsv(endpoint, fallbackName) {
-    const response = await fetch(`${API_BASE}${endpoint}`);
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+      headers: accessHeaders(activeAccessTokenRef.current || getJobAccessToken(matchResult?.jobId)),
+    });
     if (!response.ok) {
       const payload = await readJsonResponse(response);
       throw new Error(payload.error || t.matchDownloadFailed);
@@ -1360,6 +1474,11 @@ function App() {
           `/api/vcf-canon-matches/${matchResult.jobId}/individual-interpretations`,
           "heal-individual-variant-interpretations.csv",
         );
+      } else if (kind === "interpretationNormalization") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/individual-interpretations-normalized`,
+          "heal-individual-variant-interpretations-normalized.csv",
+        );
       }
     } catch (caught) {
       setError(caught.message || String(caught));
@@ -1392,6 +1511,7 @@ function App() {
           "Content-Type": "application/octet-stream",
           "X-Upload-Id": initUpload.uploadId,
           "X-Chunk-Index": String(chunkIndex),
+          ...accessHeaders(initUpload.accessToken),
         },
         body: chunk,
       });
@@ -1402,12 +1522,13 @@ function App() {
 
     const completeResponse = await fetch(`${API_BASE}/api/uploads/${initUpload.uploadId}/complete`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...accessHeaders(initUpload.accessToken) },
+      body: JSON.stringify({ accessToken: initUpload.accessToken }),
     });
     const completeUpload = await readJsonResponse(completeResponse);
     if (!completeResponse.ok) throw new Error(completeUpload.error || t.uploadFailed);
     setUploadProgress(100);
-    return completeUpload;
+    return { ...completeUpload, accessToken: completeUpload.accessToken || initUpload.accessToken };
   }
 
   async function lookupExistingUpload(selectedFile) {
@@ -1448,7 +1569,10 @@ function App() {
       enrichmentInterpretive: Boolean(ready.enrichmentInterpretive),
       enrichmentPlus: Boolean(ready.enrichmentPlus),
       individualInterpretation: Boolean(ready.individualInterpretation),
+      interpretationNormalization: Boolean(ready.interpretationNormalization),
     });
+    const accessToken = activeAccessTokenRef.current || getJobAccessToken(job.id);
+    if (accessToken) storeJobAccessToken(job.id, accessToken);
     if (
       job.result ||
       ready.matches ||
@@ -1456,12 +1580,14 @@ function App() {
       ready.enrichment ||
       ready.enrichmentInterpretive ||
       ready.enrichmentPlus ||
-      ready.individualInterpretation
+      ready.individualInterpretation ||
+      ready.interpretationNormalization
     ) {
       setMatchResult({
         ...(job.result || {}),
         jobId: job.id,
         artifactsReady: ready,
+        accessToken,
       });
     }
   }
@@ -1491,6 +1617,14 @@ function App() {
         setEnrichmentProgress(100);
         setIndividualInterpretationProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.individualInterpreting);
+      } else if (job.stage === "interpretation_normalization") {
+        setPhase("interpretation_normalization");
+        setMatchProgress(100);
+        setPreparationProgress(100);
+        setEnrichmentProgress(100);
+        setIndividualInterpretationProgress(100);
+        setInterpretationNormalizationProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.interpretationNormalizing);
       } else {
         setMatchProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.matching);
@@ -1502,12 +1636,19 @@ function App() {
         if (job.artifactsReady?.individualInterpretation || job.result?.individualInterpretation) {
           setIndividualInterpretationProgress(100);
         }
-        return { ...(job.result || {}), jobId: job.id, artifactsReady: job.artifactsReady || {} };
+        if (job.artifactsReady?.interpretationNormalization || job.result?.interpretationNormalization) {
+          setInterpretationNormalizationProgress(100);
+        }
+        const accessToken = activeAccessTokenRef.current || getJobAccessToken(job.id);
+        if (accessToken) storeJobAccessToken(job.id, accessToken);
+        return { ...(job.result || {}), jobId: job.id, artifactsReady: job.artifactsReady || {}, accessToken };
       }
       if (job.status === "failed") {
         const failed = new Error(
           job.error ||
-            (job.stage === "individual_interpretation"
+            (job.stage === "interpretation_normalization"
+              ? t.interpretationNormalizationFailed
+              : job.stage === "individual_interpretation"
               ? t.individualInterpretationFailed
               : job.stage === "enriching"
                 ? t.enrichmentFailed
@@ -1549,6 +1690,7 @@ function App() {
           setPreparationProgress(0);
           setEnrichmentProgress(0);
           setIndividualInterpretationProgress(0);
+          setInterpretationNormalizationProgress(0);
           setMatchArtifactsReady({
             matches: false,
             debug: false,
@@ -1557,6 +1699,7 @@ function App() {
             enrichmentInterpretive: false,
             enrichmentPlus: false,
             individualInterpretation: false,
+            interpretationNormalization: false,
           });
           setDuplicateCandidate(existingUpload);
           setMessageKey("fileReady");
@@ -1566,6 +1709,7 @@ function App() {
       upload = await uploadFile(file);
     }
     setUploadRecord(upload);
+    activeAccessTokenRef.current = upload.accessToken || "";
     return upload;
   }
 
@@ -1583,6 +1727,7 @@ function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         uploadId: upload.uploadId,
+        accessToken: upload.accessToken,
         fileName: upload.fileName,
         calculateChecksum: true,
         calculateStats: shouldCalculateStats,
@@ -1607,11 +1752,12 @@ function App() {
     setPreparationProgress(0);
     setEnrichmentProgress(0);
     setIndividualInterpretationProgress(0);
+    setInterpretationNormalizationProgress(0);
 
     const matchStart = await fetch(`${API_BASE}/api/vcf-canon-matches`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ uploadId: upload.uploadId, vcfParser }),
+      headers: { "Content-Type": "application/json", ...accessHeaders(upload.accessToken) },
+      body: JSON.stringify({ uploadId: upload.uploadId, accessToken: upload.accessToken, vcfParser }),
     });
     if (!matchStart.ok) throw new Error(await matchStart.text());
     const matchJob = await matchStart.json();
@@ -1635,7 +1781,8 @@ function App() {
 
     const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${jobId}/individual-interpretation`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...accessHeaders(activeAccessTokenRef.current || getJobAccessToken(jobId)) },
+      body: JSON.stringify({ accessToken: activeAccessTokenRef.current || getJobAccessToken(jobId) }),
     });
     const started = await readJsonResponse(response);
     if (!response.ok) throw new Error(started.error || t.individualInterpretationFailed);
@@ -1645,6 +1792,30 @@ function App() {
     setMessageKey("individualInterpretationComplete");
     setCustomMessage("");
     setIndividualInterpretationProgress(100);
+    return nextMatchResult;
+  }
+
+  async function runInterpretationNormalization(jobId) {
+    if (!jobId) return null;
+    setPhase("interpretation_normalization");
+    setMessageKey("interpretationNormalizationStarting");
+    setCustomMessage("");
+    setInterpretationNormalizationProgress(8);
+    const accessToken = activeAccessTokenRef.current || getJobAccessToken(jobId);
+
+    const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${jobId}/interpretation-normalization`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...accessHeaders(accessToken) },
+      body: JSON.stringify({ accessToken }),
+    });
+    const started = await readJsonResponse(response);
+    if (!response.ok) throw new Error(started.error || t.interpretationNormalizationFailed);
+    const nextMatchResult = await pollMatch(started.id);
+    setMatchResult(nextMatchResult);
+    setPhase("done");
+    setMessageKey("interpretationNormalizationComplete");
+    setCustomMessage("");
+    setInterpretationNormalizationProgress(100);
     return nextMatchResult;
   }
 
@@ -1661,7 +1832,8 @@ function App() {
     try {
       const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${jobId}/retry-enrichment`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...accessHeaders(activeAccessTokenRef.current || getJobAccessToken(jobId)) },
+        body: JSON.stringify({ accessToken: activeAccessTokenRef.current || getJobAccessToken(jobId) }),
       });
       const started = await readJsonResponse(response);
       if (!response.ok) throw new Error(started.error || t.enrichmentFailed);
@@ -1759,6 +1931,22 @@ function App() {
     }
   }
 
+  async function runQaInterpretationNormalization() {
+    setError(null);
+    setErrorDialog(null);
+    setRetryEnrichmentJobId(null);
+    try {
+      const jobId = matchResult?.jobId;
+      if (!jobId) throw new Error(t.interpretationNormalizationFailed);
+      await runInterpretationNormalization(jobId);
+    } catch (caught) {
+      setPhase("error");
+      setError(t.interpretationNormalizationFailed);
+      setMessageKey("processFailed");
+      setCustomMessage("");
+    }
+  }
+
   async function submit({ skipDuplicateCheck = false, reuseUpload = null } = {}) {
     if (!file) return;
     setError(null);
@@ -1774,6 +1962,7 @@ function App() {
       enrichmentInterpretive: false,
       enrichmentPlus: false,
       individualInterpretation: false,
+      interpretationNormalization: false,
     });
     setUploadProgress(0);
     setValidationProgress(0);
@@ -1781,7 +1970,9 @@ function App() {
     setPreparationProgress(0);
     setEnrichmentProgress(0);
     setIndividualInterpretationProgress(0);
+    setInterpretationNormalizationProgress(0);
     setUploadRecord(null);
+    activeAccessTokenRef.current = "";
 
     try {
       const upload = await resolveUpload({ skipDuplicateCheck, reuseUpload });
@@ -1796,7 +1987,8 @@ function App() {
         return;
       }
       const nextMatchResult = await runMatch(upload);
-      await runIndividualInterpretation(nextMatchResult?.jobId);
+      const individualResult = await runIndividualInterpretation(nextMatchResult?.jobId);
+      await runInterpretationNormalization(individualResult?.jobId || nextMatchResult?.jobId);
       setTurnstileToken("");
       setTurnstileResetKey((current) => current + 1);
     } catch (caught) {
@@ -1807,6 +1999,8 @@ function App() {
         setRetryEnrichmentJobId(caught.jobId || matchResult?.jobId || null);
       } else if (caught.stage === "individual_interpretation") {
         setError(t.individualInterpretationFailed);
+      } else if (caught.stage === "interpretation_normalization") {
+        setError(t.interpretationNormalizationFailed);
       } else {
         setError(caught.message || String(caught));
       }
@@ -1880,11 +2074,7 @@ function App() {
 
       <section className="action-panel">
         <div className="status-line">
-          {phase === "validating" ||
-          phase === "matching" ||
-          phase === "preparing" ||
-          phase === "enriching" ||
-          phase === "individual_interpretation" ? (
+          {isBusyPhase(phase) ? (
             <Loader2 className="spin" size={20} />
           ) : (
             <ShieldCheck size={20} />
@@ -1929,7 +2119,7 @@ function App() {
           tone="green"
           onPlay={analysisMode === "qa" ? runQaUpload : null}
           playLabel={`${t.playStage}: ${t.uploadProgress}`}
-          playDisabled={!file || ["uploading", "validating", "matching", "preparing", "enriching", "individual_interpretation"].includes(phase)}
+          playDisabled={!file || isBusyPhase(phase)}
         />
         <ProgressBar
           label={t.validationProgress}
@@ -1937,7 +2127,7 @@ function App() {
           tone="blue"
           onPlay={analysisMode === "qa" ? runQaValidation : null}
           playLabel={`${t.playStage}: ${t.validationProgress}`}
-          playDisabled={!file || ["uploading", "validating", "matching", "preparing", "enriching", "individual_interpretation"].includes(phase)}
+          playDisabled={!file || isBusyPhase(phase)}
         />
         <ProgressBar
           label={t.matchProgress}
@@ -1948,7 +2138,7 @@ function App() {
           downloadReady={matchArtifactsReady.matches}
           onPlay={analysisMode === "qa" ? runQaMatch : null}
           playLabel={`${t.playStage}: ${t.matchProgress}`}
-          playDisabled={!uploadRecord || !result || result.status === "invalid" || ["uploading", "validating", "matching", "preparing", "enriching", "individual_interpretation"].includes(phase)}
+          playDisabled={!uploadRecord || !result || result.status === "invalid" || isBusyPhase(phase)}
         />
         <ProgressBar
           label={t.preparationProgress}
@@ -1959,7 +2149,7 @@ function App() {
           downloadReady={matchArtifactsReady.preparation}
           onPlay={analysisMode === "qa" ? runQaMatch : null}
           playLabel={`${t.playStage}: ${t.preparationProgress}`}
-          playDisabled={!uploadRecord || !result || result.status === "invalid" || ["uploading", "validating", "matching", "preparing", "enriching", "individual_interpretation"].includes(phase)}
+          playDisabled={!uploadRecord || !result || result.status === "invalid" || isBusyPhase(phase)}
         />
         <ProgressBar
           label={t.enrichmentProgress}
@@ -1974,7 +2164,7 @@ function App() {
             !uploadRecord ||
             !result ||
             result.status === "invalid" ||
-            ["uploading", "validating", "matching", "preparing", "enriching", "individual_interpretation"].includes(phase)
+            isBusyPhase(phase)
           }
         />
         <ProgressBar
@@ -1989,7 +2179,22 @@ function App() {
           playDisabled={
             !matchResult?.jobId ||
             !matchArtifactsReady.enrichmentPlus ||
-            ["uploading", "validating", "matching", "preparing", "enriching", "individual_interpretation"].includes(phase)
+            isBusyPhase(phase)
+          }
+        />
+        <ProgressBar
+          label={t.interpretationNormalizationProgress}
+          value={interpretationNormalizationProgress}
+          tone="blue"
+          downloadLabel={t.interpretationNormalizationDownload}
+          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("interpretationNormalization") : null}
+          downloadReady={matchArtifactsReady.interpretationNormalization}
+          onPlay={analysisMode === "qa" ? runQaInterpretationNormalization : null}
+          playLabel={`${t.playStage}: ${t.interpretationNormalizationProgress}`}
+          playDisabled={
+            !matchResult?.jobId ||
+            !matchArtifactsReady.individualInterpretation ||
+            isBusyPhase(phase)
           }
         />
         {error && <p className="error-message">{error}</p>}

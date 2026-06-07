@@ -4,7 +4,7 @@
 
 This repository contains the first production-facing slice of HEAL by FON: a web interface and backend API for receiving large VCF files, validating their integrity, maintaining the current interpretation canon, matching VCF rows against the canon, preparing match outputs for audit, and enriching observed variants with public external sources.
 
-Global clinical/genomic report generation and multi-user accounts are not implemented here yet. The current downstream implementation includes LLM1 individual observed-variant interpretation, but deterministic grouping and LLM2 global interpretation remain separate later modules.
+Global clinical/genomic report generation and multi-user accounts are not implemented here yet. The current downstream implementation includes LLM1 individual observed-variant interpretation and a deterministic post-LLM1 QA normalization stage, but deterministic grouping and LLM2 global interpretation remain separate later modules.
 
 ## Public Components
 
@@ -82,6 +82,8 @@ GET  /api/vcf-canon-matches/:jobId/enrichment-plus
 POST /api/vcf-canon-matches/:jobId/retry-enrichment
 POST /api/vcf-canon-matches/:jobId/individual-interpretation
 GET  /api/vcf-canon-matches/:jobId/individual-interpretations
+POST /api/vcf-canon-matches/:jobId/interpretation-normalization
+GET  /api/vcf-canon-matches/:jobId/individual-interpretations-normalized
 ```
 
 Default chunk size:
@@ -91,6 +93,8 @@ Default chunk size:
 ```
 
 The chunked protocol is used because multi-GB VCF files should not be uploaded through the static Pages application or buffered as a single request body.
+
+Upload initialization now returns an opaque per-upload access token. The browser stores that token locally and sends it as `X-HEAL-Access-Token` for chunk completion, downstream stage triggers, and artifact downloads. The previous client fingerprint check remains as a legacy fallback, but downloads no longer depend only on Cloudflare/IP/user-agent stability. This avoids false "different client" errors when the same user downloads a completed artifact after a Turnstile refresh or edge/fingerprint drift.
 
 ## Duplicate Upload Reuse
 

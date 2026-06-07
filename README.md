@@ -77,9 +77,11 @@ GET  /api/vcf-canon-matches/:jobId/enrichment-plus
 POST /api/vcf-canon-matches/:jobId/retry-enrichment
 POST /api/vcf-canon-matches/:jobId/individual-interpretation
 GET  /api/vcf-canon-matches/:jobId/individual-interpretations
+POST /api/vcf-canon-matches/:jobId/interpretation-normalization
+GET  /api/vcf-canon-matches/:jobId/individual-interpretations-normalized
 ```
 
-Default chunk size is 8 MiB. This keeps every request well below Cloudflare's common proxied request body limits while allowing multi-GB VCF files to land on the server by streaming each chunk to disk. The browser only receives an `uploadId`; local server paths stay on the backend.
+Default chunk size is 8 MiB. This keeps every request well below Cloudflare's common proxied request body limits while allowing multi-GB VCF files to land on the server by streaming each chunk to disk. The browser receives an `uploadId` plus an opaque per-upload access token for subsequent stage triggers and artifact downloads; local server paths stay on the backend.
 
 If the same client reuses an already uploaded VCF, starting validation or match refreshes that upload workspace. The 24-hour cleanup window counts again from the latest use.
 
@@ -123,7 +125,9 @@ That stage enriches only observed genotype rows with public Ensembl, ClinVar, an
 
 The original Colab does not generate a final `.docx` or PDF report. Its deterministic final coded output is the Colab-style enriched observed-variant CSV plus deliverable-style CSV tables. The app now generates that Colab-style CSV as `heal_fon_interpretation_enriched_observed69.csv`; the next planned stage is a controlled final interpretation/report workflow; see `docs/final-interpretation-next-step.md`.
 
-The first interpretation module is now separated as LLM1: individual observed-variant interpretation. It consumes `heal_fon_interpretation_enrichment_plus.csv`, prepares a filtered JSON payload per row, and writes `individual_variant_interpretations.csv`. It runs with controlled parallelism, writes progress incrementally, and keeps row-level errors isolated. Deterministic grouping and global LLM2 reporting remain separate later modules.
+The first interpretation module is now separated as LLM1: individual observed-variant interpretation. It consumes `heal_fon_interpretation_enrichment_plus.csv`, prepares a filtered JSON payload per row, and writes `individual_variant_interpretations.csv`. It runs with controlled parallelism, writes progress incrementally, and keeps row-level errors isolated.
+
+After LLM1, a separate deterministic QA normalization stage writes `individual_variant_interpretations_normalized.csv`. This stage normalizes duplicate confidence drift, applies generalized evidence-based confidence caps/raises, shortens overlong one-sentence outputs, and preserves audit columns explaining each adjustment. Deterministic grouping and global LLM2 reporting remain separate later modules.
 
 ## Canon Flow
 
