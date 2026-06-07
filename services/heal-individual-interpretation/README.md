@@ -44,7 +44,9 @@ Operational notes:
 - This module does not generate the global interpretation report.
 - `Low` means observed but low interpretive value; it does not mean low VCF quality.
 - A lone `clinvar_conflict_flag=true` is not enough to make the final row `Conflicting`.
-- Prototype calibration keeps VDR/Fok1, SOD2, and TP53 as `Conflicting`; recurrent intronic/GWAS-only markers from the curated prototype remain `Low`.
+- Calibration is evidence-based and does not use gene-specific or rsID-specific overrides.
+- `Conflicting` requires explicit conflict in the provided evidence, such as conflicting ClinVar pathogenicity/classification, pathogenicity/population-frequency contradiction, or material allele/locus ambiguity.
+- Intronic/intergenic/GWAS-only markers can be `Low` when they are observed but have low deliverable weight.
 - Raw external-source JSON remains in Enrichment Plus for audit, but is not passed to LLM1 by default.
 - `--dry-run` exists only for local smoke tests and does not produce real interpretations.
 

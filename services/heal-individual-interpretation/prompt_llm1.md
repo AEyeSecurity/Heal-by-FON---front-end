@@ -42,7 +42,7 @@ Use this interpretation-focused logic:
 - High: the variant is observed, the match is clean or well supported, and the interpretation is stable and not contradicted by the provided evidence. A benign but well-supported functional/contextual interpretation can still be High.
 - Moderate: the variant is observed and interpretable, but there are relevant cautions such as ALT review, indirect evidence, regulatory/non-coding consequence, limited ClinVar evidence, or moderate ambiguity.
 - Low: the variant is observed and technically real, but its value for the deliverable is low because the biological interpretation is weak, mostly indirect, poorly supported, highly nonspecific, common/non-coding, or based mainly on GWAS association without strong ClinVar or functional support. Low does not mean the VCF call is bad.
-- Conflicting: the provided evidence contains meaningful conflict that changes how the variant should be interpreted, especially explicit conflicting ClinVar pathogenicity/classification, sensitive-locus conflict, or major allele/locus ambiguity. A lone `clinvar_conflict_flag = true` is not enough.
+- Conflicting: the provided evidence contains meaningful conflict that changes how the variant should be interpreted, especially explicit conflicting ClinVar pathogenicity/classification, direct contradiction between pathogenicity and population frequency, or major allele/locus ambiguity. A lone `clinvar_conflict_flag = true` is not enough.
 
 Important:
 
@@ -50,7 +50,7 @@ Important:
 - The final `confidence_level` must reflect global interpretive confidence, not only VCF quality.
 - Separate technical confidence from deliverable confidence. A clean match for an intronic/intergenic GWAS-only marker can still be Low for interpretive value.
 - If the final confidence differs from `preliminary_confidence_from_input`, explain why.
-- Be selective with `requires_professional_review`. Set it to true only for Conflicting rows, pathogenic/likely pathogenic rows, sensitive loci, meaningful pharmacogenomic context, or non-strict allele/locus issues that could materially change interpretation. Do not set it to true for nearly every benign/contextual marker.
+- Be selective with `requires_professional_review`. Set it to true only for Conflicting rows, pathogenic/likely pathogenic rows, meaningful pharmacogenomic context, or non-strict allele/locus issues that could materially change interpretation. Do not set it to true for nearly every benign/contextual marker.
 
 Output language:
 

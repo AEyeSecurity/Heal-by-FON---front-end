@@ -116,41 +116,6 @@ OUTPUT_FIELDS = [
     "evidence_limitations",
 ]
 
-CURATED_CONFIDENCE_OVERRIDES = {
-    ("MAOB", "rs1799836"): "Low",
-    ("HRH1", "rs901865"): "Low",
-    ("CACNA1C", "rs2239030"): "Low",
-    ("NLGN1", "rs963349"): "Low",
-    ("GABRB2", "rs1946247"): "Low",
-    ("TARDBP", "rs943088"): "Low",
-    ("UQCRC1", "rs11237379"): "Low",
-    ("ASMT", "rs57235767"): "Low",
-    ("OXTR", "rs53576"): "Low",
-    ("DCDC2", "rs793842"): "Low",
-    ("GABRB1", "rs13116355"): "Low",
-    ("KDM4A", "rs1222063"): "Low",
-    ("FADS2", "rs174570"): "Low",
-    ("IFNG", "rs2430561"): "Low",
-    ("SLC25A32", "rs1171614"): "Low",
-    ("SUOX", "rs7297662"): "Moderate",
-    ("FOXO3", "rs2802292"): "Moderate",
-    ("CTLA4", "rs231775"): "Moderate",
-    ("DRD3", "rs6280"): "High",
-    ("COMT", "rs4680"): "High",
-    ("MTHFR", "rs1801133"): "High",
-    ("POR", "rs1057868"): "High",
-    ("TFAM", "rs1937"): "High",
-    ("SLC19A1", "rs1051266"): "High",
-    ("CBS", "rs234706"): "High",
-    ("FCER1A", "rs2251746"): "High",
-    ("LCT", "rs4988235"): "High",
-    ("VDR", "rs2228570"): "Conflicting",
-    ("SOD2", "rs4880"): "Conflicting",
-    ("TP53", "rs1042522"): "Conflicting",
-}
-
-SENSITIVE_REVIEW_GENES = {"TP53", "VDR", "SOD2"}
-PHARMACOGENOMIC_REVIEW_GENES = {"COMT", "DRD3", "HTR1A", "POR", "SLC19A1", "MTHFR", "TP53"}
 NONCODING_WEAK_TERMS = {
     "intron_variant",
     "intergenic_variant",
@@ -404,6 +369,37 @@ def pathogenic_or_likely_pathogenic(payload: dict) -> bool:
     return ("pathogenic" in blob or "likely pathogenic" in blob) and "benign" not in blob
 
 
+def pharmacogenomic_context(payload: dict) -> bool:
+    blob = lower_blob(
+        payload.get("pharmgkb_clinical_summary"),
+        payload.get("pharmgkb_clinical_evidence_levels"),
+        payload.get("pharmgkb_clinical_chemicals"),
+        payload.get("pharmgkb_allele_phenotypes"),
+        payload.get("clinvar_normalized_classification"),
+    )
+    return bool(blob) and (
+        "pharmgkb" in blob
+        or "drug_response" in blob
+        or "drug response" in blob
+        or "level" in blob
+        or bool(clean_str(payload.get("pharmgkb_clinical_summary")))
+    )
+
+
+def gwas_only_context(payload: dict) -> bool:
+    gwas_count = clean_str(payload.get("gwas_association_count"))
+    return bool(gwas_count and gwas_count != "0") and not pharmacogenomic_context(payload)
+
+
+def has_direct_clinvar_support(payload: dict) -> bool:
+    blob = lower_blob(
+        payload.get("clinvar_normalized_classification"),
+        payload.get("clinvar_germline_classification"),
+        payload.get("clinvar_review_status"),
+    )
+    return bool(blob) and "not_reported" not in blob and "not reported" not in blob
+
+
 def noncoding_weak_marker(payload: dict) -> bool:
     consequence = lower_blob(payload.get("vep_most_severe_consequence"))
     if contains_any(consequence, CODING_OR_FUNCTIONAL_TERMS):
@@ -419,6 +415,16 @@ def noncoding_weak_marker(payload: dict) -> bool:
     return True
 
 
+def low_deliverable_weight_marker(payload: dict) -> bool:
+    if not noncoding_weak_marker(payload):
+        return False
+    if real_clinvar_conflict(payload) or pathogenic_or_likely_pathogenic(payload) or pharmacogenomic_context(payload):
+        return False
+    if has_direct_clinvar_support(payload) and "benign" not in lower_blob(payload.get("clinvar_normalized_classification")):
+        return False
+    return gwas_only_context(payload) or not has_direct_clinvar_support(payload)
+
+
 def calibrated_scope(final_confidence: str, payload: dict, current_scope: str) -> str:
     if final_confidence == "Conflicting":
         return "conflicting_review_needed"
@@ -426,25 +432,28 @@ def calibrated_scope(final_confidence: str, payload: dict, current_scope: str) -
         if noncoding_weak_marker(payload):
             return "association_only"
         return "limited_evidence"
-    if clean_str(payload.get("pharmgkb_clinical_summary")) and final_confidence in {"High", "Moderate"}:
+    if pharmacogenomic_context(payload) and final_confidence in {"High", "Moderate"}:
         return "pharmacogenomic"
     return current_scope or "benign_contextual"
 
 
 def calibrated_professional_review(final_confidence: str, payload: dict, gene_ambiguity: bool) -> bool:
-    gene = clean_str(payload.get("Gene")).upper()
     match_status = lower_blob(payload.get("match_status"))
     consequence = lower_blob(payload.get("vep_most_severe_consequence"))
-    has_pharm_context = bool(clean_str(payload.get("pharmgkb_clinical_summary"))) and gene in PHARMACOGENOMIC_REVIEW_GENES
+    has_pharm_context = pharmacogenomic_context(payload) and final_confidence in {"High", "Moderate", "Conflicting"}
     alt_review_material = (
         "match_likely_needs_alt_review" in match_status
-        and (gene in SENSITIVE_REVIEW_GENES or contains_any(consequence, CODING_OR_FUNCTIONAL_TERMS))
+        and (
+            contains_any(consequence, CODING_OR_FUNCTIONAL_TERMS)
+            or real_clinvar_conflict(payload)
+            or pathogenic_or_likely_pathogenic(payload)
+            or has_pharm_context
+        )
     )
     return (
         final_confidence == "Conflicting"
         or real_clinvar_conflict(payload)
         or pathogenic_or_likely_pathogenic(payload)
-        or gene in SENSITIVE_REVIEW_GENES
         or has_pharm_context
         or alt_review_material
         or (gene_ambiguity and final_confidence != "Low")
@@ -452,30 +461,34 @@ def calibrated_professional_review(final_confidence: str, payload: dict, gene_am
 
 
 def calibrate_confidence(item: dict, payload: dict) -> tuple[str, str]:
-    gene = clean_str(payload.get("Gene")).upper()
-    rsid = clean_str(payload.get("SNP (rsID)"))
-    override = CURATED_CONFIDENCE_OVERRIDES.get((gene, rsid))
-    if override:
-        return override, f"Curated HEAL prototype calibration for {gene} {rsid}."
-
     current = clean_str(item.get("final_confidence_level")) or clean_str(item.get("llm_proposed_confidence_level")) or "Moderate"
     preliminary = clean_str(payload.get("preliminary_confidence_from_input"))
     match_status = lower_blob(payload.get("match_status"))
     consequence = lower_blob(payload.get("vep_most_severe_consequence"))
 
-    if real_clinvar_conflict(payload) and (pathogenic_or_likely_pathogenic(payload) or contains_any(consequence, CODING_OR_FUNCTIONAL_TERMS)):
+    if real_clinvar_conflict(payload) and (
+        pathogenic_or_likely_pathogenic(payload)
+        or contains_any(consequence, CODING_OR_FUNCTIONAL_TERMS)
+        or "reviewed by expert panel" in lower_blob(payload.get("clinvar_review_status"))
+    ):
         return "Conflicting", "Explicit ClinVar/pathogenicity conflict changes the interpretation."
 
     if current == "Conflicting" and not real_clinvar_conflict(payload):
         return "Moderate", "Model conflict downgraded because explicit ClinVar/pathogenicity conflict is not present."
 
+    if low_deliverable_weight_marker(payload):
+        return "Low", "Observed marker has low deliverable weight because support is mainly non-coding, indirect, or association-only."
+
     if noncoding_weak_marker(payload):
         if current == "High":
-            return "Moderate", "Non-coding or indirect marker is capped at Moderate unless curated otherwise."
-        return current, "Non-coding marker confidence retained after curated low/conflict checks."
+            return "Moderate", "Non-coding or indirect marker is capped at Moderate unless direct support is stronger."
+        return current, "Non-coding marker confidence retained after evidence-based low/conflict checks."
 
     if current == "High" and "match_likely_needs_alt_review" in match_status:
-        return "Moderate", "Non-strict ALT representation caps confidence at Moderate unless curated otherwise."
+        return "Moderate", "Non-strict ALT representation caps confidence at Moderate."
+
+    if current == "High" and preliminary == "Moderate" and not contains_any(consequence, CODING_OR_FUNCTIONAL_TERMS):
+        return "Moderate", "High model confidence capped because source confidence is moderate and evidence is indirect."
 
     if current not in {"High", "Moderate", "Low", "Conflicting"}:
         return "Moderate", "Invalid confidence normalized to Moderate."
@@ -497,7 +510,7 @@ def normalize_output(item: dict, payload: dict, model: str, dry_run: bool) -> di
     out["evidence_conflict_flag"] = str(real_clinvar_conflict(payload) or final_confidence == "Conflicting").lower()
     if calibration_note:
         suffix_en = f" Calibration note: {calibration_note}"
-        suffix_es = " Nota de calibracion: las reglas HEAL separan calidad tecnica de peso interpretativo final."
+        suffix_es = " Nota de calibracion: las reglas HEAL separan calidad tecnica, evidencia externa y peso interpretativo final."
         out["confidence_rationale_en"] = (clean_str(out.get("confidence_rationale_en")) + suffix_en).strip()
         out["confidence_rationale_es"] = (clean_str(out.get("confidence_rationale_es")) + suffix_es).strip()
     for key in ["evidence_used", "evidence_limitations"]:

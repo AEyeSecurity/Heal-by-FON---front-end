@@ -441,4 +441,5 @@ Validation:
   - clarified that `clinvar_conflict_flag=true` alone does not justify `Conflicting`;
   - added deterministic HEAL calibration after each LLM row to recalculate `final_confidence_level`, `evidence_conflict_flag`, `requires_professional_review`, and `interpretation_scope`;
   - reduced the prior overuse of `requires_professional_review`;
-  - preserved the curated prototype expectation that VDR/Fok1, SOD2, and TP53 are the primary `Conflicting` rows.
+- removed prototype-specific gene/rsID confidence overrides so LLM1 can generalize to new canons and VCFs;
+  - calibration now uses only row evidence fields such as VEP consequence, ClinVar classification/review status, match status, population frequency, GWAS context, PharmGKB context, and locus ambiguity.
