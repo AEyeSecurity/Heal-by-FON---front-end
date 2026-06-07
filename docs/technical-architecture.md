@@ -4,7 +4,7 @@
 
 This repository contains the first production-facing slice of HEAL by FON: a web interface and backend API for receiving large VCF files, validating their integrity, maintaining the current interpretation canon, matching VCF rows against the canon, preparing match outputs for audit, and enriching observed variants with public external sources.
 
-Clinical/genomic interpretation, report generation, and multi-user accounts are not implemented here yet. The current downstream implementation stops after observed variant enrichment; later interpretation is still represented as a placeholder.
+Global clinical/genomic report generation and multi-user accounts are not implemented here yet. The current downstream implementation includes LLM1 individual observed-variant interpretation, but deterministic grouping and LLM2 global interpretation remain separate later modules.
 
 ## Public Components
 
@@ -80,6 +80,8 @@ GET  /api/vcf-canon-matches/:jobId/enrichment
 GET  /api/vcf-canon-matches/:jobId/enrichment-interpretive
 GET  /api/vcf-canon-matches/:jobId/enrichment-plus
 POST /api/vcf-canon-matches/:jobId/retry-enrichment
+POST /api/vcf-canon-matches/:jobId/individual-interpretation
+GET  /api/vcf-canon-matches/:jobId/individual-interpretations
 ```
 
 Default chunk size:

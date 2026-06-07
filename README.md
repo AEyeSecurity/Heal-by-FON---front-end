@@ -75,6 +75,8 @@ GET  /api/vcf-canon-matches/:jobId/enrichment
 GET  /api/vcf-canon-matches/:jobId/enrichment-interpretive
 GET  /api/vcf-canon-matches/:jobId/enrichment-plus
 POST /api/vcf-canon-matches/:jobId/retry-enrichment
+POST /api/vcf-canon-matches/:jobId/individual-interpretation
+GET  /api/vcf-canon-matches/:jobId/individual-interpretations
 ```
 
 Default chunk size is 8 MiB. This keeps every request well below Cloudflare's common proxied request body limits while allowing multi-GB VCF files to land on the server by streaming each chunk to disk. The browser only receives an `uploadId`; local server paths stay on the backend.
@@ -120,6 +122,8 @@ HEAL_N8N_VARIANT_ENRICHMENT_WEBHOOK_URL
 That stage enriches only observed genotype rows with public Ensembl, ClinVar, and MyVariant.info data. It uses a schema-versioned local cache under `C:\ServerCIT\services\heal-variant-enrichment\cache` so repeated audits do not re-query the same rsIDs unless the enrichment schema changes.
 
 The original Colab does not generate a final `.docx` or PDF report. Its deterministic final coded output is the Colab-style enriched observed-variant CSV plus deliverable-style CSV tables. The app now generates that Colab-style CSV as `heal_fon_interpretation_enriched_observed69.csv`; the next planned stage is a controlled final interpretation/report workflow; see `docs/final-interpretation-next-step.md`.
+
+The first interpretation module is now separated as LLM1: individual observed-variant interpretation. It consumes `heal_fon_interpretation_enrichment_plus.csv`, prepares a filtered JSON payload per row, and writes `individual_variant_interpretations.csv`. Deterministic grouping and global LLM2 reporting remain separate later modules.
 
 ## Canon Flow
 

@@ -405,3 +405,28 @@ Validation:
 - Added frontend pop-up action:
   - `Reintentar enriquecimiento`
 - Confirmed the user-reported `Cannot GET /enrichment-plus` symptom means the running HEAL API process has not loaded the newer route yet; it is not evidence that the Plus CSV is missing.
+
+### LLM1 Individual Variant Interpretation
+
+- Added a new module under `services/heal-individual-interpretation`.
+- Added deterministic payload preparation from `heal_fon_interpretation_enrichment_plus.csv`.
+- Added prompt and strict JSON Schema files:
+  - `prompt_llm1.md`
+  - `individual_variant_interpretation_schema.json`
+- Added Python runner:
+  - `interpret_observed_variants.py`
+- Outputs:
+  - `variant_interpretation_payloads.jsonl`
+  - `variant_interpretation_payloads.csv`
+  - `individual_variant_interpretations.jsonl`
+  - `individual_variant_interpretations.csv`
+  - `individual_variant_interpretation_errors.csv`
+  - `individual_variant_interpretation_summary.json`
+- Added backend endpoint:
+  - `POST /api/vcf-canon-matches/:jobId/individual-interpretation`
+  - `GET /api/vcf-canon-matches/:jobId/individual-interpretations`
+- Added frontend stage:
+  - `Interpretacion individual`
+- Added frontend download:
+  - `Descargar CSV interpretacion individual`
+- This module is intentionally separate from deterministic grouping and LLM2 global interpretation.

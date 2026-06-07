@@ -31,6 +31,9 @@ const MATCH_PREPARATION_ROOT =
 const VARIANT_ENRICHMENT_ROOT =
   process.env.HEAL_VARIANT_ENRICHMENT_ROOT ||
   "C:\\ServerCIT\\services\\heal-variant-enrichment";
+const INDIVIDUAL_INTERPRETATION_ROOT =
+  process.env.HEAL_INDIVIDUAL_INTERPRETATION_ROOT ||
+  "C:\\ServerCIT\\services\\heal-individual-interpretation";
 const PYTHON_EXE = process.env.HEAL_PYTHON_EXE || "python";
 const MAX_UPLOADS = Math.max(1, Number.parseInt(process.env.HEAL_MAX_UPLOADS || "12", 10) || 12);
 const UPLOAD_TTL_MS =
@@ -66,7 +69,11 @@ const N8N_CANON_WEBHOOK_URL = process.env.HEAL_N8N_CANON_WEBHOOK_URL || "";
 const N8N_RSID_RESOLUTION_WEBHOOK_URL = process.env.HEAL_N8N_RSID_RESOLUTION_WEBHOOK_URL || "";
 const N8N_VCF_CANON_MATCH_WEBHOOK_URL = process.env.HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL || "";
 const N8N_VARIANT_ENRICHMENT_WEBHOOK_URL = process.env.HEAL_N8N_VARIANT_ENRICHMENT_WEBHOOK_URL || "";
+const N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL =
+  process.env.HEAL_N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL || "";
 const N8N_WEBHOOK_TOKEN = process.env.HEAL_N8N_WEBHOOK_TOKEN || "";
+const LLM1_MODEL = process.env.HEAL_LLM1_MODEL || "gpt-5.5";
+const ALLOW_LLM_DRY_RUN = process.env.HEAL_ALLOW_LLM_DRY_RUN === "true";
 const ALLOWED_ORIGINS = (process.env.HEAL_ALLOWED_ORIGINS ||
   "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173")
   .split(",")
@@ -177,6 +184,14 @@ function variantEnrichmentPaths() {
     root,
     runs: path.join(root, "runs"),
     cache: path.join(root, "cache"),
+  };
+}
+
+function individualInterpretationPaths() {
+  const root = path.resolve(INDIVIDUAL_INTERPRETATION_ROOT);
+  return {
+    root,
+    runs: path.join(root, "runs"),
   };
 }
 
@@ -313,6 +328,14 @@ function sanitizeVariantEnrichmentResult(result) {
   return publicResult;
 }
 
+function sanitizeIndividualInterpretationResult(result) {
+  const publicResult = JSON.parse(JSON.stringify(result || {}));
+  delete publicResult.inputPath;
+  delete publicResult.outputDir;
+  delete publicResult.outputs;
+  return publicResult;
+}
+
 function publicArtifactsReady(job) {
   const artifacts = job.artifacts || {};
   return {
@@ -328,6 +351,7 @@ function publicArtifactsReady(job) {
     enrichment: Boolean(artifacts.observedVariantEnrichmentCsv),
     enrichmentInterpretive: Boolean(artifacts.observedVariantInterpretiveCsv),
     enrichmentPlus: Boolean(artifacts.observedVariantEnrichmentPlusCsv),
+    individualInterpretation: Boolean(artifacts.individualVariantInterpretationsCsv),
   };
 }
 
@@ -589,6 +613,20 @@ async function processVariantEnrichment(payload) {
   );
 }
 
+async function processIndividualInterpretation(payload) {
+  return (
+    (await postWorkflowForSummary(
+      N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL,
+      payload,
+      "n8n individual variant interpretation",
+    )) ||
+    (await runBase64JsonScript(
+      path.join(INDIVIDUAL_INTERPRETATION_ROOT, "interpret_observed_variants.py"),
+      payload,
+    ))
+  );
+}
+
 async function processVariantEnrichmentWithRetry(payload, job, attempts = 3) {
   const errors = [];
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -608,6 +646,27 @@ async function processVariantEnrichmentWithRetry(payload, job, attempts = 3) {
     }
   }
   throw new Error(`Variant enrichment failed after ${attempts} attempts: ${errors.join(" | ")}`);
+}
+
+async function processIndividualInterpretationWithRetry(payload, job, attempts = 2) {
+  const errors = [];
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      job.stage = "individual_interpretation";
+      job.stageProgress = Math.max(job.stageProgress || 8, attempt === 1 ? 8 : 16);
+      job.message =
+        attempt === 1
+          ? "Interpreting observed variants individually"
+          : `Retrying individual interpretation (${attempt}/${attempts})`;
+      job.updatedAt = new Date().toISOString();
+      return await processIndividualInterpretation(payload);
+    } catch (error) {
+      errors.push(error.message || String(error));
+      if (attempt >= attempts) break;
+      await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+    }
+  }
+  throw new Error(`Individual interpretation failed after ${attempts} attempts: ${errors.join(" | ")}`);
 }
 
 async function loadCurrentCanon() {
@@ -814,6 +873,9 @@ app.get("/api/health", (_req, res) => {
     vcfCanonMatchRoot: VCF_CANON_MATCH_ROOT,
     matchPreparationRoot: MATCH_PREPARATION_ROOT,
     variantEnrichmentRoot: VARIANT_ENRICHMENT_ROOT,
+    individualInterpretationRoot: INDIVIDUAL_INTERPRETATION_ROOT,
+    individualInterpretationConfigured: Boolean(process.env.HEAL_OPENAI_API_KEY || process.env.OPENAI_API_KEY),
+    individualInterpretationModel: LLM1_MODEL,
     maxCanonFileSizeBytes: MAX_CANON_FILE_SIZE_BYTES,
     maxCanons: MAX_CANONS,
     maxUploads: MAX_UPLOADS,
@@ -831,6 +893,7 @@ app.get("/api/health", (_req, res) => {
     n8nRsidResolutionWebhookConfigured: Boolean(N8N_RSID_RESOLUTION_WEBHOOK_URL),
     n8nVcfCanonMatchWebhookConfigured: Boolean(N8N_VCF_CANON_MATCH_WEBHOOK_URL),
     n8nVariantEnrichmentWebhookConfigured: Boolean(N8N_VARIANT_ENRICHMENT_WEBHOOK_URL),
+    n8nIndividualInterpretationWebhookConfigured: Boolean(N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL),
   });
 });
 
@@ -1697,6 +1760,112 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
   res.status(202).json(publicJob(job));
 });
 
+app.post("/api/vcf-canon-matches/:jobId/individual-interpretation", async (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (job.status === "running") {
+    res.status(409).json({ error: "This job is already running." });
+    return;
+  }
+  if (!job.artifacts?.observedVariantEnrichmentPlusCsv) {
+    res.status(409).json({ error: "Enrichment Plus CSV is required before individual interpretation." });
+    return;
+  }
+
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+
+  const enrichmentPaths = variantEnrichmentPaths();
+  const plusCsvPath = path.resolve(job.artifacts.observedVariantEnrichmentPlusCsv || "");
+  if (!isPathInside(enrichmentPaths.root, plusCsvPath)) {
+    res.status(400).json({ error: "Enrichment Plus CSV is outside the allowed root." });
+    return;
+  }
+  const plusStat = await stat(plusCsvPath).catch(() => null);
+  if (!plusStat || plusStat.size <= 0) {
+    res.status(404).json({ error: "Enrichment Plus CSV was not found." });
+    return;
+  }
+
+  job.status = "running";
+  job.progress = Math.max(job.progress || 0, 96);
+  job.stage = "individual_interpretation";
+  job.stageProgress = 5;
+  job.error = null;
+  job.message = "Starting individual variant interpretation";
+  job.updatedAt = new Date().toISOString();
+  await persistVcfCanonJob(job);
+
+  (async () => {
+    try {
+      const interpretationPaths = individualInterpretationPaths();
+      await mkdir(interpretationPaths.runs, { recursive: true });
+      const interpretationRunId = `individual-interpretation-${crypto.randomUUID()}`;
+      const interpretationOutputDir = path.join(interpretationPaths.runs, interpretationRunId);
+      await mkdir(interpretationOutputDir, { recursive: true });
+      const requestDryRun = Boolean(req.body?.dryRun) && ALLOW_LLM_DRY_RUN;
+      const interpretationPayload = {
+        event: "heal.individual_variant_interpretation.requested",
+        runId: interpretationRunId,
+        matchJobId: job.id,
+        uploadId: job.uploadId,
+        fileName: job.fileName,
+        inputPath: plusCsvPath,
+        outputDir: interpretationOutputDir,
+        model: LLM1_MODEL,
+        dryRun: requestDryRun,
+        requestedAt: new Date().toISOString(),
+      };
+      const interpretationSummary = await processIndividualInterpretationWithRetry(interpretationPayload, job, 2);
+      job.artifacts.variantInterpretationPayloadsJsonl =
+        interpretationSummary.outputs?.variantInterpretationPayloadsJsonl || "";
+      job.artifacts.variantInterpretationPayloadsCsv =
+        interpretationSummary.outputs?.variantInterpretationPayloadsCsv || "";
+      job.artifacts.individualVariantInterpretationsJsonl =
+        interpretationSummary.outputs?.individualVariantInterpretationsJsonl || "";
+      job.artifacts.individualVariantInterpretationsCsv =
+        interpretationSummary.outputs?.individualVariantInterpretationsCsv || "";
+      job.artifacts.individualVariantInterpretationErrorsCsv =
+        interpretationSummary.outputs?.individualVariantInterpretationErrorsCsv || "";
+      job.artifacts.individualVariantInterpretationSummaryJson =
+        interpretationSummary.outputs?.individualVariantInterpretationSummaryJson || "";
+      job.result = {
+        ...(job.result || {}),
+        individualInterpretation: sanitizeIndividualInterpretationResult(interpretationSummary),
+      };
+      job.status = interpretationSummary.status === "invalid" ? "failed" : "complete";
+      job.progress = 100;
+      job.stage = "individual_interpretation";
+      job.stageProgress = 100;
+      job.message =
+        interpretationSummary.status === "warning"
+          ? "Individual interpretation completed with row warnings"
+          : "Individual interpretation completed";
+      if (interpretationSummary.status === "invalid") {
+        job.error = interpretationSummary.errors?.[0] || "Individual interpretation failed.";
+      }
+    } catch (error) {
+      job.status = "failed";
+      job.progress = 100;
+      job.stage = "individual_interpretation";
+      job.stageProgress = 100;
+      job.error = error.message || String(error);
+      job.message = "Individual interpretation failed";
+    } finally {
+      job.updatedAt = new Date().toISOString();
+      await persistVcfCanonJob(job);
+    }
+  })();
+
+  res.status(202).json(publicJob(job));
+});
+
 app.get("/api/vcf-canon-matches/:jobId/download", async (req, res) => {
   if (REQUIRE_ORIGIN && !req.headers.origin) {
     res.status(403).json({ error: "Origin header is required." });
@@ -1951,6 +2120,45 @@ app.get("/api/vcf-canon-matches/:jobId/enrichment-plus", async (req, res) => {
   const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.download(csvPath, `${baseName}_interpretation_enrichment_plus.csv`);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/individual-interpretations", async (req, res) => {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (!job.artifacts?.individualVariantInterpretationsCsv) {
+    res.status(409).json({ error: "Individual interpretation CSV is not ready yet." });
+    return;
+  }
+
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+
+  const paths = individualInterpretationPaths();
+  const csvPath = path.resolve(job.artifacts?.individualVariantInterpretationsCsv || "");
+  if (!isPathInside(paths.root, csvPath)) {
+    res.status(400).json({ error: "Individual interpretation CSV is outside the allowed root." });
+    return;
+  }
+  const csvStat = await stat(csvPath).catch(() => null);
+  if (!csvStat || csvStat.size <= 0) {
+    res.status(404).json({ error: "Individual interpretation CSV was not found." });
+    return;
+  }
+
+  const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.download(csvPath, `${baseName}_individual_variant_interpretations.csv`);
 });
 
 await loadPersistedVcfCanonJobs();

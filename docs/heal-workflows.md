@@ -164,6 +164,8 @@ GET /api/vcf-canon-matches/:jobId/enrichment
 GET /api/vcf-canon-matches/:jobId/enrichment-interpretive
 GET /api/vcf-canon-matches/:jobId/enrichment-plus
 POST /api/vcf-canon-matches/:jobId/retry-enrichment
+POST /api/vcf-canon-matches/:jobId/individual-interpretation
+GET /api/vcf-canon-matches/:jobId/individual-interpretations
 GET /api/vcf-canon-matches/:jobId/debug/:artifact
 ```
 
@@ -186,6 +188,33 @@ heal_fon_interpretation_enrichment_plus.csv
 `heal_observed_variant_enrichment.csv` remains the technical QA artifact. `heal_fon_interpretation_enriched_observed69.csv` remains the Colab-style interpretive artifact. `heal_fon_interpretation_enrichment_plus.csv` is the richer LLM-facing artifact, adding normalized ClinVar classification/evidence, population-frequency summary, selected VEP transcript/HGVS/MANE/protein fields, CADD/REVEL/AlphaMissense/SIFT/PolyPhen signals when available, GWAS Catalog associations, ClinPGx/PharmGKB clinical and variant annotations, PubMed IDs, source error flags, and compact raw JSON snippets for audit.
 
 If the external enrichment stage fails after match preparation has already produced `heal_fon_deliverable_presentation_audit.csv`, the frontend can call `POST /api/vcf-canon-matches/:jobId/retry-enrichment`. This reuses the prepared audit CSV and reruns only Workflow 5. It does not repeat upload, integrity validation, VCF-canon matching, or match preparation.
+
+## LLM1 Individual Variant Interpretation
+
+The next module consumes only observed variants from the Enrichment Plus CSV. It is intentionally separate from deterministic grouping and global reporting.
+
+```text
+Input:  heal_fon_interpretation_enrichment_plus.csv
+Output: individual_variant_interpretations.csv
+```
+
+Processing:
+
+- prepares `variant_interpretation_payloads.jsonl` and `.csv`;
+- passes one filtered row at a time to the configured LLM;
+- uses strict JSON Schema output;
+- writes row-level errors to `individual_variant_interpretation_errors.csv`;
+- exposes the end-user audit CSV through `GET /api/vcf-canon-matches/:jobId/individual-interpretations`.
+
+Runtime configuration:
+
+```text
+HEAL_OPENAI_API_KEY=<secret outside repo>
+HEAL_LLM1_MODEL=gpt-5.5
+HEAL_INDIVIDUAL_INTERPRETATION_ROOT=C:\ServerCIT\services\heal-individual-interpretation
+```
+
+This module does not group repeated rsIDs, create system-level summaries, or produce the final family/professional report. Those remain later modules.
 
 ## Colab Output Boundary
 

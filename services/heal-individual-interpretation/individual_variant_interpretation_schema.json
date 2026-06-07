@@ -1,0 +1,103 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "row_id",
+    "gene",
+    "rsID",
+    "category",
+    "canon_effect",
+    "observed_genotype",
+    "zygosity",
+    "ref_alt",
+    "variant_observed_in_vcf",
+    "interpretation_scope",
+    "interpretation_one_sentence_en",
+    "interpretation_one_sentence_es",
+    "interpretation_long_en",
+    "interpretation_long_es",
+    "technical_interpretation_en",
+    "technical_interpretation_es",
+    "llm_proposed_confidence_level",
+    "preliminary_confidence_from_input",
+    "final_confidence_level",
+    "confidence_rationale_en",
+    "confidence_rationale_es",
+    "technical_notes_en",
+    "technical_notes_es",
+    "family_notes_en",
+    "family_notes_es",
+    "recommended_next_review_step_en",
+    "recommended_next_review_step_es",
+    "requires_professional_review",
+    "gene_or_locus_ambiguity_flag",
+    "evidence_conflict_flag",
+    "evidence_used",
+    "evidence_limitations"
+  ],
+  "properties": {
+    "row_id": { "type": "string" },
+    "gene": { "type": "string" },
+    "rsID": { "type": "string" },
+    "category": { "type": "string" },
+    "canon_effect": { "type": "string" },
+    "observed_genotype": { "type": "string" },
+    "zygosity": { "type": "string" },
+    "ref_alt": { "type": "string" },
+    "variant_observed_in_vcf": { "type": "boolean" },
+    "interpretation_scope": {
+      "type": "string",
+      "enum": [
+        "functional_context",
+        "pharmacogenomic",
+        "association_only",
+        "benign_contextual",
+        "conflicting_review_needed",
+        "limited_evidence"
+      ]
+    },
+    "interpretation_one_sentence_en": { "type": "string" },
+    "interpretation_one_sentence_es": { "type": "string" },
+    "interpretation_long_en": { "type": "string" },
+    "interpretation_long_es": { "type": "string" },
+    "technical_interpretation_en": { "type": "string" },
+    "technical_interpretation_es": { "type": "string" },
+    "llm_proposed_confidence_level": {
+      "type": "string",
+      "enum": ["High", "Moderate", "Low", "Conflicting"]
+    },
+    "preliminary_confidence_from_input": { "type": "string" },
+    "final_confidence_level": {
+      "type": "string",
+      "enum": ["High", "Moderate", "Low", "Conflicting"]
+    },
+    "confidence_rationale_en": { "type": "string" },
+    "confidence_rationale_es": { "type": "string" },
+    "technical_notes_en": { "type": "string" },
+    "technical_notes_es": { "type": "string" },
+    "family_notes_en": { "type": "string" },
+    "family_notes_es": { "type": "string" },
+    "recommended_next_review_step_en": { "type": "string" },
+    "recommended_next_review_step_es": { "type": "string" },
+    "requires_professional_review": { "type": "boolean" },
+    "gene_or_locus_ambiguity_flag": { "type": "boolean" },
+    "evidence_conflict_flag": { "type": "boolean" },
+    "evidence_used": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "field", "value"],
+        "properties": {
+          "source": { "type": "string" },
+          "field": { "type": "string" },
+          "value": { "type": "string" }
+        }
+      }
+    },
+    "evidence_limitations": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}
