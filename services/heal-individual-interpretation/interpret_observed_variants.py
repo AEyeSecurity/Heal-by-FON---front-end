@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import csv
 import datetime as dt
 import json
@@ -16,8 +17,10 @@ import urllib.error
 import urllib.request
 
 
-DEFAULT_MODEL = "gpt-5.5"
-DEFAULT_TIMEOUT_SECONDS = 90
+DEFAULT_MODEL = "gpt-5-mini"
+DEFAULT_TIMEOUT_SECONDS = 45
+DEFAULT_ROW_ATTEMPTS = 2
+DEFAULT_MAX_WORKERS = 3
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROMPT_PATH = SCRIPT_DIR / "prompt_llm1.md"
@@ -149,6 +152,13 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
+def write_progress(path: Path, progress: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(progress, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
 def compact_json(value) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
@@ -223,6 +233,34 @@ def call_openai_structured(
         raise RuntimeError(f"OpenAI API http_{error.code}: {detail}") from error
     text = output_text_from_response(parsed)
     return json.loads(text)
+
+
+def call_openai_with_retries(
+    payload: dict,
+    *,
+    api_key: str,
+    model: str,
+    system_prompt: str,
+    schema: dict,
+    timeout_seconds: int,
+    row_attempts: int,
+) -> dict:
+    errors = []
+    for attempt in range(1, row_attempts + 1):
+        try:
+            return call_openai_structured(
+                payload,
+                api_key=api_key,
+                model=model,
+                system_prompt=system_prompt,
+                schema=schema,
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception as error:  # noqa: BLE001 - row-level retry keeps the batch moving.
+            errors.append(str(error))
+            if attempt < row_attempts:
+                time.sleep(min(2.0 * attempt, 5.0))
+    raise RuntimeError(" | ".join(errors))
 
 
 def dry_run_interpretation(payload: dict) -> dict:
@@ -300,6 +338,11 @@ def process(payload: dict) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     model = clean_str(payload.get("model")) or os.environ.get("HEAL_LLM1_MODEL") or DEFAULT_MODEL
     timeout_seconds = int(payload.get("timeoutSeconds") or os.environ.get("HEAL_LLM_TIMEOUT_SECONDS") or DEFAULT_TIMEOUT_SECONDS)
+    row_attempts = int(payload.get("rowAttempts") or os.environ.get("HEAL_LLM_ROW_ATTEMPTS") or DEFAULT_ROW_ATTEMPTS)
+    max_workers = max(
+        1,
+        min(6, int(payload.get("maxWorkers") or os.environ.get("HEAL_LLM_MAX_WORKERS") or DEFAULT_MAX_WORKERS)),
+    )
     max_rows = int(payload.get("maxRows") or 0)
     dry_run = bool(payload.get("dryRun"))
     api_key = clean_str(payload.get("apiKey")) or os.environ.get("HEAL_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
@@ -318,29 +361,82 @@ def process(payload: dict) -> dict:
 
     payload_jsonl = output_dir / "variant_interpretation_payloads.jsonl"
     payload_csv = output_dir / "variant_interpretation_payloads.csv"
+    progress_json = output_dir / "individual_variant_interpretation_progress.json"
+    interpretations_jsonl = output_dir / "individual_variant_interpretations.jsonl"
+    interpretations_csv = output_dir / "individual_variant_interpretations.csv"
+    errors_csv = output_dir / "individual_variant_interpretation_errors.csv"
+    summary_json = output_dir / "individual_variant_interpretation_summary.json"
     write_jsonl(payload_jsonl, payloads)
     payload_fieldnames = PAYLOAD_FIELDS + ["preliminary_confidence_from_input"]
     write_csv(payload_csv, [flatten_for_payload_csv(item) for item in payloads], payload_fieldnames)
+    write_csv(interpretations_csv, [], OUTPUT_FIELDS + ["model", "dry_run", "source_row_id"])
+    write_csv(errors_csv, [], ["row_id", "Gene", "SNP (rsID)", "error"])
+    write_progress(
+        progress_json,
+        {
+            "status": "running",
+            "completedRows": 0,
+            "totalRows": len(payloads),
+            "interpretedRows": 0,
+            "errorRows": 0,
+            "currentRow": None,
+            "model": model,
+            "startedAt": started_at,
+            "updatedAt": utc_now(),
+        },
+    )
 
-    interpretations = []
-    errors = []
-    for index, item in enumerate(payloads, start=1):
+    interpretation_results: dict[int, dict] = {}
+    error_results: dict[int, dict] = {}
+
+    def write_partial_outputs(completed_rows: int, current_item: dict | None = None) -> None:
+        interpretations = [interpretation_results[index] for index in sorted(interpretation_results)]
+        errors = [error_results[index] for index in sorted(error_results)]
+        write_jsonl(interpretations_jsonl, interpretations)
+        write_csv(interpretations_csv, interpretations, OUTPUT_FIELDS + ["model", "dry_run", "source_row_id"])
+        write_csv(errors_csv, errors, ["row_id", "Gene", "SNP (rsID)", "error"])
+        write_progress(
+            progress_json,
+            {
+                "status": "running",
+                "completedRows": completed_rows,
+                "totalRows": len(payloads),
+                "interpretedRows": len(interpretations),
+                "errorRows": len(errors),
+                "currentRow": (
+                    {
+                        "row_id": current_item.get("row_id", ""),
+                        "Gene": current_item.get("Gene", ""),
+                        "SNP (rsID)": current_item.get("SNP (rsID)", ""),
+                    }
+                    if current_item
+                    else None
+                ),
+                "model": model,
+                "maxWorkers": max_workers,
+                "startedAt": started_at,
+                "updatedAt": utc_now(),
+            },
+        )
+
+    def interpret_one(index: int, item: dict) -> tuple[int, dict | None, dict | None]:
         row_id = item.get("row_id") or str(index)
         try:
             if dry_run:
                 parsed = dry_run_interpretation(item)
             else:
-                parsed = call_openai_structured(
+                parsed = call_openai_with_retries(
                     item,
                     api_key=api_key,
                     model=model,
                     system_prompt=system_prompt,
                     schema=schema,
                     timeout_seconds=timeout_seconds,
+                    row_attempts=row_attempts,
                 )
-            interpretations.append(normalize_output(parsed, item, model, dry_run))
+            return index, normalize_output(parsed, item, model, dry_run), None
         except Exception as error:  # noqa: BLE001 - row-level isolation is intentional.
-            errors.append(
+            return index, None, (
                 {
                     "row_id": row_id,
                     "Gene": item.get("Gene", ""),
@@ -348,13 +444,37 @@ def process(payload: dict) -> dict:
                     "error": str(error),
                 }
             )
-        if not dry_run:
-            time.sleep(float(payload.get("delaySeconds") or os.environ.get("HEAL_LLM_DELAY_SECONDS") or 0.2))
 
-    interpretations_jsonl = output_dir / "individual_variant_interpretations.jsonl"
-    interpretations_csv = output_dir / "individual_variant_interpretations.csv"
-    errors_csv = output_dir / "individual_variant_interpretation_errors.csv"
-    summary_json = output_dir / "individual_variant_interpretation_summary.json"
+    completed_count = 0
+    if dry_run or max_workers == 1:
+        for index, item in enumerate(payloads, start=1):
+            result_index, interpretation, error = interpret_one(index, item)
+            if interpretation:
+                interpretation_results[result_index] = interpretation
+            if error:
+                error_results[result_index] = error
+            completed_count += 1
+            write_partial_outputs(completed_count, item)
+            if not dry_run:
+                time.sleep(float(payload.get("delaySeconds") or os.environ.get("HEAL_LLM_DELAY_SECONDS") or 0.2))
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_item = {
+                executor.submit(interpret_one, index, item): item for index, item in enumerate(payloads, start=1)
+            }
+            for future in concurrent.futures.as_completed(future_to_item):
+                item = future_to_item[future]
+                result_index, interpretation, error = future.result()
+                if interpretation:
+                    interpretation_results[result_index] = interpretation
+                if error:
+                    error_results[result_index] = error
+                completed_count += 1
+                write_partial_outputs(completed_count, item)
+
+    interpretations = [interpretation_results[index] for index in sorted(interpretation_results)]
+    errors = [error_results[index] for index in sorted(error_results)]
+
     write_jsonl(interpretations_jsonl, interpretations)
     write_csv(interpretations_csv, interpretations, OUTPUT_FIELDS + ["model", "dry_run", "source_row_id"])
     write_csv(errors_csv, errors, ["row_id", "Gene", "SNP (rsID)", "error"])
@@ -373,11 +493,13 @@ def process(payload: dict) -> dict:
             "error_rows": len(errors),
             "model": model,
             "dry_run": dry_run,
+            "max_workers": max_workers,
             "schema": "heal_individual_variant_interpretation",
         },
         "outputs": {
             "variantInterpretationPayloadsJsonl": str(payload_jsonl),
             "variantInterpretationPayloadsCsv": str(payload_csv),
+            "individualVariantInterpretationProgressJson": str(progress_json),
             "individualVariantInterpretationsJsonl": str(interpretations_jsonl),
             "individualVariantInterpretationsCsv": str(interpretations_csv),
             "individualVariantInterpretationErrorsCsv": str(errors_csv),
@@ -386,6 +508,22 @@ def process(payload: dict) -> dict:
         "timestamps": {"startedAt": started_at, "completedAt": utc_now()},
     }
     summary_json.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_progress(
+        progress_json,
+        {
+            "status": status,
+            "completedRows": len(payloads),
+            "totalRows": len(payloads),
+            "interpretedRows": len(interpretations),
+            "errorRows": len(errors),
+            "currentRow": None,
+            "model": model,
+            "maxWorkers": max_workers,
+            "startedAt": started_at,
+            "updatedAt": utc_now(),
+            "completedAt": summary["timestamps"]["completedAt"],
+        },
+    )
     return summary
 
 

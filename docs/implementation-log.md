@@ -430,3 +430,9 @@ Validation:
 - Added frontend download:
   - `Descargar CSV interpretacion individual`
 - This module is intentionally separate from deterministic grouping and LLM2 global interpretation.
+- Performance/progress correction:
+  - changed the operational model to `gpt-5-mini` for lower latency on this structured row-level task;
+  - added `HEAL_LLM_MAX_WORKERS`, `HEAL_LLM_TIMEOUT_SECONDS`, and `HEAL_LLM_ROW_ATTEMPTS`;
+  - added incremental output writes and `individual_variant_interpretation_progress.json`;
+  - backend now reads the progress file while the Python process is running, so the frontend no longer remains at the initial percentage during long LLM calls;
+  - persisted `running` jobs are marked failed/retryable on API restart to avoid zombie jobs.

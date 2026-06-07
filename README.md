@@ -123,7 +123,7 @@ That stage enriches only observed genotype rows with public Ensembl, ClinVar, an
 
 The original Colab does not generate a final `.docx` or PDF report. Its deterministic final coded output is the Colab-style enriched observed-variant CSV plus deliverable-style CSV tables. The app now generates that Colab-style CSV as `heal_fon_interpretation_enriched_observed69.csv`; the next planned stage is a controlled final interpretation/report workflow; see `docs/final-interpretation-next-step.md`.
 
-The first interpretation module is now separated as LLM1: individual observed-variant interpretation. It consumes `heal_fon_interpretation_enrichment_plus.csv`, prepares a filtered JSON payload per row, and writes `individual_variant_interpretations.csv`. Deterministic grouping and global LLM2 reporting remain separate later modules.
+The first interpretation module is now separated as LLM1: individual observed-variant interpretation. It consumes `heal_fon_interpretation_enrichment_plus.csv`, prepares a filtered JSON payload per row, and writes `individual_variant_interpretations.csv`. It runs with controlled parallelism, writes progress incrementally, and keeps row-level errors isolated. Deterministic grouping and global LLM2 reporting remain separate later modules.
 
 ## Canon Flow
 

@@ -15,16 +15,21 @@ Deterministic preparation:
 
 LLM execution:
 
-- default model: `gpt-5.5`;
+- default model: `gpt-5-mini`;
 - override with `HEAL_LLM1_MODEL`;
+- default concurrency: `HEAL_LLM_MAX_WORKERS=3`;
+- default row timeout: `HEAL_LLM_TIMEOUT_SECONDS=45`;
+- default row attempts: `HEAL_LLM_ROW_ATTEMPTS=2`;
 - API key is read from `HEAL_OPENAI_API_KEY` or `OPENAI_API_KEY`;
 - output is constrained by `individual_variant_interpretation_schema.json`;
 - one failed row does not stop the entire batch.
+- rows are interpreted in controlled parallel batches and outputs are written incrementally.
 
 Outputs:
 
 - `variant_interpretation_payloads.jsonl`
 - `variant_interpretation_payloads.csv`
+- `individual_variant_interpretation_progress.json`
 - `individual_variant_interpretations.jsonl`
 - `individual_variant_interpretations.csv`
 - `individual_variant_interpretation_errors.csv`

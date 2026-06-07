@@ -72,7 +72,7 @@ const N8N_VARIANT_ENRICHMENT_WEBHOOK_URL = process.env.HEAL_N8N_VARIANT_ENRICHME
 const N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL =
   process.env.HEAL_N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL || "";
 const N8N_WEBHOOK_TOKEN = process.env.HEAL_N8N_WEBHOOK_TOKEN || "";
-const LLM1_MODEL = process.env.HEAL_LLM1_MODEL || "gpt-5.5";
+const LLM1_MODEL = process.env.HEAL_LLM1_MODEL || "gpt-5-mini";
 const ALLOW_LLM_DRY_RUN = process.env.HEAL_ALLOW_LLM_DRY_RUN === "true";
 const ALLOWED_ORIGINS = (process.env.HEAL_ALLOWED_ORIGINS ||
   "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173")
@@ -588,6 +588,76 @@ function runBase64JsonScript(scriptPath, payload) {
   });
 }
 
+async function updateIndividualInterpretationJobProgress(payload, job, { final = false } = {}) {
+  const progressPath = path.join(payload.outputDir, "individual_variant_interpretation_progress.json");
+  const raw = await readFile(progressPath, "utf8").catch(() => null);
+  if (!raw) return;
+  const progress = JSON.parse(raw);
+  const totalRows = Number(progress.totalRows || 0);
+  const completedRows = Number(progress.completedRows || 0);
+  const percent = totalRows > 0 ? Math.round((completedRows / totalRows) * 100) : 8;
+  job.stage = "individual_interpretation";
+  job.stageProgress = final ? Math.min(100, Math.max(8, percent)) : Math.min(98, Math.max(8, percent));
+  job.message =
+    totalRows > 0
+      ? `Interpreting observed variants (${completedRows}/${totalRows})`
+      : "Interpreting observed variants";
+  job.updatedAt = new Date().toISOString();
+  await persistVcfCanonJob(job);
+}
+
+function runIndividualInterpretationScript(payload, job) {
+  return new Promise((resolve, reject) => {
+    const scriptPath = path.join(INDIVIDUAL_INTERPRETATION_ROOT, "interpret_observed_variants.py");
+    const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
+    const child = spawn(PYTHON_EXE, [scriptPath, "--input-json-base64", encoded], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let progressUpdating = false;
+    const progressTimer = setInterval(() => {
+      if (progressUpdating) return;
+      progressUpdating = true;
+      updateIndividualInterpretationJobProgress(payload, job)
+        .catch(() => {})
+        .finally(() => {
+          progressUpdating = false;
+        });
+    }, 2500);
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (error) => {
+      clearInterval(progressTimer);
+      reject(error);
+    });
+    child.on("close", async (code) => {
+      clearInterval(progressTimer);
+      await updateIndividualInterpretationJobProgress(payload, job, { final: true }).catch(() => {});
+      const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+      const lastLine = lines[lines.length - 1] || "{}";
+      let result;
+      try {
+        result = JSON.parse(lastLine);
+      } catch (error) {
+        reject(new Error(`Individual interpretation returned invalid JSON. ${stderr || error.message}`));
+        return;
+      }
+      if (code !== 0 && result.status !== "warning") {
+        reject(new Error(result.errors?.[0] || stderr || `Individual interpretation exited with code ${code}.`));
+        return;
+      }
+      resolve(result);
+    });
+  });
+}
+
 async function processRsidResolution(payload) {
   return (
     (await postWorkflowForSummary(N8N_RSID_RESOLUTION_WEBHOOK_URL, payload, "n8n rsID resolution")) ||
@@ -613,17 +683,14 @@ async function processVariantEnrichment(payload) {
   );
 }
 
-async function processIndividualInterpretation(payload) {
+async function processIndividualInterpretation(payload, job) {
   return (
     (await postWorkflowForSummary(
       N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL,
       payload,
       "n8n individual variant interpretation",
     )) ||
-    (await runBase64JsonScript(
-      path.join(INDIVIDUAL_INTERPRETATION_ROOT, "interpret_observed_variants.py"),
-      payload,
-    ))
+    (await runIndividualInterpretationScript(payload, job))
   );
 }
 
@@ -659,7 +726,7 @@ async function processIndividualInterpretationWithRetry(payload, job, attempts =
           ? "Interpreting observed variants individually"
           : `Retrying individual interpretation (${attempt}/${attempts})`;
       job.updatedAt = new Date().toISOString();
-      return await processIndividualInterpretation(payload);
+      return await processIndividualInterpretation(payload, job);
     } catch (error) {
       errors.push(error.message || String(error));
       if (attempt >= attempts) break;
@@ -814,7 +881,18 @@ async function loadPersistedVcfCanonJobs() {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     try {
       const job = JSON.parse(await readFile(path.join(paths.jobs, entry.name), "utf8"));
-      if (job?.id && shouldPersistVcfCanonJob(job)) jobs.set(job.id, job);
+      if (job?.id && shouldPersistVcfCanonJob(job)) {
+        if (job.status === "running") {
+          job.status = "failed";
+          job.progress = 100;
+          job.stageProgress = 100;
+          job.error = "Job was interrupted by an API restart. Please retry this stage.";
+          job.message = "Interrupted job can be retried";
+          job.updatedAt = new Date().toISOString();
+          await persistVcfCanonJob(job);
+        }
+        jobs.set(job.id, job);
+      }
     } catch {
       // Ignore corrupt historical job manifests; active runs can create a fresh one.
     }
@@ -1827,6 +1905,8 @@ app.post("/api/vcf-canon-matches/:jobId/individual-interpretation", async (req, 
         interpretationSummary.outputs?.variantInterpretationPayloadsJsonl || "";
       job.artifacts.variantInterpretationPayloadsCsv =
         interpretationSummary.outputs?.variantInterpretationPayloadsCsv || "";
+      job.artifacts.individualVariantInterpretationProgressJson =
+        interpretationSummary.outputs?.individualVariantInterpretationProgressJson || "";
       job.artifacts.individualVariantInterpretationsJsonl =
         interpretationSummary.outputs?.individualVariantInterpretationsJsonl || "";
       job.artifacts.individualVariantInterpretationsCsv =
