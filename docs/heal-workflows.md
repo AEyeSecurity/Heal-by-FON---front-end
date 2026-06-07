@@ -206,6 +206,7 @@ Processing:
 - writes `individual_variant_interpretation_progress.json` while the stage is running;
 - writes `individual_variant_interpretations.csv` incrementally as rows finish;
 - writes row-level errors to `individual_variant_interpretation_errors.csv`;
+- applies deterministic HEAL calibration after the LLM response, separating technical confidence from deliverable confidence;
 - exposes the end-user audit CSV through `GET /api/vcf-canon-matches/:jobId/individual-interpretations`.
 
 Runtime configuration:
@@ -214,7 +215,7 @@ Runtime configuration:
 HEAL_OPENAI_API_KEY=<secret outside repo>
 HEAL_LLM1_MODEL=gpt-5-mini
 HEAL_LLM_MAX_WORKERS=3
-HEAL_LLM_TIMEOUT_SECONDS=45
+HEAL_LLM_TIMEOUT_SECONDS=90
 HEAL_LLM_ROW_ATTEMPTS=2
 HEAL_INDIVIDUAL_INTERPRETATION_ROOT=C:\ServerCIT\services\heal-individual-interpretation
 ```

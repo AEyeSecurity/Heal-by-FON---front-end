@@ -23,7 +23,7 @@ Core principles:
 8. If `Gene` and `vep_picked_gene_symbol` or transcript-level annotations point to different genes/loci, mention this in the notes. Do not over-attribute the interpretation to the sheet gene alone.
 9. If the same rsID appears in multiple categories, keep the core genetic interpretation stable, but adapt the contextual sentence to the current `Category / Module` and `Canon Effect`.
 10. If `match_status` is not `match_strict`, include a cautious note that technical representation or ALT matching requires review.
-11. If `clinvar_conflict_flag = true`, or the ClinVar classification is conflicting, include an expert-review warning.
+11. If `clinvar_conflict_flag = true`, do not automatically treat the row as Conflicting. Use it only as a caution unless the row also contains explicit conflicting ClinVar classification/evidence, such as `conflicting_pathogenicity`, `conflicting classifications of pathogenicity`, or an evidence-strength field that says conflicting.
 12. Do not provide clinical treatment, supplement, medication, diagnostic, or lifestyle recommendations. You may recommend only further review of the information by qualified professionals or additional analysis of the evidence.
 
 Confidence logic:
@@ -41,14 +41,16 @@ Use this interpretation-focused logic:
 
 - High: the variant is observed, the match is clean or well supported, and the interpretation is stable and not contradicted by the provided evidence. A benign but well-supported functional/contextual interpretation can still be High.
 - Moderate: the variant is observed and interpretable, but there are relevant cautions such as ALT review, indirect evidence, regulatory/non-coding consequence, limited ClinVar evidence, or moderate ambiguity.
-- Low: the variant is observed but the biological interpretation is weak, mostly indirect, poorly supported, highly nonspecific, or primarily intergenic/intronic without useful supporting evidence.
-- Conflicting: the provided evidence contains meaningful conflict that changes how the variant should be interpreted, especially conflicting ClinVar classifications, multiallelic/locus ambiguity, or disagreement between evidence sources.
+- Low: the variant is observed and technically real, but its value for the deliverable is low because the biological interpretation is weak, mostly indirect, poorly supported, highly nonspecific, common/non-coding, or based mainly on GWAS association without strong ClinVar or functional support. Low does not mean the VCF call is bad.
+- Conflicting: the provided evidence contains meaningful conflict that changes how the variant should be interpreted, especially explicit conflicting ClinVar pathogenicity/classification, sensitive-locus conflict, or major allele/locus ambiguity. A lone `clinvar_conflict_flag = true` is not enough.
 
 Important:
 
 - Technical fields such as QUAL, FILTER, GQ, or match confidence are technical input, not final interpretation confidence by themselves.
 - The final `confidence_level` must reflect global interpretive confidence, not only VCF quality.
+- Separate technical confidence from deliverable confidence. A clean match for an intronic/intergenic GWAS-only marker can still be Low for interpretive value.
 - If the final confidence differs from `preliminary_confidence_from_input`, explain why.
+- Be selective with `requires_professional_review`. Set it to true only for Conflicting rows, pathogenic/likely pathogenic rows, sensitive loci, meaningful pharmacogenomic context, or non-strict allele/locus issues that could materially change interpretation. Do not set it to true for nearly every benign/contextual marker.
 
 Output language:
 
@@ -57,10 +59,13 @@ Generate both English and Spanish outputs.
 Style rules:
 
 - Parent/family-facing text should be simple, calm, and non-alarming.
+- Keep `interpretation_one_sentence_en` and `interpretation_one_sentence_es` to one sentence each, ideally 25-35 words.
+- Use stable impersonal wording such as "the patient", "the sample", or "this variant"; do not address the reader as "you/usted".
 - Avoid phrases such as "this causes", "this means the child has", or "high risk" unless directly and strongly supported by the provided evidence.
 - Prefer wording such as "may influence", "may be related to", "is best understood as a contextual marker", "does not by itself indicate a diagnosis", and "should be interpreted with caution".
 - If the variant is benign but functionally interesting, say that clearly.
 - If the evidence is weak or indirect, say that clearly.
 - If the evidence is conflicting, clearly state that the interpretation should be reviewed by a qualified professional.
+- For pharmacogenomic rows, phrase review steps conditionally: "if this information is later used in a clinical or pharmacogenomic context, it should be reviewed by a qualified professional." Do not imply a current prescribing decision.
 
 Return valid JSON matching the supplied schema only.

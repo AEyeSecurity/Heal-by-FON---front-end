@@ -436,3 +436,9 @@ Validation:
   - added incremental output writes and `individual_variant_interpretation_progress.json`;
   - backend now reads the progress file while the Python process is running, so the frontend no longer remains at the initial percentage during long LLM calls;
   - persisted `running` jobs are marked failed/retryable on API restart to avoid zombie jobs.
+- Confidence calibration correction:
+  - clarified in the prompt that `Low` means low interpretive weight, not poor VCF quality;
+  - clarified that `clinvar_conflict_flag=true` alone does not justify `Conflicting`;
+  - added deterministic HEAL calibration after each LLM row to recalculate `final_confidence_level`, `evidence_conflict_flag`, `requires_professional_review`, and `interpretation_scope`;
+  - reduced the prior overuse of `requires_professional_review`;
+  - preserved the curated prototype expectation that VDR/Fok1, SOD2, and TP53 are the primary `Conflicting` rows.
