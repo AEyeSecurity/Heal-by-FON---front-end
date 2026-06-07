@@ -157,6 +157,7 @@ function vcfCanonMatchPaths() {
   return {
     root,
     runs: path.join(root, "runs"),
+    jobs: path.join(root, "jobs"),
     current: path.join(root, "current"),
     currentManifest: path.join(root, "current", "current.json"),
   };
@@ -729,6 +730,36 @@ function publicJob(job) {
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
   };
+}
+
+function shouldPersistVcfCanonJob(job) {
+  return Boolean(job?.artifacts || ["matching", "preparing", "enriching"].includes(job?.stage || ""));
+}
+
+function vcfCanonJobPath(jobId) {
+  return path.join(vcfCanonMatchPaths().jobs, `${safeFileName(jobId)}.json`);
+}
+
+async function persistVcfCanonJob(job) {
+  if (!shouldPersistVcfCanonJob(job)) return;
+  const paths = vcfCanonMatchPaths();
+  await mkdir(paths.jobs, { recursive: true });
+  await writeFile(vcfCanonJobPath(job.id), JSON.stringify(job, null, 2), "utf8");
+}
+
+async function loadPersistedVcfCanonJobs() {
+  const paths = vcfCanonMatchPaths();
+  await mkdir(paths.jobs, { recursive: true });
+  const entries = await readdir(paths.jobs, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    try {
+      const job = JSON.parse(await readFile(path.join(paths.jobs, entry.name), "utf8"));
+      if (job?.id && shouldPersistVcfCanonJob(job)) jobs.set(job.id, job);
+    } catch {
+      // Ignore corrupt historical job manifests; active runs can create a fresh one.
+    }
+  }
 }
 
 async function postWebhook(url, payload, job) {
@@ -1560,6 +1591,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
             : "VCF-canon match failed";
     } finally {
       job.updatedAt = new Date().toISOString();
+      await persistVcfCanonJob(job);
     }
   })();
 
@@ -1573,6 +1605,96 @@ app.get("/api/vcf-canon-matches/:jobId", (req, res) => {
     return;
   }
   res.json(publicJob(job));
+});
+
+app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (job.status === "running") {
+    res.status(409).json({ error: "This job is already running." });
+    return;
+  }
+  if (!job.artifacts?.deliverableAuditCsv) {
+    res.status(409).json({ error: "Match preparation audit CSV is required before retrying enrichment." });
+    return;
+  }
+
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload?.clientFingerprint && upload.clientFingerprint !== clientFingerprint(req)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+
+  const preparationPaths = matchPreparationPaths();
+  const auditCsvPath = path.resolve(job.artifacts.deliverableAuditCsv || "");
+  if (!isPathInside(preparationPaths.root, auditCsvPath)) {
+    res.status(400).json({ error: "Variant enrichment input is outside the allowed match preparation root." });
+    return;
+  }
+  const auditStat = await stat(auditCsvPath).catch(() => null);
+  if (!auditStat || auditStat.size <= 0) {
+    res.status(404).json({ error: "Match preparation audit CSV was not found." });
+    return;
+  }
+
+  job.status = "running";
+  job.progress = Math.max(job.progress || 0, 86);
+  job.stage = "enriching";
+  job.stageProgress = 8;
+  job.error = null;
+  job.message = "Retrying variant enrichment";
+  job.updatedAt = new Date().toISOString();
+  await persistVcfCanonJob(job);
+
+  (async () => {
+    try {
+      const enrichmentPaths = variantEnrichmentPaths();
+      await mkdir(enrichmentPaths.runs, { recursive: true });
+      await mkdir(enrichmentPaths.cache, { recursive: true });
+      const enrichmentRunId = `variant-enrichment-retry-${crypto.randomUUID()}`;
+      const enrichmentOutputDir = path.join(enrichmentPaths.runs, enrichmentRunId);
+      await mkdir(enrichmentOutputDir, { recursive: true });
+      const enrichmentPayload = {
+        event: "heal.variant_enrichment.retry_requested",
+        runId: enrichmentRunId,
+        matchRunId: job.id,
+        uploadId: job.uploadId,
+        fileName: job.fileName,
+        inputPath: auditCsvPath,
+        outputDir: enrichmentOutputDir,
+        cacheDir: enrichmentPaths.cache,
+        requestedAt: new Date().toISOString(),
+      };
+      const enrichmentSummary = await processVariantEnrichmentWithRetry(enrichmentPayload, job, 3);
+      job.artifacts.observedVariantEnrichmentCsv = enrichmentSummary.outputs?.observedVariantEnrichmentCsv || "";
+      job.artifacts.observedVariantInterpretiveCsv = enrichmentSummary.outputs?.observedVariantInterpretiveCsv || "";
+      job.artifacts.observedVariantEnrichmentPlusCsv = enrichmentSummary.outputs?.observedVariantEnrichmentPlusCsv || "";
+      job.result = {
+        ...(job.result || {}),
+        variantEnrichment: sanitizeVariantEnrichmentResult(enrichmentSummary),
+      };
+      job.status = "complete";
+      job.progress = 100;
+      job.stage = "enriching";
+      job.stageProgress = 100;
+      job.message = "Variant enrichment completed";
+    } catch (error) {
+      job.status = "failed";
+      job.progress = 100;
+      job.stage = "enriching";
+      job.stageProgress = 100;
+      job.error = error.message || String(error);
+      job.message = "Variant enrichment failed";
+    } finally {
+      job.updatedAt = new Date().toISOString();
+      await persistVcfCanonJob(job);
+    }
+  })();
+
+  res.status(202).json(publicJob(job));
 });
 
 app.get("/api/vcf-canon-matches/:jobId/download", async (req, res) => {
@@ -1830,6 +1952,8 @@ app.get("/api/vcf-canon-matches/:jobId/enrichment-plus", async (req, res) => {
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.download(csvPath, `${baseName}_interpretation_enrichment_plus.csv`);
 });
+
+await loadPersistedVcfCanonJobs();
 
 app.listen(PORT, "127.0.0.1", () => {
   console.log(`HEAL local API listening on http://127.0.0.1:${PORT}`);

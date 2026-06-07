@@ -79,6 +79,7 @@ GET  /api/vcf-canon-matches/:jobId/preparation-minimal
 GET  /api/vcf-canon-matches/:jobId/enrichment
 GET  /api/vcf-canon-matches/:jobId/enrichment-interpretive
 GET  /api/vcf-canon-matches/:jobId/enrichment-plus
+POST /api/vcf-canon-matches/:jobId/retry-enrichment
 ```
 
 Default chunk size:
@@ -170,6 +171,8 @@ The match polling response includes an `artifactsReady` object:
 ```
 
 This lets the frontend show the compact download icon next to each progress bar as each stage becomes auditable, instead of waiting for the full downstream chain to finish.
+
+VCF-canon jobs are persisted under `C:\ServerCIT\services\heal-vcf-canon-match\jobs` after match/preparation/enrichment starts. This lets download and retry endpoints recover completed job artifacts after a HEAL API process restart. The persisted object is server-side only; `publicJob()` still strips internal artifact paths from browser JSON.
 
 Control de Calidad mode exposes additional debug downloads through whitelisted endpoints:
 

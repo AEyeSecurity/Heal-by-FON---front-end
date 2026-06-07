@@ -393,3 +393,15 @@ Validation:
   - `GET /api/vcf-canon-matches/:jobId/enrichment-plus`
 - Added frontend download button:
   - `Descargar CSV Enrichment Plus`
+
+### Enrichment Retry and Job Persistence
+
+- Added server-side persistence for VCF-canon match jobs under:
+  - `C:\ServerCIT\services\heal-vcf-canon-match\jobs`
+- Persisted jobs are loaded at HEAL API startup so completed match/preparation/enrichment artifacts survive a process restart.
+- Added backend endpoint:
+  - `POST /api/vcf-canon-matches/:jobId/retry-enrichment`
+- The retry endpoint reuses `heal_fon_deliverable_presentation_audit.csv` and reruns only the external variant enrichment stage.
+- Added frontend pop-up action:
+  - `Reintentar enriquecimiento`
+- Confirmed the user-reported `Cannot GET /enrichment-plus` symptom means the running HEAL API process has not loaded the newer route yet; it is not evidence that the Plus CSV is missing.

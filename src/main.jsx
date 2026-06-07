@@ -9,6 +9,7 @@ import {
   Globe2,
   Loader2,
   Play,
+  RefreshCw,
   Send,
   ShieldCheck,
   UploadCloud,
@@ -81,6 +82,7 @@ const COPY = {
     preparing: "Preparando CSVs de auditoria...",
     enriching: "Enriqueciendo variantes observadas...",
     enrichmentFailed: "No se pudo completar el enriquecimiento externo.",
+    retryEnrichment: "Reintentar enriquecimiento",
     matchFailed: "No se pudo completar el match VCF-Canon.",
     validationFailed: "La validacion fallo.",
     uploadFailed: "No se pudo completar la carga.",
@@ -222,6 +224,7 @@ const COPY = {
     preparing: "Preparing audit CSVs...",
     enriching: "Enriching observed variants...",
     enrichmentFailed: "Could not complete external enrichment.",
+    retryEnrichment: "Retry enrichment",
     matchFailed: "Could not complete the VCF-Canon match.",
     validationFailed: "Validation failed.",
     uploadFailed: "Could not complete the upload.",
@@ -454,7 +457,7 @@ function ModeSelector({ mode, setMode, t }) {
   );
 }
 
-function ErrorDialog({ message, onClose, t }) {
+function ErrorDialog({ message, onClose, onRetry, t }) {
   if (!message) return null;
   return (
     <div className="modal-backdrop" role="presentation">
@@ -469,6 +472,12 @@ function ErrorDialog({ message, onClose, t }) {
           </button>
         </div>
         <div className="modal-actions">
+          {onRetry && (
+            <button className="secondary-button" type="button" onClick={onRetry}>
+              <RefreshCw size={17} />
+              {t.retryEnrichment}
+            </button>
+          )}
           <button className="primary-button" type="button" onClick={onClose}>
             {t.errorPopupClose}
           </button>
@@ -1191,9 +1200,11 @@ function App() {
     preparation: false,
     enrichment: false,
     enrichmentInterpretive: false,
+    enrichmentPlus: false,
   });
   const [error, setError] = useState(null);
   const [errorDialog, setErrorDialog] = useState(null);
+  const [retryEnrichmentJobId, setRetryEnrichmentJobId] = useState(null);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileResetKey, setTurnstileResetKey] = useState(0);
   const [duplicateCandidate, setDuplicateCandidate] = useState(null);
@@ -1222,9 +1233,11 @@ function App() {
       preparation: false,
       enrichment: false,
       enrichmentInterpretive: false,
+      enrichmentPlus: false,
     });
     setError(null);
     setErrorDialog(null);
+    setRetryEnrichmentJobId(null);
     setDuplicateCandidate(null);
     setUploadRecord(null);
     setPhase("idle");
@@ -1278,6 +1291,11 @@ function App() {
         await downloadCsv(
           `/api/vcf-canon-matches/${matchResult.jobId}/enrichment-interpretive`,
           "heal-fon-interpretation-enriched-observed69.csv",
+        );
+      } else if (kind === "enrichmentPlus") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/enrichment-plus`,
+          "heal-fon-interpretation-enrichment-plus.csv",
         );
       }
     } catch (caught) {
@@ -1365,8 +1383,9 @@ function App() {
       preparation: Boolean(ready.preparation),
       enrichment: Boolean(ready.enrichment),
       enrichmentInterpretive: Boolean(ready.enrichmentInterpretive),
+      enrichmentPlus: Boolean(ready.enrichmentPlus),
     });
-    if (job.result || ready.matches || ready.preparation || ready.enrichment || ready.enrichmentInterpretive) {
+    if (job.result || ready.matches || ready.preparation || ready.enrichment || ready.enrichmentInterpretive || ready.enrichmentPlus) {
       setMatchResult({
         ...(job.result || {}),
         jobId: job.id,
@@ -1446,6 +1465,7 @@ function App() {
             preparation: false,
             enrichment: false,
             enrichmentInterpretive: false,
+            enrichmentPlus: false,
           });
           setDuplicateCandidate(existingUpload);
           setMessageKey("fileReady");
@@ -1514,9 +1534,43 @@ function App() {
     return nextMatchResult;
   }
 
+  async function retryEnrichment() {
+    const jobId = retryEnrichmentJobId || matchResult?.jobId;
+    if (!jobId) return;
+    setError(null);
+    setErrorDialog(null);
+    setRetryEnrichmentJobId(null);
+    setPhase("enriching");
+    setMessageKey("enriching");
+    setCustomMessage("");
+    setEnrichmentProgress(5);
+    try {
+      const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${jobId}/retry-enrichment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const started = await readJsonResponse(response);
+      if (!response.ok) throw new Error(started.error || t.enrichmentFailed);
+      const nextMatchResult = await pollMatch(started.id);
+      setMatchResult(nextMatchResult);
+      setPhase("done");
+      setMessageKey("enrichmentComplete");
+      setCustomMessage("");
+      setEnrichmentProgress(100);
+    } catch (caught) {
+      setPhase("error");
+      setError(t.enrichmentFailed);
+      setErrorDialog(true);
+      setRetryEnrichmentJobId(caught.jobId || jobId);
+      setMessageKey("processFailed");
+      setCustomMessage("");
+    }
+  }
+
   async function runQaUpload() {
     setError(null);
     setErrorDialog(null);
+    setRetryEnrichmentJobId(null);
     try {
       const upload = await resolveUpload({ skipDuplicateCheck: false });
       if (!upload) return;
@@ -1534,6 +1588,7 @@ function App() {
   async function runQaValidation() {
     setError(null);
     setErrorDialog(null);
+    setRetryEnrichmentJobId(null);
     try {
       const upload = uploadRecord || (await resolveUpload({ skipDuplicateCheck: false }));
       if (!upload) return;
@@ -1552,6 +1607,7 @@ function App() {
   async function runQaMatch() {
     setError(null);
     setErrorDialog(null);
+    setRetryEnrichmentJobId(null);
     try {
       const upload = uploadRecord;
       if (!upload) throw new Error(t.qaRunUploadFirst);
@@ -1562,6 +1618,7 @@ function App() {
       if (caught.stage === "enriching") {
         setError(t.enrichmentFailed);
         setErrorDialog(true);
+        setRetryEnrichmentJobId(caught.jobId || matchResult?.jobId || null);
       } else {
         setError(caught.message || String(caught));
       }
@@ -1574,6 +1631,7 @@ function App() {
     if (!file) return;
     setError(null);
     setErrorDialog(null);
+    setRetryEnrichmentJobId(null);
     setResult(null);
     setMatchResult(null);
     setMatchArtifactsReady({
@@ -1582,6 +1640,7 @@ function App() {
       preparation: false,
       enrichment: false,
       enrichmentInterpretive: false,
+      enrichmentPlus: false,
     });
     setUploadProgress(0);
     setValidationProgress(0);
@@ -1610,6 +1669,7 @@ function App() {
       if (caught.stage === "enriching") {
         setError(t.enrichmentFailed);
         setErrorDialog(true);
+        setRetryEnrichmentJobId(caught.jobId || matchResult?.jobId || null);
       } else {
         setError(caught.message || String(caught));
       }
@@ -1796,7 +1856,15 @@ function App() {
         }}
         t={t}
       />
-      <ErrorDialog message={errorDialog} onClose={() => setErrorDialog(null)} t={t} />
+      <ErrorDialog
+        message={errorDialog}
+        onClose={() => {
+          setErrorDialog(null);
+          setRetryEnrichmentJobId(null);
+        }}
+        onRetry={retryEnrichmentJobId ? retryEnrichment : null}
+        t={t}
+      />
       <CanonModal open={canonOpen} onClose={() => setCanonOpen(false)} language={language} locale={locale} t={t} />
     </main>
   );
