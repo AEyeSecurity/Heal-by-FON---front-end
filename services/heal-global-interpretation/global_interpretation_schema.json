@@ -1,0 +1,185 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "metadata",
+    "global_report",
+    "biological_axes",
+    "notable_gene_patterns",
+    "top_findings_for_review",
+    "conflicting_or_sensitive_findings",
+    "low_confidence_findings_summary",
+    "family_friendly_summary",
+    "technical_summary",
+    "final_recommendation"
+  ],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "language_mode",
+        "audience_mode",
+        "variant_count_observed",
+        "unique_rsid_count",
+        "unique_gene_count",
+        "confidence_distribution"
+      ],
+      "properties": {
+        "language_mode": { "type": "string", "enum": ["en", "es", "both"] },
+        "audience_mode": { "type": "string", "enum": ["technical", "health_professional", "family", "all"] },
+        "variant_count_observed": { "type": "integer" },
+        "unique_rsid_count": { "type": "integer" },
+        "unique_gene_count": { "type": "integer" },
+        "confidence_distribution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["High", "Moderate", "Low", "Conflicting"],
+          "properties": {
+            "High": { "type": "integer" },
+            "Moderate": { "type": "integer" },
+            "Low": { "type": "integer" },
+            "Conflicting": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "global_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "report_title",
+        "executive_summary",
+        "main_interpretation",
+        "important_caution",
+        "limitations",
+        "next_review_steps"
+      ],
+      "properties": {
+        "report_title": { "type": "string" },
+        "executive_summary": { "type": "string" },
+        "main_interpretation": { "type": "string" },
+        "important_caution": { "type": "string" },
+        "limitations": { "type": "string" },
+        "next_review_steps": { "type": "string" }
+      }
+    },
+    "biological_axes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "axis_name",
+          "summary",
+          "supporting_genes",
+          "supporting_rsids",
+          "confidence_of_axis",
+          "why_it_matters",
+          "cautions"
+        ],
+        "properties": {
+          "axis_name": { "type": "string" },
+          "summary": { "type": "string" },
+          "supporting_genes": { "type": "array", "items": { "type": "string" } },
+          "supporting_rsids": { "type": "array", "items": { "type": "string" } },
+          "confidence_of_axis": { "type": "string", "enum": ["High", "Moderate", "Low", "Conflicting"] },
+          "why_it_matters": { "type": "string" },
+          "cautions": { "type": "string" }
+        }
+      }
+    },
+    "notable_gene_patterns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["gene_or_locus", "pattern_type", "rsids", "summary", "confidence", "notes"],
+        "properties": {
+          "gene_or_locus": { "type": "string" },
+          "pattern_type": {
+            "type": "string",
+            "enum": [
+              "multiple_variants_same_gene",
+              "repeated_rsid_across_categories",
+              "gene_locus_ambiguity",
+              "pathway_context"
+            ]
+          },
+          "rsids": { "type": "array", "items": { "type": "string" } },
+          "summary": { "type": "string" },
+          "confidence": { "type": "string", "enum": ["High", "Moderate", "Low", "Conflicting"] },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "top_findings_for_review": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["gene", "rsID", "reason_for_review", "confidence_level", "review_priority"],
+        "properties": {
+          "gene": { "type": "string" },
+          "rsID": { "type": "string" },
+          "reason_for_review": { "type": "string" },
+          "confidence_level": { "type": "string", "enum": ["High", "Moderate", "Low", "Conflicting"] },
+          "review_priority": { "type": "string", "enum": ["high", "medium", "low"] }
+        }
+      }
+    },
+    "conflicting_or_sensitive_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["gene", "rsID", "why_sensitive_or_conflicting", "recommended_handling"],
+        "properties": {
+          "gene": { "type": "string" },
+          "rsID": { "type": "string" },
+          "why_sensitive_or_conflicting": { "type": "string" },
+          "recommended_handling": { "type": "string" }
+        }
+      }
+    },
+    "low_confidence_findings_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "how_to_use"],
+      "properties": {
+        "summary": { "type": "string" },
+        "how_to_use": { "type": "string" }
+      }
+    },
+    "family_friendly_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["short_summary", "what_this_does_not_mean", "what_may_be_worth_reviewing"],
+      "properties": {
+        "short_summary": { "type": "string" },
+        "what_this_does_not_mean": { "type": "string" },
+        "what_may_be_worth_reviewing": { "type": "string" }
+      }
+    },
+    "technical_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["methodological_summary", "data_quality_comment", "interpretation_constraints"],
+      "properties": {
+        "methodological_summary": { "type": "string" },
+        "data_quality_comment": { "type": "string" },
+        "interpretation_constraints": { "type": "string" }
+      }
+    },
+    "final_recommendation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ready_for_report_generation", "what_should_be_reviewed_before_release", "overall_readiness"],
+      "properties": {
+        "ready_for_report_generation": { "type": "boolean" },
+        "what_should_be_reviewed_before_release": { "type": "array", "items": { "type": "string" } },
+        "overall_readiness": { "type": "string", "enum": ["ready", "ready_with_minor_review", "needs_review"] }
+      }
+    }
+  }
+}

@@ -161,7 +161,7 @@ The API returns validation results without exposing local filesystem paths. Publ
 
 Local paths remain internal to the backend and n8n integration.
 
-The VCF-canon match download endpoint serves the per-job `sheet_final_consolidated.csv` artifact for QA as soon as that artifact exists. Match preparation download endpoints similarly become available as soon as the preparation CSVs exist, even while downstream enrichment is still running. The technical enrichment endpoint serves `heal_observed_variant_enrichment.csv` for source-level QA. The interpretive enrichment endpoint serves `heal_fon_interpretation_enriched_observed69.csv`, matching the deterministic Colab output shape for user/AI review while adding `Canon Effect` from the curated canon. The Enrichment Plus endpoint serves `heal_fon_interpretation_enrichment_plus.csv`, which keeps the Colab-style fields and appends normalized clinical/evidence fields from VEP, ClinVar, population frequencies, GWAS Catalog, and ClinPGx/PharmGKB. The browser receives CSV attachments; JSON results and download responses do not expose internal filesystem paths.
+The VCF-canon match download endpoint serves the per-job `sheet_final_consolidated.csv` artifact for QA as soon as that artifact exists. Match preparation download endpoints similarly become available as soon as the preparation CSVs exist, even while downstream enrichment is still running. The technical enrichment endpoint serves `heal_observed_variant_enrichment.csv` for source-level QA. The interpretive enrichment endpoint serves `heal_fon_interpretation_enriched_observed69.csv`, matching the deterministic Colab output shape for user/AI review while adding `Canon Effect` from the curated canon. The Enrichment Plus endpoint serves `heal_fon_interpretation_enrichment_plus.csv`, which keeps the Colab-style fields and appends normalized clinical/evidence fields from VEP, ClinVar, population frequencies, GWAS Catalog, and ClinPGx/PharmGKB. LLM1 and deterministic QA normalization then produce individual interpretation CSVs. LLM2 produces `global_interpretation.json`, `global_interpretation_sections.csv`, `global_interpretation_payload.json`, and `deterministic_summary.json`. The browser receives CSV/JSON attachments; JSON results and download responses do not expose internal filesystem paths.
 
 The match polling response includes an `artifactsReady` object:
 
@@ -172,7 +172,10 @@ The match polling response includes an `artifactsReady` object:
   "preparation": true,
   "enrichment": false,
   "enrichmentInterpretive": false,
-  "enrichmentPlus": false
+  "enrichmentPlus": false,
+  "individualInterpretation": false,
+  "interpretationNormalization": false,
+  "globalInterpretation": false
 }
 ```
 
@@ -205,6 +208,8 @@ HEAL_N8N_CANON_WEBHOOK_URL
 HEAL_N8N_RSID_RESOLUTION_WEBHOOK_URL
 HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL
 HEAL_N8N_VARIANT_ENRICHMENT_WEBHOOK_URL
+HEAL_N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL
+HEAL_N8N_GLOBAL_INTERPRETATION_WEBHOOK_URL
 ```
 
 Current status:
@@ -216,6 +221,8 @@ n8nCanonWebhookConfigured: true
 n8nRsidResolutionWebhookConfigured: true
 n8nVcfCanonMatchWebhookConfigured: true
 n8nVariantEnrichmentWebhookConfigured: true
+n8nIndividualInterpretationWebhookConfigured: false
+n8nGlobalInterpretationWebhookConfigured: false
 ```
 
 Workflow responsibilities:
@@ -225,18 +232,41 @@ Workflow responsibilities:
 - `HEAL - rsID Coordinate Resolution`: runs only after canon changes and creates the match-ready rsID table.
 - `HEAL - VCF Canon Match`: runs after a VCF passes validation, performs the targeted VCF scan, matches against the current canon, and creates audit/minimal CSV outputs for QA and downstream review.
 - `HEAL - Variant Enrichment`: runs after match preparation and enriches observed genotype rows with Ensembl, ClinVar, and MyVariant.info data.
+- `LLM1 - Individual Variant Interpretation`: backend service that interprets each observed variant row independently using structured JSON output.
+- `Deterministic QA Normalization`: backend service that normalizes LLM1 outputs before global synthesis.
+- `LLM2 - Global Interpretation`: backend service that synthesizes normalized individual interpretations into a non-diagnostic global report JSON and audit CSV.
 - `HEAL - Match Preparation`: superseded as a standalone workflow and left inactive; its script now runs inside `HEAL - VCF Canon Match`.
 
 Natural usage path:
 
 ```text
 Canon change -> clean canon -> resolve rsID coordinates
-VCF upload -> integrity validation -> VCF-canon match, targeted scan, preparation, and observed enrichment -> downstream analysis placeholder
+VCF upload -> integrity validation -> VCF-canon match, targeted scan, preparation, observed enrichment, LLM1, QA normalization, and LLM2 global interpretation -> downstream analysis placeholder
 ```
 
 Webhook secrets, if added later, must stay outside GitHub and outside Cloudflare Pages.
 
-## Final Interpretation Gap
+## Global Interpretation Layer
+
+The current implementation now includes a first controlled global interpretation layer after LLM1 and deterministic QA normalization.
+
+LLM2 receives:
+
+- selected normalized per-variant interpretation fields;
+- deterministic groupings by rsID, gene, category/axis, confidence, conflict flags, professional-review flags, and gene/locus ambiguity;
+- fixed project context explaining that the VCF appears to report observed variants only and that the report is non-diagnostic.
+
+Dynamic model policy:
+
+```text
+quick analysis -> gpt-5-mini
+full analysis  -> gpt-5.2
+QA/debug       -> selected from gpt-5-mini, gpt-5, gpt-5.1, gpt-5.2
+```
+
+LLM2 uses strict JSON Schema output and must not reinterpret individual variants from scratch or change per-variant confidence labels.
+
+## Final Report Gap
 
 The original Colab did not generate a final `.docx` or PDF clinical report. Its coded outputs stop at structured CSV files:
 
@@ -245,7 +275,7 @@ The original Colab did not generate a final `.docx` or PDF clinical report. Its 
 - `heal_fon_deliverable_presentation_audit.csv`
 - `heal_fon_interpretation_enriched_observed69.csv`
 
-The downstream interpretation described in the project documents was performed manually/with AI assistance outside the notebook. The next implementation stage should therefore create a controlled interpretation/report workflow that consumes the enriched observed-variant CSV plus the 149-row deliverable/audit table and writes a final presentable table/report under HEAL language constraints.
+The downstream interpretation described in the project documents was performed manually/with AI assistance outside the notebook. The current implementation now creates a controlled global interpretation JSON/CSV, but it does not yet render a final polished DOCX/PDF report. The next implementation stage should render the LLM2 JSON using fixed templates rather than asking another LLM to freely rewrite the report.
 
 ## Production Domains
 

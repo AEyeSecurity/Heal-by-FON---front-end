@@ -426,6 +426,39 @@ h1 {
   width: min(220px, 100%);
 }
 
+.llm2-options {
+  margin-bottom: 18px;
+  padding: 14px;
+  border: 1px solid #dfe7d8;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.llm2-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.llm2-grid label {
+  display: grid;
+  gap: 7px;
+  color: #425348;
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.llm2-grid select {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 10px;
+  border: 1px solid #cbd8c4;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #142118;
+  font: inherit;
+}
+
 .spin {
   animation: spin 1s linear infinite;
 }
@@ -966,6 +999,10 @@ h1 {
   }
 
   .mode-options {
+    grid-template-columns: 1fr;
+  }
+
+  .llm2-grid {
     grid-template-columns: 1fr;
   }
 

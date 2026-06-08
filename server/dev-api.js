@@ -37,6 +37,9 @@ const INDIVIDUAL_INTERPRETATION_ROOT =
 const INTERPRETATION_NORMALIZATION_ROOT =
   process.env.HEAL_INTERPRETATION_NORMALIZATION_ROOT ||
   "C:\\ServerCIT\\services\\heal-interpretation-normalization";
+const GLOBAL_INTERPRETATION_ROOT =
+  process.env.HEAL_GLOBAL_INTERPRETATION_ROOT ||
+  "C:\\ServerCIT\\services\\heal-global-interpretation";
 const PYTHON_EXE = process.env.HEAL_PYTHON_EXE || "python";
 const MAX_UPLOADS = Math.max(1, Number.parseInt(process.env.HEAL_MAX_UPLOADS || "12", 10) || 12);
 const UPLOAD_TTL_MS =
@@ -74,8 +77,18 @@ const N8N_VCF_CANON_MATCH_WEBHOOK_URL = process.env.HEAL_N8N_VCF_CANON_MATCH_WEB
 const N8N_VARIANT_ENRICHMENT_WEBHOOK_URL = process.env.HEAL_N8N_VARIANT_ENRICHMENT_WEBHOOK_URL || "";
 const N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL =
   process.env.HEAL_N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL || "";
+const N8N_GLOBAL_INTERPRETATION_WEBHOOK_URL = process.env.HEAL_N8N_GLOBAL_INTERPRETATION_WEBHOOK_URL || "";
 const N8N_WEBHOOK_TOKEN = process.env.HEAL_N8N_WEBHOOK_TOKEN || "";
 const LLM1_MODEL = process.env.HEAL_LLM1_MODEL || "gpt-5-mini";
+const LLM2_QUICK_MODEL = process.env.HEAL_LLM2_QUICK_MODEL || "gpt-5-mini";
+const LLM2_FULL_MODEL = process.env.HEAL_LLM2_FULL_MODEL || "gpt-5.2";
+const LLM2_QA_DEFAULT_MODEL = process.env.HEAL_LLM2_QA_DEFAULT_MODEL || "gpt-5-mini";
+const ALLOWED_LLM2_MODELS = new Set(
+  (process.env.HEAL_LLM2_ALLOWED_MODELS || "gpt-5-mini,gpt-5,gpt-5.1,gpt-5.2")
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean),
+);
 const ALLOW_LLM_DRY_RUN = process.env.HEAL_ALLOW_LLM_DRY_RUN === "true";
 const ALLOWED_ORIGINS = (process.env.HEAL_ALLOWED_ORIGINS ||
   "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173")
@@ -200,6 +213,14 @@ function individualInterpretationPaths() {
 
 function interpretationNormalizationPaths() {
   const root = path.resolve(INTERPRETATION_NORMALIZATION_ROOT);
+  return {
+    root,
+    runs: path.join(root, "runs"),
+  };
+}
+
+function globalInterpretationPaths() {
+  const root = path.resolve(GLOBAL_INTERPRETATION_ROOT);
   return {
     root,
     runs: path.join(root, "runs"),
@@ -373,6 +394,14 @@ function sanitizeInterpretationNormalizationResult(result) {
   return publicResult;
 }
 
+function sanitizeGlobalInterpretationResult(result) {
+  const publicResult = JSON.parse(JSON.stringify(result || {}));
+  delete publicResult.inputPath;
+  delete publicResult.outputDir;
+  delete publicResult.outputs;
+  return publicResult;
+}
+
 function publicArtifactsReady(job) {
   const artifacts = job.artifacts || {};
   return {
@@ -390,12 +419,38 @@ function publicArtifactsReady(job) {
     enrichmentPlus: Boolean(artifacts.observedVariantEnrichmentPlusCsv),
     individualInterpretation: Boolean(artifacts.individualVariantInterpretationsCsv),
     interpretationNormalization: Boolean(artifacts.individualVariantInterpretationsNormalizedCsv),
+    globalInterpretation: Boolean(artifacts.globalInterpretationJson || artifacts.globalInterpretationSectionsCsv),
   };
 }
 
 function normalizeVcfParser(value) {
   const parser = String(value || "streaming").trim().toLowerCase();
   return ALLOWED_VCF_PARSERS.has(parser) ? parser : "streaming";
+}
+
+function normalizeLanguageMode(value) {
+  const mode = String(value || "es").trim().toLowerCase();
+  return ["es", "en", "both"].includes(mode) ? mode : "es";
+}
+
+function normalizeAudienceMode(value) {
+  const mode = String(value || "all").trim().toLowerCase();
+  return ["technical", "health_professional", "family", "all"].includes(mode) ? mode : "all";
+}
+
+function normalizeAnalysisMode(value) {
+  const mode = String(value || "quick").trim().toLowerCase();
+  return ["quick", "complete", "qa"].includes(mode) ? mode : "quick";
+}
+
+function resolveLlm2Model({ analysisMode, requestedModel }) {
+  const mode = normalizeAnalysisMode(analysisMode);
+  if (mode === "complete") return LLM2_FULL_MODEL;
+  if (mode === "qa") {
+    const selected = String(requestedModel || "").trim();
+    return ALLOWED_LLM2_MODELS.has(selected) ? selected : LLM2_QA_DEFAULT_MODEL;
+  }
+  return LLM2_QUICK_MODEL;
 }
 
 async function saveUpload(upload) {
@@ -739,6 +794,13 @@ async function processInterpretationNormalization(payload) {
   );
 }
 
+async function processGlobalInterpretation(payload) {
+  return (
+    (await postWorkflowForSummary(N8N_GLOBAL_INTERPRETATION_WEBHOOK_URL, payload, "n8n global interpretation")) ||
+    (await runBase64JsonScript(path.join(GLOBAL_INTERPRETATION_ROOT, "interpret_global_profile.py"), payload))
+  );
+}
+
 async function processVariantEnrichmentWithRetry(payload, job, attempts = 3) {
   const errors = [];
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -906,9 +968,14 @@ function publicJob(job) {
 function shouldPersistVcfCanonJob(job) {
   return Boolean(
     job?.artifacts ||
-      ["matching", "preparing", "enriching", "individual_interpretation", "interpretation_normalization"].includes(
-        job?.stage || "",
-      ),
+      [
+        "matching",
+        "preparing",
+        "enriching",
+        "individual_interpretation",
+        "interpretation_normalization",
+        "global_interpretation",
+      ].includes(job?.stage || ""),
   );
 }
 
@@ -1003,8 +1070,16 @@ app.get("/api/health", (_req, res) => {
     variantEnrichmentRoot: VARIANT_ENRICHMENT_ROOT,
     individualInterpretationRoot: INDIVIDUAL_INTERPRETATION_ROOT,
     interpretationNormalizationRoot: INTERPRETATION_NORMALIZATION_ROOT,
+    globalInterpretationRoot: GLOBAL_INTERPRETATION_ROOT,
     individualInterpretationConfigured: Boolean(process.env.HEAL_OPENAI_API_KEY || process.env.OPENAI_API_KEY),
     individualInterpretationModel: LLM1_MODEL,
+    globalInterpretationConfigured: Boolean(process.env.HEAL_OPENAI_API_KEY || process.env.OPENAI_API_KEY),
+    globalInterpretationModels: {
+      quick: LLM2_QUICK_MODEL,
+      complete: LLM2_FULL_MODEL,
+      qaDefault: LLM2_QA_DEFAULT_MODEL,
+      allowed: Array.from(ALLOWED_LLM2_MODELS),
+    },
     maxCanonFileSizeBytes: MAX_CANON_FILE_SIZE_BYTES,
     maxCanons: MAX_CANONS,
     maxUploads: MAX_UPLOADS,
@@ -1023,6 +1098,7 @@ app.get("/api/health", (_req, res) => {
     n8nVcfCanonMatchWebhookConfigured: Boolean(N8N_VCF_CANON_MATCH_WEBHOOK_URL),
     n8nVariantEnrichmentWebhookConfigured: Boolean(N8N_VARIANT_ENRICHMENT_WEBHOOK_URL),
     n8nIndividualInterpretationWebhookConfigured: Boolean(N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL),
+    n8nGlobalInterpretationWebhookConfigured: Boolean(N8N_GLOBAL_INTERPRETATION_WEBHOOK_URL),
   });
 });
 
@@ -1589,7 +1665,7 @@ app.get("/api/validations/:jobId", (req, res) => {
 });
 
 app.post("/api/vcf-canon-matches", async (req, res) => {
-  const { uploadId, vcfParser = "streaming" } = req.body || {};
+  const { uploadId, vcfParser = "streaming", analysisMode = "quick" } = req.body || {};
   if (!uploadId) {
     res.status(400).json({ error: "uploadId is required." });
     return;
@@ -1648,6 +1724,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
     uploadId,
     fileName: upload.fileName,
     sizeBytes: upload.sizeBytes,
+    analysisMode: normalizeAnalysisMode(analysisMode),
     status: "running",
     progress: 8,
     stage: "matching",
@@ -2098,6 +2175,115 @@ app.post("/api/vcf-canon-matches/:jobId/interpretation-normalization", async (re
   res.status(202).json(publicJob(job));
 });
 
+app.post("/api/vcf-canon-matches/:jobId/global-interpretation", async (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (job.status === "running") {
+    res.status(409).json({ error: "This job is already running." });
+    return;
+  }
+  if (!job.artifacts?.individualVariantInterpretationsNormalizedCsv) {
+    res.status(409).json({ error: "Normalized individual interpretation CSV is required before global interpretation." });
+    return;
+  }
+
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload && !canAccessUpload(req, upload)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+
+  const normalizationPaths = interpretationNormalizationPaths();
+  const inputCsvPath = path.resolve(job.artifacts.individualVariantInterpretationsNormalizedCsv || "");
+  if (!isPathInside(normalizationPaths.root, inputCsvPath)) {
+    res.status(400).json({ error: "Normalized individual interpretation CSV is outside the allowed root." });
+    return;
+  }
+  const inputStat = await stat(inputCsvPath).catch(() => null);
+  if (!inputStat || inputStat.size <= 0) {
+    res.status(404).json({ error: "Normalized individual interpretation CSV was not found." });
+    return;
+  }
+
+  const analysisMode = normalizeAnalysisMode(req.body?.analysisMode || job.analysisMode);
+  const languageMode = normalizeLanguageMode(req.body?.languageMode);
+  const audienceMode = normalizeAudienceMode(req.body?.audienceMode);
+  const model = resolveLlm2Model({ analysisMode, requestedModel: req.body?.model });
+
+  job.status = "running";
+  job.progress = 100;
+  job.stage = "global_interpretation";
+  job.stageProgress = 12;
+  job.error = null;
+  job.message = `Starting global interpretation with ${model}`;
+  job.analysisMode = analysisMode;
+  job.updatedAt = new Date().toISOString();
+  await persistVcfCanonJob(job);
+
+  (async () => {
+    try {
+      const globalPaths = globalInterpretationPaths();
+      await mkdir(globalPaths.runs, { recursive: true });
+      const globalRunId = `global-interpretation-${crypto.randomUUID()}`;
+      const globalOutputDir = path.join(globalPaths.runs, globalRunId);
+      await mkdir(globalOutputDir, { recursive: true });
+      const globalPayload = {
+        event: "heal.global_interpretation.requested",
+        runId: globalRunId,
+        matchJobId: job.id,
+        uploadId: job.uploadId,
+        fileName: job.fileName,
+        inputPath: inputCsvPath,
+        outputDir: globalOutputDir,
+        model,
+        analysisMode,
+        languageMode,
+        audienceMode,
+        dryRun: Boolean(req.body?.dryRun) && ALLOW_LLM_DRY_RUN,
+        requestedAt: new Date().toISOString(),
+      };
+      job.stageProgress = 35;
+      job.message = "Building deterministic global interpretation payload";
+      job.updatedAt = new Date().toISOString();
+      await persistVcfCanonJob(job);
+
+      const globalSummary = await processGlobalInterpretation(globalPayload);
+      job.artifacts.globalInterpretationPayloadJson = globalSummary.outputs?.globalInterpretationPayloadJson || "";
+      job.artifacts.globalInterpretationDeterministicSummaryJson = globalSummary.outputs?.deterministicSummaryJson || "";
+      job.artifacts.globalInterpretationJson = globalSummary.outputs?.globalInterpretationJson || "";
+      job.artifacts.globalInterpretationSectionsCsv = globalSummary.outputs?.globalInterpretationSectionsCsv || "";
+      job.artifacts.globalInterpretationSummaryJson = globalSummary.outputs?.globalInterpretationSummaryJson || "";
+      job.result = {
+        ...(job.result || {}),
+        globalInterpretation: sanitizeGlobalInterpretationResult(globalSummary),
+      };
+      job.status = globalSummary.status === "invalid" ? "failed" : "complete";
+      job.progress = 100;
+      job.stage = "global_interpretation";
+      job.stageProgress = 100;
+      job.message = "Global interpretation completed";
+      if (globalSummary.status === "invalid") {
+        job.error = globalSummary.errors?.[0] || "Global interpretation failed.";
+      }
+    } catch (error) {
+      job.status = "failed";
+      job.progress = 100;
+      job.stage = "global_interpretation";
+      job.stageProgress = 100;
+      job.error = error.message || String(error);
+      job.message = "Global interpretation failed";
+    } finally {
+      job.updatedAt = new Date().toISOString();
+      await persistVcfCanonJob(job);
+    }
+  })();
+
+  res.status(202).json(publicJob(job));
+});
+
 app.get("/api/vcf-canon-matches/:jobId/download", async (req, res) => {
   if (REQUIRE_ORIGIN && !req.headers.origin) {
     res.status(403).json({ error: "Origin header is required." });
@@ -2430,6 +2616,85 @@ app.get("/api/vcf-canon-matches/:jobId/individual-interpretations-normalized", a
   const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.download(csvPath, `${baseName}_individual_variant_interpretations_normalized.csv`);
+});
+
+async function downloadGlobalInterpretationArtifact(req, res, artifactKey, suffix, contentType) {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (!job.artifacts?.[artifactKey]) {
+    res.status(409).json({ error: "Global interpretation artifact is not ready yet." });
+    return;
+  }
+
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload && !canAccessUpload(req, upload)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+
+  const paths = globalInterpretationPaths();
+  const artifactPath = path.resolve(job.artifacts?.[artifactKey] || "");
+  if (!isPathInside(paths.root, artifactPath)) {
+    res.status(400).json({ error: "Global interpretation artifact is outside the allowed root." });
+    return;
+  }
+  const artifactStat = await stat(artifactPath).catch(() => null);
+  if (!artifactStat || artifactStat.size <= 0) {
+    res.status(404).json({ error: "Global interpretation artifact was not found." });
+    return;
+  }
+
+  const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
+  res.setHeader("Content-Type", contentType);
+  res.download(artifactPath, `${baseName}_${suffix}`);
+}
+
+app.get("/api/vcf-canon-matches/:jobId/global-interpretation", async (req, res) => {
+  await downloadGlobalInterpretationArtifact(
+    req,
+    res,
+    "globalInterpretationJson",
+    "global_interpretation.json",
+    "application/json; charset=utf-8",
+  );
+});
+
+app.get("/api/vcf-canon-matches/:jobId/global-interpretation-sections", async (req, res) => {
+  await downloadGlobalInterpretationArtifact(
+    req,
+    res,
+    "globalInterpretationSectionsCsv",
+    "global_interpretation_sections.csv",
+    "text/csv; charset=utf-8",
+  );
+});
+
+app.get("/api/vcf-canon-matches/:jobId/global-interpretation-payload", async (req, res) => {
+  await downloadGlobalInterpretationArtifact(
+    req,
+    res,
+    "globalInterpretationPayloadJson",
+    "global_interpretation_payload.json",
+    "application/json; charset=utf-8",
+  );
+});
+
+app.get("/api/vcf-canon-matches/:jobId/global-interpretation-deterministic-summary", async (req, res) => {
+  await downloadGlobalInterpretationArtifact(
+    req,
+    res,
+    "globalInterpretationDeterministicSummaryJson",
+    "global_interpretation_deterministic_summary.json",
+    "application/json; charset=utf-8",
+  );
 });
 
 await loadPersistedVcfCanonJobs();

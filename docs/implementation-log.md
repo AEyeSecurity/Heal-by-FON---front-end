@@ -22,6 +22,32 @@
 - Updated LLM1 and post-LLM1 normalization CSV writers to include UTF-8 BOM for spreadsheet compatibility.
 - Added deterministic fallback family-facing notes when LLM1 leaves those fields empty.
 
+### LLM2 Global Interpretation
+
+- Added `services/heal-global-interpretation` for global synthesis after post-LLM1 normalization.
+- Added strict JSON Schema output for the LLM2 global report.
+- Added deterministic backend summary generation before LLM2:
+  - confidence distribution
+  - repeated rsIDs
+  - genes with multiple distinct variants
+  - category/axis groupings
+  - conflict flags
+  - professional-review flags
+  - gene/locus ambiguity flags
+- Added dynamic LLM2 model selection:
+  - quick analysis: `gpt-5-mini`
+  - full analysis: `gpt-5.2`
+  - QA/debug: selectable `gpt-5-mini`, `gpt-5`, `gpt-5.1`, or `gpt-5.2`
+- Added QA-only frontend controls for LLM2 language, audience, and model.
+- Added frontend progress bar and download icon for `Interpretacion global`.
+- Added backend endpoints:
+  - `POST /api/vcf-canon-matches/:jobId/global-interpretation`
+  - `GET /api/vcf-canon-matches/:jobId/global-interpretation`
+  - `GET /api/vcf-canon-matches/:jobId/global-interpretation-sections`
+  - `GET /api/vcf-canon-matches/:jobId/global-interpretation-payload`
+  - `GET /api/vcf-canon-matches/:jobId/global-interpretation-deterministic-summary`
+- Smoke-tested current job `6a3abb89-7557-4537-a55c-45fbbdeae2e2` with `gpt-5-mini` and `gpt-5.2`.
+
 ## 2026-05-25
 
 ### Frontend

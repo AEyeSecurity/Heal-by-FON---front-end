@@ -13,6 +13,7 @@ VCF upload
   -> Workflow 5: External Variant Enrichment
   -> LLM1: Individual Variant Interpretation
   -> Deterministic QA Normalization
+  -> LLM2: Global Interpretation
   -> Downstream analysis placeholder
 ```
 
@@ -170,6 +171,11 @@ POST /api/vcf-canon-matches/:jobId/individual-interpretation
 GET /api/vcf-canon-matches/:jobId/individual-interpretations
 POST /api/vcf-canon-matches/:jobId/interpretation-normalization
 GET /api/vcf-canon-matches/:jobId/individual-interpretations-normalized
+POST /api/vcf-canon-matches/:jobId/global-interpretation
+GET /api/vcf-canon-matches/:jobId/global-interpretation
+GET /api/vcf-canon-matches/:jobId/global-interpretation-sections
+GET /api/vcf-canon-matches/:jobId/global-interpretation-payload
+GET /api/vcf-canon-matches/:jobId/global-interpretation-deterministic-summary
 GET /api/vcf-canon-matches/:jobId/debug/:artifact
 ```
 
@@ -177,7 +183,7 @@ The `debug/:artifact` whitelist includes `vcf_candidates` and `vcf_joined_chr_po
 
 The match and preparation CSVs are downloadable as soon as their files exist, even if external enrichment is still running or later fails. The technical QA enrichment, Colab-style interpretive enrichment, and Enrichment Plus CSVs remain downloadable only after their own files exist. The API verifies job ownership and allowed filesystem roots before serving any artifact. Local paths are not exposed in browser JSON.
 
-The polling response exposes `artifactsReady.matches`, `artifactsReady.preparation`, `artifactsReady.enrichment`, `artifactsReady.enrichmentInterpretive`, `artifactsReady.enrichmentPlus`, `artifactsReady.individualInterpretation`, and `artifactsReady.interpretationNormalization` so the frontend can show each progress-bar download icon as soon as the corresponding audit/review CSV is ready.
+The polling response exposes `artifactsReady.matches`, `artifactsReady.preparation`, `artifactsReady.enrichment`, `artifactsReady.enrichmentInterpretive`, `artifactsReady.enrichmentPlus`, `artifactsReady.individualInterpretation`, `artifactsReady.interpretationNormalization`, and `artifactsReady.globalInterpretation` so the frontend can show each progress-bar download icon as soon as the corresponding audit/review artifact is ready.
 
 ## Enrichment Plus Output
 
@@ -262,6 +268,55 @@ Generalized rules:
 - add `original_final_confidence_level`, `normalization_status`, `normalization_reason`, `duplicate_group_size`, `qa_warnings`, and `normalized_at` columns for audit.
 
 The current smoke test against the 69-row LLM1 output adjusted or flagged 9 rows: COMT duplicate consistency, DRD2 duplicate/locus ambiguity, MAOA confidence cap, FCER1A biomarker association upgrade, and two long Spanish sentence shortenings. It does not use gene-specific or rsID-specific override lists.
+
+## LLM2 Global Interpretation
+
+This module consumes the normalized LLM1 output and creates a structured global synthesis. It does not reinterpret variants individually and does not change per-variant `final_confidence_level` values.
+
+```text
+Input:  individual_variant_interpretations_normalized.csv
+Output: global_interpretation.json
+        global_interpretation_sections.csv
+        global_interpretation_payload.json
+        deterministic_summary.json
+```
+
+Runtime service:
+
+```text
+C:\ServerCIT\services\heal-global-interpretation
+```
+
+Repository source copy:
+
+```text
+services/heal-global-interpretation
+```
+
+Key script:
+
+```text
+interpret_global_profile.py
+```
+
+Before calling the LLM, the backend builds a deterministic summary containing observed variant count, unique rsID count, unique gene count, confidence distribution, repeated rsIDs across categories, genes with multiple distinct variants, category/axis groupings, conflicting variants, professional-review variants, and gene/locus ambiguities.
+
+Model selection is dynamic and applies only to LLM2:
+
+```text
+Analisis superficial -> gpt-5-mini
+Analisis completo    -> gpt-5.2
+Control de Calidad   -> selectable: gpt-5-mini, gpt-5, gpt-5.1, or gpt-5.2
+```
+
+Frontend QA/debug mode also exposes LLM2 language and audience options:
+
+```text
+language_mode: es | en | both
+audience_mode: technical | health_professional | family | all
+```
+
+For ordinary quick/full runs, language follows the page language and audience defaults to `family` for quick analysis and `all` for full analysis.
 
 ## Colab Output Boundary
 
