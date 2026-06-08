@@ -1,5 +1,14 @@
 # Implementation Log
 
+## 2026-06-08
+
+### Frontend Resilience
+
+- Added transient polling retries for validation and match jobs.
+- Reduced polling frequency during long LLM/QA normalization stages to avoid unnecessary pressure on the Cloudflare tunnel.
+- Confirmed an interrupted browser session can be recovered because the backend job continues independently.
+- Recovered job `a536e901-a292-4e5a-8b3b-fe089f98771c` by running only the post-LLM1 QA normalization stage after LLM1 had already completed.
+
 ## 2026-05-25
 
 ### Frontend

@@ -22,6 +22,11 @@ import "./styles.css";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8787";
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || "";
 const JOB_ACCESS_TOKENS_KEY = "heal.jobAccessTokens.v1";
+const POLL_RETRY_LIMIT = 8;
+const POLL_RETRY_DELAY_MS = 1500;
+const VALIDATION_POLL_DELAY_MS = 800;
+const MATCH_POLL_DELAY_MS = 900;
+const LONG_STAGE_POLL_DELAY_MS = 1800;
 const BUSY_PHASES = [
   "uploading",
   "validating",
@@ -58,6 +63,10 @@ function getJobAccessToken(jobId) {
 
 function accessHeaders(accessToken) {
   return accessToken ? { "X-HEAL-Access-Token": accessToken } : {};
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const COPY = {
@@ -117,6 +126,7 @@ const COPY = {
     uploading: "Subiendo el archivo en partes a un espacio aislado...",
     validationStarting: "Iniciando validacion por streaming...",
     validating: "Validando",
+    connectionRetrying: "Reconectando con el backend...",
     matchStarting: "Iniciando match VCF-Canon...",
     matching: "Matcheando VCF contra canon...",
     preparing: "Preparando CSVs de auditoria...",
@@ -281,6 +291,7 @@ const COPY = {
     uploading: "Uploading the file in chunks into an isolated workspace...",
     validationStarting: "Starting streaming validation...",
     validating: "Validating",
+    connectionRetrying: "Reconnecting to the backend...",
     matchStarting: "Starting VCF-Canon match...",
     matching: "Matching VCF against canon...",
     preparing: "Preparing audit CSVs...",
@@ -1546,16 +1557,35 @@ function App() {
   }
 
   async function pollValidation(jobId) {
+    let transientFailures = 0;
     for (;;) {
-      const response = await fetch(`${API_BASE}/api/validations/${jobId}`);
-      if (!response.ok) throw new Error(await response.text());
+      let response;
+      try {
+        response = await fetch(`${API_BASE}/api/validations/${jobId}`);
+      } catch (caught) {
+        transientFailures += 1;
+        if (transientFailures > POLL_RETRY_LIMIT) throw caught;
+        setCustomMessage(`${t.connectionRetrying} (${transientFailures}/${POLL_RETRY_LIMIT})`);
+        await sleep(POLL_RETRY_DELAY_MS);
+        continue;
+      }
+      if (!response.ok) {
+        if (response.status >= 500 && transientFailures < POLL_RETRY_LIMIT) {
+          transientFailures += 1;
+          setCustomMessage(`${t.connectionRetrying} (${transientFailures}/${POLL_RETRY_LIMIT})`);
+          await sleep(POLL_RETRY_DELAY_MS);
+          continue;
+        }
+        throw new Error(await response.text());
+      }
+      transientFailures = 0;
       const job = await response.json();
       setValidationProgress(job.progress || 0);
       setCustomMessage(job.message || t.validating);
 
       if (job.status === "complete") return { ...(job.result || {}), jobId: job.id };
       if (job.status === "failed") throw new Error(job.error || t.validationFailed);
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await sleep(VALIDATION_POLL_DELAY_MS);
     }
   }
 
@@ -1593,9 +1623,28 @@ function App() {
   }
 
   async function pollMatch(jobId) {
+    let transientFailures = 0;
     for (;;) {
-      const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${jobId}`);
-      if (!response.ok) throw new Error(await response.text());
+      let response;
+      try {
+        response = await fetch(`${API_BASE}/api/vcf-canon-matches/${jobId}`);
+      } catch (caught) {
+        transientFailures += 1;
+        if (transientFailures > POLL_RETRY_LIMIT) throw caught;
+        setCustomMessage(`${t.connectionRetrying} (${transientFailures}/${POLL_RETRY_LIMIT})`);
+        await sleep(POLL_RETRY_DELAY_MS);
+        continue;
+      }
+      if (!response.ok) {
+        if (response.status >= 500 && transientFailures < POLL_RETRY_LIMIT) {
+          transientFailures += 1;
+          setCustomMessage(`${t.connectionRetrying} (${transientFailures}/${POLL_RETRY_LIMIT})`);
+          await sleep(POLL_RETRY_DELAY_MS);
+          continue;
+        }
+        throw new Error(await response.text());
+      }
+      transientFailures = 0;
       const job = await response.json();
       updateMatchSnapshot(job);
       setMatchProgress(job.progress || 0);
@@ -1660,7 +1709,11 @@ function App() {
         failed.result = job.result || null;
         throw failed;
       }
-      await new Promise((resolve) => setTimeout(resolve, 900));
+      const pollDelay =
+        job.stage === "individual_interpretation" || job.stage === "interpretation_normalization"
+          ? LONG_STAGE_POLL_DELAY_MS
+          : MATCH_POLL_DELAY_MS;
+      await sleep(pollDelay);
     }
   }
 
