@@ -78,7 +78,7 @@ const COPY = {
     title: "VCF Integrity Check",
     lede: "Carga un archivo VCF o VCF.GZ para validar estructura, headers, primeras variantes y metricas tecnicas.",
     pipelineLabel: "Pipeline",
-    steps: ["Carga del VCF", "Validacion de integridad", "Match VCF-Canon", "Analisis posterior"],
+    steps: ["Carga del VCF", "Validacion de integridad", "Match VCF-Canon", "Interpretacion", "Analisis posterior"],
     dropEmpty: "Arrastra tu VCF aca",
     dropHelp: "Tambien podes seleccionarlo desde tu equipo.",
     selectFile: "Seleccionar archivo",
@@ -243,7 +243,7 @@ const COPY = {
     title: "VCF Integrity Check",
     lede: "Upload a VCF or VCF.GZ file to validate structure, headers, first variants, and technical metrics.",
     pipelineLabel: "Pipeline",
-    steps: ["VCF upload", "Integrity validation", "VCF-Canon match", "Downstream analysis"],
+    steps: ["VCF upload", "Integrity validation", "VCF-Canon match", "Interpretation", "Downstream analysis"],
     dropEmpty: "Drop your VCF here",
     dropHelp: "You can also select it from your computer.",
     selectFile: "Select file",
@@ -431,6 +431,7 @@ function clampVariantCount(value) {
 function ProgressBar({
   label,
   value,
+  detail = "",
   tone = "blue",
   downloadLabel = "",
   onDownload = null,
@@ -461,6 +462,7 @@ function ProgressBar({
         </span>
         <span className="progress-value">
           <strong>{Math.round(value)}%</strong>
+          {detail && <span className="progress-detail">{detail}</span>}
           {canDownload && (
             <button className="progress-download-button" type="button" onClick={onDownload} aria-label={downloadLabel || label}>
               <Download size={16} />
@@ -480,26 +482,26 @@ function PipelineStepper({ phase, t }) {
     { key: "upload", label: t.steps[0] },
     { key: "validation", label: t.steps[1] },
     { key: "match", label: t.steps[2] },
-    { key: "analysis", label: t.steps[3] },
+    { key: "interpretation", label: t.steps[3] },
+    { key: "analysis", label: t.steps[4] },
   ];
   const activeIndex =
     phase === "uploading"
       ? 0
       : phase === "validating"
         ? 1
-        : phase === "matching" || phase === "preparing"
+        : phase === "matching" || phase === "preparing" || phase === "enriching"
           ? 2
-          : phase === "enriching" ||
-              phase === "individual_interpretation" ||
-              phase === "interpretation_normalization" ||
-              phase === "done"
+          : phase === "individual_interpretation" || phase === "interpretation_normalization" || phase === "done"
             ? 3
             : 0;
   const completeIndex =
     phase === "done"
       ? 3
-      : phase === "enriching" || phase === "individual_interpretation" || phase === "interpretation_normalization"
+      : phase === "individual_interpretation" || phase === "interpretation_normalization"
         ? 2
+        : phase === "enriching"
+          ? 1
         : phase === "matching" || phase === "preparing"
         ? 1
         : phase === "validating"
@@ -1363,6 +1365,7 @@ function App() {
   const [phase, setPhase] = useState("idle");
   const [messageKey, setMessageKey] = useState("initialMessage");
   const [customMessage, setCustomMessage] = useState("");
+  const [individualInterpretationDetail, setIndividualInterpretationDetail] = useState("");
   const [result, setResult] = useState(null);
   const [matchResult, setMatchResult] = useState(null);
   const [matchArtifactsReady, setMatchArtifactsReady] = useState({
@@ -1423,6 +1426,7 @@ function App() {
     activeAccessTokenRef.current = "";
     setPhase("idle");
     setCustomMessage("");
+    setIndividualInterpretationDetail("");
     setTurnstileToken("");
     setTurnstileResetKey((current) => current + 1);
     setMessageKey(nextFile ? "fileReady" : "initialMessage");
@@ -1665,16 +1669,19 @@ function App() {
         setPreparationProgress(100);
         setEnrichmentProgress(100);
         setIndividualInterpretationProgress(job.stageProgress ?? job.progress ?? 0);
-        setCustomMessage(job.message || t.individualInterpreting);
+        setIndividualInterpretationDetail(job.message || "");
+        setCustomMessage(t.individualInterpreting);
       } else if (job.stage === "interpretation_normalization") {
         setPhase("interpretation_normalization");
         setMatchProgress(100);
         setPreparationProgress(100);
         setEnrichmentProgress(100);
         setIndividualInterpretationProgress(100);
+        setIndividualInterpretationDetail("");
         setInterpretationNormalizationProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.interpretationNormalizing);
       } else {
+        setIndividualInterpretationDetail("");
         setMatchProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.matching);
       }
@@ -1744,7 +1751,7 @@ function App() {
           setEnrichmentProgress(0);
           setIndividualInterpretationProgress(0);
           setInterpretationNormalizationProgress(0);
-          setMatchArtifactsReady({
+        setMatchArtifactsReady({
             matches: false,
             debug: false,
             preparation: false,
@@ -2017,6 +2024,7 @@ function App() {
       individualInterpretation: false,
       interpretationNormalization: false,
     });
+    setIndividualInterpretationDetail("");
     setUploadProgress(0);
     setValidationProgress(0);
     setMatchProgress(0);
@@ -2223,6 +2231,7 @@ function App() {
         <ProgressBar
           label={t.individualInterpretationProgress}
           value={individualInterpretationProgress}
+          detail={individualInterpretationDetail}
           tone="blue"
           downloadLabel={t.individualInterpretationDownload}
           onDownload={matchResult?.jobId ? () => downloadMatchArtifact("individualInterpretation") : null}

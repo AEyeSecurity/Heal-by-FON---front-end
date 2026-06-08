@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import unicodedata
 from collections import Counter, defaultdict
 
 
@@ -37,6 +38,27 @@ def clean(value) -> str:
     return str(value).replace("\u00a0", " ").strip()
 
 
+ASCII_REPLACEMENTS = {
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2026": "...",
+    "\u00b5": "u",
+    "\u03bc": "u",
+    "\u03b2": "beta",
+}
+
+
+def ascii_text(value) -> str:
+    text = clean(value)
+    for source, replacement in ASCII_REPLACEMENTS.items():
+        text = text.replace(source, replacement)
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+
+
 def truthy(value) -> bool:
     return clean(value).lower() in {"1", "true", "yes", "y"}
 
@@ -56,7 +78,7 @@ def read_csv(path: Path) -> list[dict]:
 
 def write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
@@ -275,11 +297,22 @@ def normalize_rows(rows: list[dict]) -> tuple[list[dict], list[dict], dict]:
 
         out["original_final_confidence_level"] = original_confidence
         out["final_confidence_level"] = final_confidence
+        if not clean(out.get("family_notes_en")):
+            out["family_notes_en"] = (
+                "This row should be treated as contextual information only; it does not support a diagnosis by itself."
+            )
+            warning_values.append("missing_family_note_filled")
+        if not clean(out.get("family_notes_es")):
+            out["family_notes_es"] = (
+                "Esta fila debe tratarse como informacion contextual; no sostiene un diagnostico por si sola."
+            )
+            warning_values.append("missing_family_note_filled")
         out["normalization_status"] = "changed" if final_confidence != original_confidence or warning_values else "unchanged"
         out["normalization_reason"] = " ".join(reasons)
         out["duplicate_group_size"] = str(group_size)
         out["qa_warnings"] = "|".join(dict.fromkeys(warning_values))
         out["normalized_at"] = utc_now()
+        out = {key: ascii_text(value) if isinstance(value, str) else value for key, value in out.items()}
 
         if out["normalization_status"] == "changed":
             warnings.append(

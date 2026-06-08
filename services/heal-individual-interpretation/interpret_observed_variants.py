@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 
@@ -146,6 +147,27 @@ def clean_str(value) -> str:
     return str(value).replace("\u00a0", " ").strip()
 
 
+ASCII_REPLACEMENTS = {
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2026": "...",
+    "\u00b5": "u",
+    "\u03bc": "u",
+    "\u03b2": "beta",
+}
+
+
+def ascii_text(value) -> str:
+    text = clean_str(value)
+    for source, replacement in ASCII_REPLACEMENTS.items():
+        text = text.replace(source, replacement)
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+
+
 def truthy(value) -> bool:
     return clean_str(value).lower() in {"1", "true", "yes", "y"}
 
@@ -165,7 +187,7 @@ def read_csv(path: Path) -> list[dict]:
 
 def write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
@@ -518,7 +540,7 @@ def normalize_output(item: dict, payload: dict, model: str, dry_run: bool) -> di
     out["model"] = model
     out["dry_run"] = str(dry_run).lower()
     out["source_row_id"] = payload.get("row_id", "")
-    return out
+    return {key: ascii_text(value) if isinstance(value, str) else value for key, value in out.items()}
 
 
 def process(payload: dict) -> dict:

@@ -9,6 +9,19 @@
 - Confirmed an interrupted browser session can be recovered because the backend job continues independently.
 - Recovered job `a536e901-a292-4e5a-8b3b-fe089f98771c` by running only the post-LLM1 QA normalization stage after LLM1 had already completed.
 
+### Interpretation QA Polish
+
+- Moved the per-variant LLM progress detail into the individual interpretation progress bar.
+- Updated the top pipeline to five visible steps:
+  - VCF upload
+  - integrity validation
+  - VCF-canon match
+  - interpretation
+  - downstream analysis placeholder
+- Added ASCII-only output guidance to LLM1 and deterministic ASCII cleanup before CSV export.
+- Updated LLM1 and post-LLM1 normalization CSV writers to include UTF-8 BOM for spreadsheet compatibility.
+- Added deterministic fallback family-facing notes when LLM1 leaves those fields empty.
+
 ## 2026-05-25
 
 ### Frontend

@@ -464,6 +464,16 @@ h1 {
   flex: 0 0 auto;
 }
 
+.progress-detail {
+  max-width: min(360px, 42vw);
+  overflow: hidden;
+  color: #617069;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .progress-play-button,
 .progress-download-button {
   display: grid;

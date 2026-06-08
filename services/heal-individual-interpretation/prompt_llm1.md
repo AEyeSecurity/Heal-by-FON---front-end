@@ -56,6 +56,11 @@ Output language:
 
 Generate both English and Spanish outputs.
 
+Important CSV compatibility rule:
+
+- Use plain ASCII text only in every output field. Do not use accents, diacritics, smart quotes, en dashes, em dashes, Greek symbols, or other non-ASCII characters.
+- Spanish output must still be Spanish, but written without accents or special punctuation. For example, write "interpretacion", "tecnico", "clinica", "farmacogenomico", and "nino" instead of accented forms.
+
 Style rules:
 
 - Parent/family-facing text should be simple, calm, and non-alarming.
