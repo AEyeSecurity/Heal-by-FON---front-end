@@ -1,5 +1,25 @@
 # Implementation Log
 
+## 2026-06-10
+
+### Frontend Polish
+
+- Renamed the app from `VCF Integrity Check` to `Genomic Interpretation Pipeline` in the page title and hero copy.
+- Fixed the top pipeline stepper to render five stages on one row across desktop and mobile breakpoints.
+- Added extra visible summary cards for later stages using existing backend metadata:
+  - enrichment source rows, Enrichment Plus rows, source count, cache and source-error counts
+  - LLM1 source/interpreted/error rows, model, workers, and dry-run state
+  - QA normalization confidence distribution and duplicate-group metrics
+  - LLM2 gene/rsID/confidence/review/ambiguity metrics
+- Verified the local UI at desktop width and mobile width; all five top steps stayed on one row.
+
+### n8n Folder Hygiene
+
+- Verified current n8n operational rules in `C:\ServerCIT\n8n\README.md` and `RUNBOOK_SAFE_RESTART.md`.
+- Verified backup `C:\n8n-backups\daily\20260610-180001` was complete and successful before touching n8n metadata.
+- Moved the remaining HEAL workflows into the existing `Heal by FON` folder (`Hfz5Eb23JVFZQJoV`) with a targeted `parentFolderId` update only.
+- Confirmed `n8n` health stayed `ok`; no n8n restart was performed.
+
 ## 2026-06-08
 
 ### Frontend Resilience

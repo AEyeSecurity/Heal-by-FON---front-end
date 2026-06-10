@@ -141,8 +141,8 @@ h1 {
 .pipeline {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
   margin-bottom: 20px;
   padding: 20px 18px;
 }
@@ -150,8 +150,8 @@ h1 {
 .pipeline::before {
   position: absolute;
   top: 39px;
-  right: calc(12.5% + 26px);
-  left: calc(12.5% + 26px);
+  right: calc(10% + 22px);
+  left: calc(10% + 22px);
   height: 2px;
   background: #dfe7d8;
   content: "";
@@ -165,8 +165,9 @@ h1 {
   gap: 8px;
   min-width: 0;
   color: #6a766e;
-  font-size: 0.92rem;
+  font-size: 0.86rem;
   font-weight: 750;
+  line-height: 1.2;
   text-align: center;
 }
 
@@ -964,12 +965,12 @@ h1 {
   }
 
   .pipeline::before {
-    right: calc(12.5% + 20px);
-    left: calc(12.5% + 20px);
+    right: calc(10% + 18px);
+    left: calc(10% + 18px);
   }
 
   .pipeline-step {
-    font-size: 0.78rem;
+    font-size: 0.68rem;
   }
 
   .pipeline-dot {

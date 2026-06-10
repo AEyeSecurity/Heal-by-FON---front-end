@@ -19,6 +19,8 @@ VCF upload
 
 The browser only orchestrates uploads and polling. Heavy work is delegated to backend scripts through n8n workflows. n8n receives file references, not multi-GB binary payloads.
 
+All current HEAL n8n workflows are grouped under the existing `Heal by FON` folder (`Hfz5Eb23JVFZQJoV`). This includes active workflows, the original inactive VCF integrity workflow, and the inactive superseded match-preparation workflow kept for traceability.
+
 ## Workflow 1 - VCF Integrity Check
 
 - n8n name: `HEAL - VCF Integrity Check`

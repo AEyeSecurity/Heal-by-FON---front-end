@@ -1,6 +1,6 @@
-# HEAL VCF Upload
+# HEAL Genomic Interpretation Pipeline
 
-Local React prototype for uploading a VCF file, validating HEAL by FON VCF integrity, matching against the current canon, and enriching observed variants for audit.
+Local React prototype for uploading a VCF file, validating it, matching it against the current HEAL canon, enriching observed variants, and generating auditable interpretation artifacts.
 
 ## Documentation
 
