@@ -178,6 +178,8 @@ GET /api/vcf-canon-matches/:jobId/global-interpretation
 GET /api/vcf-canon-matches/:jobId/global-interpretation-sections
 GET /api/vcf-canon-matches/:jobId/global-interpretation-payload
 GET /api/vcf-canon-matches/:jobId/global-interpretation-deterministic-summary
+POST /api/vcf-canon-matches/:jobId/final-report
+GET /api/vcf-canon-matches/:jobId/final-report
 GET /api/vcf-canon-matches/:jobId/debug/:artifact
 ```
 
@@ -185,7 +187,7 @@ The `debug/:artifact` whitelist includes `vcf_candidates` and `vcf_joined_chr_po
 
 The match and preparation CSVs are downloadable as soon as their files exist, even if external enrichment is still running or later fails. The technical QA enrichment, Colab-style interpretive enrichment, and Enrichment Plus CSVs remain downloadable only after their own files exist. The API verifies job ownership and allowed filesystem roots before serving any artifact. Local paths are not exposed in browser JSON.
 
-The polling response exposes `artifactsReady.matches`, `artifactsReady.preparation`, `artifactsReady.enrichment`, `artifactsReady.enrichmentInterpretive`, `artifactsReady.enrichmentPlus`, `artifactsReady.individualInterpretation`, `artifactsReady.interpretationNormalization`, and `artifactsReady.globalInterpretation` so the frontend can show each progress-bar download icon as soon as the corresponding audit/review artifact is ready.
+The polling response exposes `artifactsReady.matches`, `artifactsReady.preparation`, `artifactsReady.enrichment`, `artifactsReady.enrichmentInterpretive`, `artifactsReady.enrichmentPlus`, `artifactsReady.individualInterpretation`, `artifactsReady.interpretationNormalization`, `artifactsReady.globalInterpretation`, and `artifactsReady.finalReport` so the frontend can show each progress-bar download icon as soon as the corresponding audit/review artifact is ready.
 
 ## Enrichment Plus Output
 
@@ -319,6 +321,42 @@ audience_mode: technical | health_professional | family | all
 ```
 
 For ordinary quick/full runs, language follows the page language and audience defaults to `family` for quick analysis and `all` for full analysis.
+
+## Final User Report
+
+The final user-facing deliverable is generated after LLM2. It renders the structured `global_interpretation.json` into a Word document without calling another LLM and without adding new biological interpretation.
+
+```text
+Input:  global_interpretation.json
+Output: *_final_report.docx
+        final_report_summary.json
+```
+
+Runtime service:
+
+```text
+C:\ServerCIT\services\heal-final-report
+```
+
+Repository source copy:
+
+```text
+services/heal-final-report
+```
+
+Key script:
+
+```text
+render_final_report.py
+```
+
+The report includes metadata, non-diagnostic caution, executive summary, main interpretation, limitations, next review steps, biological axes, notable gene patterns, findings for review, sensitive/conflicting findings, family-friendly summary, technical summary, and final recommendation.
+
+The JSON remains available as a QA/audit artifact. The product-facing deliverable is the `.docx` file served through:
+
+```text
+GET /api/vcf-canon-matches/:jobId/final-report
+```
 
 ## Colab Output Boundary
 

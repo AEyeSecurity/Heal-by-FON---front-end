@@ -2,6 +2,18 @@
 
 ## 2026-06-10
 
+### Final User Report DOCX
+
+- Added `services/heal-final-report`.
+- Added deterministic DOCX rendering from `global_interpretation.json` via `render_final_report.py`.
+- Added backend stage and endpoints:
+  - `POST /api/vcf-canon-matches/:jobId/final-report`
+  - `GET /api/vcf-canon-matches/:jobId/final-report`
+- Added `artifactsReady.finalReport` to match polling.
+- Added frontend progress bar `Reporte final` / `Final report`.
+- Made the Word report the primary downloadable end-user deliverable while leaving the global interpretation JSON in QA downloads.
+- Smoke-tested DOCX generation against a real `global_interpretation.json`; the generated `.docx` contained a non-empty `word/document.xml`.
+
 ### Frontend Polish
 
 - Renamed the app from `VCF Integrity Check` to `Genomic Interpretation Pipeline` in the page title and hero copy.

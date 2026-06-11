@@ -266,7 +266,7 @@ QA/debug       -> selected from gpt-5-mini, gpt-5, gpt-5.1, gpt-5.2
 
 LLM2 uses strict JSON Schema output and must not reinterpret individual variants from scratch or change per-variant confidence labels.
 
-## Final Report Gap
+## Final Report Layer
 
 The original Colab did not generate a final `.docx` or PDF clinical report. Its coded outputs stop at structured CSV files:
 
@@ -275,7 +275,18 @@ The original Colab did not generate a final `.docx` or PDF clinical report. Its 
 - `heal_fon_deliverable_presentation_audit.csv`
 - `heal_fon_interpretation_enriched_observed69.csv`
 
-The downstream interpretation described in the project documents was performed manually/with AI assistance outside the notebook. The current implementation now creates a controlled global interpretation JSON/CSV, but it does not yet render a final polished DOCX/PDF report. The next implementation stage should render the LLM2 JSON using fixed templates rather than asking another LLM to freely rewrite the report.
+The downstream interpretation described in the project documents was performed manually/with AI assistance outside the notebook. The current implementation now creates a controlled global interpretation JSON/CSV and renders it into a final user-facing Word report.
+
+The final report layer is deterministic:
+
+- input: `global_interpretation.json`;
+- output: `*_final_report.docx`;
+- service root: `C:\ServerCIT\services\heal-final-report`;
+- repository source: `services/heal-final-report`;
+- no additional LLM call;
+- no new interpretation beyond the structured LLM2 result.
+
+The JSON remains available for QA/audit, but the end-user deliverable is the Word document.
 
 ## Production Domains
 

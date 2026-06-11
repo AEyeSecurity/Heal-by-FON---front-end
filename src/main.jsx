@@ -36,6 +36,7 @@ const BUSY_PHASES = [
   "individual_interpretation",
   "interpretation_normalization",
   "global_interpretation",
+  "final_report",
 ];
 
 function isBusyPhase(phase) {
@@ -43,7 +44,7 @@ function isBusyPhase(phase) {
 }
 
 function isLongPollingStage(stage) {
-  return ["individual_interpretation", "interpretation_normalization", "global_interpretation"].includes(stage);
+  return ["individual_interpretation", "interpretation_normalization", "global_interpretation", "final_report"].includes(stage);
 }
 
 function readJobAccessTokens() {
@@ -129,6 +130,7 @@ const COPY = {
     individualInterpretationProgress: "Interpretacion individual",
     interpretationNormalizationProgress: "Normalizacion QA",
     globalInterpretationProgress: "Interpretacion global",
+    finalReportProgress: "Reporte final",
     submit: "Enviar y validar",
     securityCheck: "Verificacion de seguridad",
     securityCheckHelp: "Protege el backend antes de aceptar VCFs grandes.",
@@ -161,6 +163,10 @@ const COPY = {
     globalInterpreting: "Sintetizando patrones globales...",
     globalInterpretationComplete: "Interpretacion global finalizada.",
     globalInterpretationFailed: "No se pudo completar la interpretacion global.",
+    finalReportStarting: "Generando reporte final...",
+    finalReportRendering: "Formateando reporte final Word...",
+    finalReportComplete: "Reporte final generado.",
+    finalReportFailed: "No se pudo generar el reporte final.",
     llm2OptionsTitle: "Opciones LLM2",
     llm2AudienceLabel: "Audiencia",
     llm2ModelLabel: "Modelo LLM2",
@@ -244,6 +250,10 @@ const COPY = {
     globalInterpretationRepeatedRsids: "rsIDs repetidos",
     globalInterpretationReview: "Revision profesional",
     globalInterpretationAmbiguities: "Ambiguedades gen/locus",
+    finalReportTitle: "Reporte final",
+    finalReportFormat: "Formato",
+    finalReportSource: "Fuente",
+    finalReportSize: "Tamano DOCX",
     matchStatusStrict: "Matches estrictos",
     matchStatusAltReview: "Matches con revision ALT",
     matchStatusNoPosition: "Sin match por posicion",
@@ -280,6 +290,7 @@ const COPY = {
     globalInterpretationSectionsDownload: "Descargar secciones globales CSV",
     globalInterpretationPayloadDownload: "Descargar payload LLM2",
     globalInterpretationSummaryDownload: "Descargar resumen deterministico",
+    finalReportDownload: "Descargar reporte final Word",
     matchDownloadFailed: "No se pudo descargar el CSV de matches.",
     canonDownloadFailed: "No se pudo descargar el canon.",
     close: "Cerrar",
@@ -331,6 +342,7 @@ const COPY = {
     individualInterpretationProgress: "Individual interpretation",
     interpretationNormalizationProgress: "QA normalization",
     globalInterpretationProgress: "Global interpretation",
+    finalReportProgress: "Final report",
     submit: "Send and validate",
     securityCheck: "Security check",
     securityCheckHelp: "Protects the backend before accepting large VCF files.",
@@ -363,6 +375,10 @@ const COPY = {
     globalInterpreting: "Synthesizing global patterns...",
     globalInterpretationComplete: "Global interpretation finished.",
     globalInterpretationFailed: "Could not complete global interpretation.",
+    finalReportStarting: "Generating final report...",
+    finalReportRendering: "Formatting final Word report...",
+    finalReportComplete: "Final report generated.",
+    finalReportFailed: "Could not generate the final report.",
     llm2OptionsTitle: "LLM2 options",
     llm2AudienceLabel: "Audience",
     llm2ModelLabel: "LLM2 model",
@@ -446,6 +462,10 @@ const COPY = {
     globalInterpretationRepeatedRsids: "Repeated rsIDs",
     globalInterpretationReview: "Professional review",
     globalInterpretationAmbiguities: "Gene/locus ambiguities",
+    finalReportTitle: "Final report",
+    finalReportFormat: "Format",
+    finalReportSource: "Source",
+    finalReportSize: "DOCX size",
     matchStatusStrict: "Strict matches",
     matchStatusAltReview: "Matches needing ALT review",
     matchStatusNoPosition: "No position match",
@@ -482,6 +502,7 @@ const COPY = {
     globalInterpretationSectionsDownload: "Download global sections CSV",
     globalInterpretationPayloadDownload: "Download LLM2 payload",
     globalInterpretationSummaryDownload: "Download deterministic summary",
+    finalReportDownload: "Download final Word report",
     matchDownloadFailed: "Could not download matches CSV.",
     canonDownloadFailed: "Could not download canon.",
     close: "Close",
@@ -584,6 +605,7 @@ function PipelineStepper({ phase, t }) {
           : phase === "individual_interpretation" ||
               phase === "interpretation_normalization" ||
               phase === "global_interpretation" ||
+              phase === "final_report" ||
               phase === "done"
             ? 3
             : 0;
@@ -592,7 +614,8 @@ function PipelineStepper({ phase, t }) {
       ? 3
       : phase === "individual_interpretation" ||
           phase === "interpretation_normalization" ||
-          phase === "global_interpretation"
+          phase === "global_interpretation" ||
+          phase === "final_report"
         ? 2
         : phase === "enriching"
           ? 1
@@ -1169,6 +1192,7 @@ function MatchResultPanel({ result, locale, t }) {
   const individualInterpretation = result.individualInterpretation?.metadata || {};
   const interpretationNormalization = result.interpretationNormalization?.metadata || {};
   const globalInterpretation = result.globalInterpretation?.metadata || {};
+  const finalReport = result.finalReport?.metadata || {};
   const normalizedConfidenceCounts = interpretationNormalization.confidence_level_counts || {};
   const globalConfidenceCounts = globalInterpretation.confidence_distribution || {};
   const enrichmentSourceErrors = Object.values(enrichment.source_error_counts || {}).reduce(
@@ -1255,6 +1279,16 @@ function MatchResultPanel({ result, locale, t }) {
         [t.globalInterpretationAudience, globalInterpretation.audience_mode || "-"],
         [t.globalInterpretationLanguage, globalInterpretation.language_mode || "-"],
         [t.globalInterpretationReadiness, globalInterpretation.overall_readiness || "-"],
+      ]
+    : [];
+  const finalReportCards = result.finalReport
+    ? [
+        [t.finalReportFormat, finalReport.format || "docx"],
+        [t.finalReportSource, finalReport.source || "-"],
+        [t.finalReportSize, formatBytes(Number(finalReport.docx_size_bytes || 0), locale)],
+        [t.globalInterpretationVariants, formatNumber(finalReport.variant_count_observed, locale)],
+        [t.globalInterpretationGenes, formatNumber(finalReport.unique_gene_count, locale)],
+        [t.globalInterpretationLanguage, finalReport.language_mode || "-"],
       ]
     : [];
 
@@ -1361,6 +1395,10 @@ function MatchResultPanel({ result, locale, t }) {
     );
   }
 
+  async function downloadFinalReport() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/final-report`, "heal-final-report.docx");
+  }
+
   async function downloadDebugArtifact(artifact, fallbackName) {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/debug/${artifact}`, fallbackName);
   }
@@ -1429,7 +1467,21 @@ function MatchResultPanel({ result, locale, t }) {
           </div>
         </>
       )}
+      {finalReportCards.length > 0 && (
+        <>
+          <h3 className="result-subtitle">{t.finalReportTitle}</h3>
+          <div className="metrics-grid">
+            {finalReportCards.map(([label, value]) => (
+              <MetricCard label={label} value={value} key={label} />
+            ))}
+          </div>
+        </>
+      )}
       <div className="match-download-actions">
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadFinalReport}>
+          <Download size={17} />
+          {t.finalReportDownload}
+        </button>
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadMatches}>
           <Download size={17} />
           {t.matchDownload}
@@ -1462,10 +1514,6 @@ function MatchResultPanel({ result, locale, t }) {
           <Download size={17} />
           {t.interpretationNormalizationDownload}
         </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadGlobalInterpretation}>
-          <Download size={17} />
-          {t.globalInterpretationDownload}
-        </button>
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadGlobalInterpretationSections}>
           <Download size={17} />
           {t.globalInterpretationSectionsDownload}
@@ -1496,6 +1544,10 @@ function MatchResultPanel({ result, locale, t }) {
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={() => downloadDebugArtifact("no_vcf_match", "heal-match-no-vcf-match.csv")}>
           <Download size={17} />
           {t.qaNoVcfMatch}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadGlobalInterpretation}>
+          <Download size={17} />
+          {t.globalInterpretationDownload}
         </button>
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadGlobalInterpretationPayload}>
           <Download size={17} />
@@ -1541,6 +1593,7 @@ function App() {
   const [individualInterpretationProgress, setIndividualInterpretationProgress] = useState(0);
   const [interpretationNormalizationProgress, setInterpretationNormalizationProgress] = useState(0);
   const [globalInterpretationProgress, setGlobalInterpretationProgress] = useState(0);
+  const [finalReportProgress, setFinalReportProgress] = useState(0);
   const [qaLlm2Model, setQaLlm2Model] = useState("gpt-5-mini");
   const [qaAudienceMode, setQaAudienceMode] = useState("all");
   const [qaLanguageMode, setQaLanguageMode] = useState("both");
@@ -1561,6 +1614,7 @@ function App() {
     individualInterpretation: false,
     interpretationNormalization: false,
     globalInterpretation: false,
+    finalReport: false,
   });
   const [error, setError] = useState(null);
   const [errorDialog, setErrorDialog] = useState(null);
@@ -1591,6 +1645,7 @@ function App() {
     setIndividualInterpretationProgress(0);
     setInterpretationNormalizationProgress(0);
     setGlobalInterpretationProgress(0);
+    setFinalReportProgress(0);
     setResult(null);
     setMatchResult(null);
     setMatchArtifactsReady({
@@ -1603,6 +1658,7 @@ function App() {
       individualInterpretation: false,
       interpretationNormalization: false,
       globalInterpretation: false,
+      finalReport: false,
     });
     setError(null);
     setErrorDialog(null);
@@ -1684,6 +1740,11 @@ function App() {
         await downloadCsv(
           `/api/vcf-canon-matches/${matchResult.jobId}/global-interpretation`,
           "heal-global-interpretation.json",
+        );
+      } else if (kind === "finalReport") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/final-report`,
+          "heal-final-report.docx",
         );
       }
     } catch (caught) {
@@ -1796,6 +1857,7 @@ function App() {
       individualInterpretation: Boolean(ready.individualInterpretation),
       interpretationNormalization: Boolean(ready.interpretationNormalization),
       globalInterpretation: Boolean(ready.globalInterpretation),
+      finalReport: Boolean(ready.finalReport),
     });
     const accessToken = activeAccessTokenRef.current || getJobAccessToken(job.id);
     if (accessToken) storeJobAccessToken(job.id, accessToken);
@@ -1808,7 +1870,8 @@ function App() {
       ready.enrichmentPlus ||
       ready.individualInterpretation ||
       ready.interpretationNormalization ||
-      ready.globalInterpretation
+      ready.globalInterpretation ||
+      ready.finalReport
     ) {
       setMatchResult({
         ...(job.result || {}),
@@ -1883,6 +1946,17 @@ function App() {
         setInterpretationNormalizationProgress(100);
         setGlobalInterpretationProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.globalInterpreting);
+      } else if (job.stage === "final_report") {
+        setPhase("final_report");
+        setMatchProgress(100);
+        setPreparationProgress(100);
+        setEnrichmentProgress(100);
+        setIndividualInterpretationProgress(100);
+        setIndividualInterpretationDetail("");
+        setInterpretationNormalizationProgress(100);
+        setGlobalInterpretationProgress(100);
+        setFinalReportProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.finalReportRendering);
       } else {
         setIndividualInterpretationDetail("");
         setMatchProgress(job.stageProgress ?? job.progress ?? 0);
@@ -1901,6 +1975,9 @@ function App() {
         if (job.artifactsReady?.globalInterpretation || job.result?.globalInterpretation) {
           setGlobalInterpretationProgress(100);
         }
+        if (job.artifactsReady?.finalReport || job.result?.finalReport) {
+          setFinalReportProgress(100);
+        }
         const accessToken = activeAccessTokenRef.current || getJobAccessToken(job.id);
         if (accessToken) storeJobAccessToken(job.id, accessToken);
         return { ...(job.result || {}), jobId: job.id, artifactsReady: job.artifactsReady || {}, accessToken };
@@ -1912,6 +1989,8 @@ function App() {
               ? t.interpretationNormalizationFailed
               : job.stage === "global_interpretation"
                 ? t.globalInterpretationFailed
+              : job.stage === "final_report"
+                ? t.finalReportFailed
               : job.stage === "individual_interpretation"
               ? t.individualInterpretationFailed
               : job.stage === "enriching"
@@ -1957,6 +2036,7 @@ function App() {
           setIndividualInterpretationProgress(0);
           setInterpretationNormalizationProgress(0);
           setGlobalInterpretationProgress(0);
+          setFinalReportProgress(0);
           setMatchArtifactsReady({
             matches: false,
             debug: false,
@@ -1967,6 +2047,7 @@ function App() {
             individualInterpretation: false,
             interpretationNormalization: false,
             globalInterpretation: false,
+            finalReport: false,
           });
           setDuplicateCandidate(existingUpload);
           setMessageKey("fileReady");
@@ -2021,6 +2102,7 @@ function App() {
     setIndividualInterpretationProgress(0);
     setInterpretationNormalizationProgress(0);
     setGlobalInterpretationProgress(0);
+    setFinalReportProgress(0);
 
     const matchStart = await fetch(`${API_BASE}/api/vcf-canon-matches`, {
       method: "POST",
@@ -2118,6 +2200,30 @@ function App() {
     setMessageKey("globalInterpretationComplete");
     setCustomMessage("");
     setGlobalInterpretationProgress(100);
+    return nextMatchResult;
+  }
+
+  async function runFinalReport(jobId) {
+    if (!jobId) return null;
+    setPhase("final_report");
+    setMessageKey("finalReportStarting");
+    setCustomMessage("");
+    setFinalReportProgress(8);
+    const accessToken = activeAccessTokenRef.current || getJobAccessToken(jobId);
+
+    const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${jobId}/final-report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...accessHeaders(accessToken) },
+      body: JSON.stringify({ accessToken, languageMode: llm2Options().languageMode, audienceMode: llm2Options().audienceMode }),
+    });
+    const started = await readJsonResponse(response);
+    if (!response.ok) throw new Error(started.error || t.finalReportFailed);
+    const nextMatchResult = await pollMatch(started.id);
+    setMatchResult(nextMatchResult);
+    setPhase("done");
+    setMessageKey("finalReportComplete");
+    setCustomMessage("");
+    setFinalReportProgress(100);
     return nextMatchResult;
   }
 
@@ -2265,6 +2371,22 @@ function App() {
     }
   }
 
+  async function runQaFinalReport() {
+    setError(null);
+    setErrorDialog(null);
+    setRetryEnrichmentJobId(null);
+    try {
+      const jobId = matchResult?.jobId;
+      if (!jobId) throw new Error(t.finalReportFailed);
+      await runFinalReport(jobId);
+    } catch (caught) {
+      setPhase("error");
+      setError(t.finalReportFailed);
+      setMessageKey("processFailed");
+      setCustomMessage("");
+    }
+  }
+
   async function submit({ skipDuplicateCheck = false, reuseUpload = null } = {}) {
     if (!file) return;
     setError(null);
@@ -2282,6 +2404,7 @@ function App() {
       individualInterpretation: false,
       interpretationNormalization: false,
       globalInterpretation: false,
+      finalReport: false,
     });
     setIndividualInterpretationDetail("");
     setUploadProgress(0);
@@ -2292,6 +2415,7 @@ function App() {
     setIndividualInterpretationProgress(0);
     setInterpretationNormalizationProgress(0);
     setGlobalInterpretationProgress(0);
+    setFinalReportProgress(0);
     setUploadRecord(null);
     activeAccessTokenRef.current = "";
 
@@ -2310,7 +2434,8 @@ function App() {
       const nextMatchResult = await runMatch(upload);
       const individualResult = await runIndividualInterpretation(nextMatchResult?.jobId);
       const normalizedResult = await runInterpretationNormalization(individualResult?.jobId || nextMatchResult?.jobId);
-      await runGlobalInterpretation(normalizedResult?.jobId || individualResult?.jobId || nextMatchResult?.jobId);
+      const globalResult = await runGlobalInterpretation(normalizedResult?.jobId || individualResult?.jobId || nextMatchResult?.jobId);
+      await runFinalReport(globalResult?.jobId || normalizedResult?.jobId || individualResult?.jobId || nextMatchResult?.jobId);
       setTurnstileToken("");
       setTurnstileResetKey((current) => current + 1);
     } catch (caught) {
@@ -2325,6 +2450,8 @@ function App() {
         setError(t.interpretationNormalizationFailed);
       } else if (caught.stage === "global_interpretation") {
         setError(t.globalInterpretationFailed);
+      } else if (caught.stage === "final_report") {
+        setError(t.finalReportFailed);
       } else {
         setError(caught.message || String(caught));
       }
@@ -2571,6 +2698,21 @@ function App() {
           playDisabled={
             !matchResult?.jobId ||
             !matchArtifactsReady.interpretationNormalization ||
+            isBusyPhase(phase)
+          }
+        />
+        <ProgressBar
+          label={t.finalReportProgress}
+          value={finalReportProgress}
+          tone="blue"
+          downloadLabel={t.finalReportDownload}
+          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("finalReport") : null}
+          downloadReady={matchArtifactsReady.finalReport}
+          onPlay={analysisMode === "qa" ? runQaFinalReport : null}
+          playLabel={`${t.playStage}: ${t.finalReportProgress}`}
+          playDisabled={
+            !matchResult?.jobId ||
+            !matchArtifactsReady.globalInterpretation ||
             isBusyPhase(phase)
           }
         />

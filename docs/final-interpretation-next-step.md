@@ -1,4 +1,4 @@
-# Final Interpretation Next Step
+# Final Interpretation and Report Layer
 
 ## What the Colab Actually Produces
 
@@ -23,43 +23,23 @@ heal_fon_interpretation_enriched_observed69.csv
 
 It contains only the observed genotype rows and adds external evidence from Ensembl, VEP, ClinVar, and MyVariant.
 
-## What Was Not Fully Automated
+## Product Implementation
 
-The documents describe a downstream interpretation pass for the 69 observed variants. That interpretation was performed manually/with AI assistance outside the deterministic notebook code.
-
-The documented intended final table format is:
+The current product now adds the missing final deliverable layer after LLM2:
 
 ```text
-Gene | SNP (rsID) | Genotype | Zygosity | Ref/Alt | Interpretation (1 sentence) | Confidence Level
-```
-
-The intended final deliverable should cover all 149 canon rows:
-
-- for observed rows, use genotype-aware interpretation and interpretive confidence;
-- for non-observed rows, preserve the row without inventing genotype or biological meaning;
-- keep audit traceability back to match status, source group, and external evidence.
-
-## Recommended Workflow 6
-
-The next workflow should be:
-
-```text
-HEAL - Final Interpretation Draft
+global_interpretation.json -> *_final_report.docx
 ```
 
 Inputs:
 
-- `heal_fon_deliverable_presentation_audit.csv`
-- `heal_observed_variant_enrichment.csv`
-- current canon metadata
-- run metadata from VCF validation and VCF-canon match
+- `global_interpretation.json`
+- run metadata from VCF validation, VCF-canon match, LLM1, deterministic QA normalization, and LLM2
 
 Outputs:
 
-- final 149-row presentation CSV
-- module-separated Excel workbook
-- structured JSON packets per module for AI review
-- optional draft narrative summary after QA rules are in place
+- final Word report for user-facing delivery
+- `final_report_summary.json` for QA
 
 Guardrails:
 
@@ -72,4 +52,4 @@ Guardrails:
 
 ## Current Status
 
-The current application is ready to feed this next workflow. It already generates the required technical inputs and the enriched observed-variant CSV.
+The application now generates the required technical inputs, the enriched observed-variant CSVs, per-variant LLM1 interpretations, deterministic QA normalization, global LLM2 interpretation, and a final Word report. The JSON/CSV artifacts remain available for audit, while the `.docx` is the end-user deliverable.
