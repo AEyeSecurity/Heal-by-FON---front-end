@@ -1,0 +1,107 @@
+{
+  "version": "0.1.0",
+  "description": "Canonical biological axis ontology used by HEAL LLM2 deterministic synthesis. Categories from the canon are mapped into these axes before the global LLM receives the payload.",
+  "unknown_axis_id": "uncategorized_context",
+  "axes": [
+    {
+      "axis_id": "neurotransmission_neurodevelopment",
+      "display_name": "Neurotransmission and neurodevelopmental context",
+      "description": "Dopamine, serotonin, attention, stress regulation, learning, language, social processing, and broader neurodevelopmental context.",
+      "review_domain": "attention, stress regulation, sleep interaction, learning, language, neurodevelopment, mood or behavioral context, and psychotropic pharmacogenomics when relevant",
+      "allowed_category_patterns": [
+        "adhd",
+        "neurotransmitter",
+        "neurotransmitters",
+        "social processing",
+        "language",
+        "learning",
+        "neurodevelopment",
+        "histone regulation"
+      ]
+    },
+    {
+      "axis_id": "immune_inflammatory",
+      "display_name": "Immune and inflammatory regulation",
+      "description": "Cytokines, allergy or IgE context, interferon signaling, immune tolerance, autoimmunity, and inflammatory response modulation.",
+      "review_domain": "allergic, inflammatory, autoimmune-like, recurrent infection, immune tolerance, family history, and relevant inflammatory or immune laboratory context",
+      "allowed_category_patterns": [
+        "immune",
+        "autoimmune",
+        "autoimmunity",
+        "inflammation",
+        "allergy"
+      ]
+    },
+    {
+      "axis_id": "metabolic_nutrient_methylation",
+      "display_name": "Metabolic, nutrient, methylation, and one-carbon context",
+      "description": "Insulin sensitivity, nutrient absorption and processing, folate/B12/homocysteine, methylation, and metabolic health context.",
+      "review_domain": "metabolic health, insulin sensitivity, folate/B12/homocysteine, methylation-related labs, nutrient processing, diet-medication context, and qualified nutrition or metabolism review",
+      "allowed_category_patterns": [
+        "metabolic",
+        "insulin",
+        "nutrient",
+        "methylation",
+        "folate",
+        "absorption"
+      ]
+    },
+    {
+      "axis_id": "gut_brain_microbiome",
+      "display_name": "Gut-brain and microbiome resilience",
+      "description": "Gut-brain signaling, microbiome resilience, gastrointestinal-neuroimmune context, and related barrier or signaling pathways.",
+      "review_domain": "gut-brain symptoms, gastrointestinal context, microbiome resilience, diet tolerance, neuroimmune overlap, and qualified clinical or nutrition review when relevant",
+      "allowed_category_patterns": [
+        "gut brain",
+        "gut-brain",
+        "microbiome"
+      ]
+    },
+    {
+      "axis_id": "detox_xenobiotic_pharmacogenomics",
+      "display_name": "Detoxification, xenobiotic metabolism, and pharmacogenomics",
+      "description": "Xenobiotic metabolism, detox pathways, drug response, toxin-load context, caffeine or medication sensitivity, and pharmacogenomic review points.",
+      "review_domain": "current or planned medications, adverse drug reactions, caffeine/stimulant sensitivity, toxin or xenobiotic exposure context, and pharmacogenomics review",
+      "allowed_category_patterns": [
+        "detox",
+        "toxin",
+        "xenobiotic",
+        "pharmacogen",
+        "drug",
+        "emf"
+      ]
+    },
+    {
+      "axis_id": "sleep_circadian",
+      "display_name": "Sleep and circadian regulation",
+      "description": "Sleep timing, circadian rhythm, melatonin/circadian signaling, and sleep-related context.",
+      "review_domain": "sleep complaints, circadian rhythm issues, insomnia or delayed sleep patterns, stimulant/caffeine sensitivity, and clinical sleep review when relevant",
+      "allowed_category_patterns": [
+        "sleep",
+        "circadian"
+      ]
+    },
+    {
+      "axis_id": "mitochondrial_redox_repair",
+      "display_name": "Mitochondrial, redox, and repair context",
+      "description": "Mitochondrial energy, oxidative stress, antioxidant/redox handling, cellular repair, aging-related repair potential, and resilience context.",
+      "review_domain": "energy metabolism, fatigue context, oxidative stress, mitochondrial or repair biology, and qualified clinician review when symptoms or labs support it",
+      "allowed_category_patterns": [
+        "mitochondria",
+        "mito",
+        "energy",
+        "redox",
+        "repair",
+        "longevity",
+        "aging"
+      ]
+    },
+    {
+      "axis_id": "uncategorized_context",
+      "display_name": "Uncategorized or canon-specific context",
+      "description": "Canon categories that do not yet map cleanly to a canonical HEAL biological axis.",
+      "review_domain": "manual review of canon category mapping before final report release",
+      "allowed_category_patterns": []
+    }
+  ]
+}

@@ -523,3 +523,32 @@ Validation:
   - reduced the prior overuse of `requires_professional_review`;
 - removed prototype-specific gene/rsID confidence overrides so LLM1 can generalize to new canons and VCFs;
   - calibration now uses only row evidence fields such as VEP consequence, ClinVar classification/review status, match status, population frequency, GWAS context, PharmGKB context, and locus ambiguity.
+
+### Global Interpretation Audit and Axis Ontology
+
+- Added versioned audit metadata to the global interpretation stage:
+  - pipeline version
+  - prompt/schema versions
+  - input CSV SHA-256
+  - deterministic summary SHA-256
+  - LLM payload SHA-256
+  - prompt/schema SHA-256
+  - global interpretation JSON SHA-256
+- Added final report renderer audit metadata:
+  - renderer version
+  - template version
+  - input global interpretation hash
+  - output DOCX hash
+  - upstream global interpretation audit metadata
+- Added `axis_ontology.json` for LLM2.
+- The deterministic summary now maps original canon categories into canonical biological axes before calling the global LLM.
+- The summary still preserves original category groups for audit, but `genes_by_axis` is now ontology-backed.
+- Unknown categories are assigned to `uncategorized_context` so mapping gaps are visible during QA.
+- English final reports continue to be generated as translations of the canonical Spanish structured report, preserving the same section structure.
+
+Validation:
+
+- Python syntax checks passed for global interpretation and final report scripts.
+- Global interpretation dry-run passed against `heal-individual-variant-interpretations-normalized-2.csv`.
+- Final report dry-run render passed and produced matching output hash metadata.
+- Active server copies were synchronized under `C:\ServerCIT\services` without touching n8n.

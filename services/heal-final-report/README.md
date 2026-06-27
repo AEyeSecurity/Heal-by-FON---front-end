@@ -47,6 +47,19 @@ Output:
 final_report_summary.json
 ```
 
+## Audit Metadata
+
+`final_report_summary.json` records:
+
+- `report_renderer_version`
+- `report_template_version`
+- SHA-256 of the input `global_interpretation.json`
+- SHA-256 of the generated DOCX
+- upstream `audit_metadata` from the global interpretation stage
+
+This lets QA distinguish changes caused by input data, LLM2 prompt/schema,
+translation source, report template, or renderer changes.
+
 The final report is served by the HEAL API through:
 
 ```text

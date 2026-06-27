@@ -2281,6 +2281,7 @@ app.post("/api/vcf-canon-matches/:jobId/global-interpretation", async (req, res)
       job.artifacts.globalInterpretationPayloadJson = globalSummary.outputs?.globalInterpretationPayloadJson || "";
       job.artifacts.globalInterpretationDeterministicSummaryJson = globalSummary.outputs?.deterministicSummaryJson || "";
       job.artifacts.globalInterpretationJson = globalSummary.outputs?.globalInterpretationJson || "";
+      job.artifacts.globalInterpretationEsSourceJson = globalSummary.outputs?.globalInterpretationEsSourceJson || "";
       job.artifacts.globalInterpretationSectionsCsv = globalSummary.outputs?.globalInterpretationSectionsCsv || "";
       job.artifacts.globalInterpretationSummaryJson = globalSummary.outputs?.globalInterpretationSummaryJson || "";
       job.result = {

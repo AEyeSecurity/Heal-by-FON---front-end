@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import posixpath
@@ -23,6 +24,16 @@ from xml.sax.saxutils import escape
 
 
 NS_WORD = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+REPORT_RENDERER_VERSION = "0.2.0"
+REPORT_TEMPLATE_VERSION = "0.1.0"
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def now_iso() -> str:
@@ -277,6 +288,9 @@ def main() -> int:
         if size <= 0:
             raise RuntimeError("DOCX output is empty.")
         summary_path = output_dir / "final_report_summary.json"
+        source_hash = sha256_file(input_path)
+        docx_hash = sha256_file(output_path)
+        upstream_audit = report.get("audit_metadata") or {}
         metadata = {
             "format": "docx",
             "source": "global_interpretation_json",
@@ -287,6 +301,11 @@ def main() -> int:
             "unique_gene_count": (report.get("metadata") or {}).get("unique_gene_count"),
             "unique_rsid_count": (report.get("metadata") or {}).get("unique_rsid_count"),
             "docx_size_bytes": size,
+            "report_renderer_version": REPORT_RENDERER_VERSION,
+            "report_template_version": REPORT_TEMPLATE_VERSION,
+            "input_global_interpretation_hash": source_hash,
+            "final_report_docx_hash": docx_hash,
+            "upstream_audit_metadata": upstream_audit,
         }
         summary = {
             "status": "valid",

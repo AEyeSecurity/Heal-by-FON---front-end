@@ -253,7 +253,7 @@ The current implementation now includes a first controlled global interpretation
 LLM2 receives:
 
 - selected normalized per-variant interpretation fields;
-- deterministic groupings by rsID, gene, category/axis, confidence, conflict flags, professional-review flags, and gene/locus ambiguity;
+- deterministic groupings by rsID, gene, ontology-backed biological axis, original canon category, confidence, conflict flags, professional-review flags, and gene/locus ambiguity;
 - fixed project context explaining that the VCF appears to report observed variants only and that the report is non-diagnostic.
 
 Dynamic model policy:

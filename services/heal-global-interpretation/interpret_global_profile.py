@@ -7,6 +7,7 @@ import argparse
 import base64
 import csv
 import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,8 +24,14 @@ OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROMPT_PATH = SCRIPT_DIR / "prompt_llm2.md"
 SCHEMA_PATH = SCRIPT_DIR / "global_interpretation_schema.json"
+AXIS_ONTOLOGY_PATH = SCRIPT_DIR / "axis_ontology.json"
 ALLOWED_LANGUAGE_MODES = {"en", "es", "both"}
 ALLOWED_AUDIENCE_MODES = {"technical", "health_professional", "family", "all"}
+PIPELINE_VERSION = "0.2.0"
+AXIS_ONTOLOGY_VERSION = "0.1.0"
+LLM2_PROMPT_VERSION = "0.2.0"
+TRANSLATION_PROMPT_VERSION = "0.1.0"
+GLOBAL_INTERPRETATION_SCHEMA_VERSION = "0.1.0"
 
 
 ASCII_REPLACEMENTS = {
@@ -68,9 +75,37 @@ def read_csv(path: Path) -> list[dict]:
         return list(csv.DictReader(handle))
 
 
+def read_json(path: Path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def write_json(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def canonical_json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def sha256_json(value) -> str:
+    return sha256_text(canonical_json(value))
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def file_hash_or_empty(path: Path) -> str:
+    return sha256_file(path) if path.exists() else ""
 
 
 def write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
@@ -143,20 +178,77 @@ def group_confidence(rows: list[dict]) -> dict:
     return {label: int(counts.get(label, 0)) for label in ["High", "Moderate", "Low", "Conflicting"] if counts.get(label)}
 
 
-def build_deterministic_summary(rows: list[dict]) -> dict:
+def normalize_match_text(value) -> str:
+    normalized = ascii_text(value).lower()
+    return " ".join(normalized.replace("_", " ").replace("/", " ").replace("&", " ").split())
+
+
+def load_axis_ontology() -> dict:
+    ontology = read_json(AXIS_ONTOLOGY_PATH)
+    axes = ontology.get("axes") or []
+    if not isinstance(axes, list) or not axes:
+        raise ValueError("Axis ontology must include a non-empty axes list.")
+    axis_ids = [axis.get("axis_id") for axis in axes]
+    unknown_axis_id = ontology.get("unknown_axis_id")
+    if unknown_axis_id not in axis_ids:
+        raise ValueError("Axis ontology unknown_axis_id must match one configured axis_id.")
+    if ontology.get("version") != AXIS_ONTOLOGY_VERSION:
+        raise ValueError(
+            f"Axis ontology version mismatch: file={ontology.get('version')} code={AXIS_ONTOLOGY_VERSION}"
+        )
+    return ontology
+
+
+def resolve_axis_for_category(category: str, ontology: dict) -> dict:
+    normalized_category = normalize_match_text(category)
+    axes = ontology.get("axes") or []
+    unknown_axis_id = ontology.get("unknown_axis_id")
+    unknown_axis = next(axis for axis in axes if axis.get("axis_id") == unknown_axis_id)
+    for axis in axes:
+        if axis.get("axis_id") == unknown_axis_id:
+            continue
+        for pattern in axis.get("allowed_category_patterns") or []:
+            if normalize_match_text(pattern) in normalized_category:
+                return axis
+    return unknown_axis
+
+
+def compact_axis(axis: dict) -> dict:
+    return {
+        "axis_id": ascii_text(axis.get("axis_id")),
+        "display_name": ascii_text(axis.get("display_name")),
+        "description": ascii_text(axis.get("description")),
+        "review_domain": ascii_text(axis.get("review_domain")),
+    }
+
+
+def build_deterministic_summary(rows: list[dict], ontology: dict) -> dict:
     rsid_groups = defaultdict(list)
     gene_groups = defaultdict(list)
     category_groups = defaultdict(list)
+    axis_groups = defaultdict(list)
+    axis_lookup = {axis.get("axis_id"): axis for axis in ontology.get("axes") or []}
+    category_axis_map = {}
     for row in rows:
         rsid = ascii_text(row.get("rsID")).lower()
         gene = ascii_text(row.get("gene")).upper()
         category = ascii_text(row.get("category"))
+        axis = resolve_axis_for_category(category, ontology) if category else axis_lookup[ontology["unknown_axis_id"]]
+        axis_id = axis["axis_id"]
+        row["_heal_axis_id"] = axis_id
+        row["_heal_axis_name"] = axis["display_name"]
         if rsid:
             rsid_groups[rsid].append(row)
         if gene:
             gene_groups[gene].append(row)
         if category:
             category_groups[category].append(row)
+            category_axis_map[category] = {
+                "category": category,
+                "axis_id": ascii_text(axis_id),
+                "axis_name": ascii_text(axis["display_name"]),
+            }
+        axis_groups[axis_id].append(row)
 
     repeated_rsids = []
     for rsid, group in sorted(rsid_groups.items()):
@@ -192,10 +284,30 @@ def build_deterministic_summary(rows: list[dict]) -> dict:
         )
 
     genes_by_axis = []
-    for category, group in sorted(category_groups.items()):
+    for axis_id, group in sorted(axis_groups.items()):
+        axis = axis_lookup.get(axis_id) or axis_lookup[ontology["unknown_axis_id"]]
         genes_by_axis.append(
             {
-                "axis_name": category,
+                "axis_id": ascii_text(axis_id),
+                "axis_name": ascii_text(axis.get("display_name")),
+                "axis_description": ascii_text(axis.get("description")),
+                "review_domain": ascii_text(axis.get("review_domain")),
+                "source_categories": unique_sorted(row.get("category") for row in group),
+                "genes": unique_sorted(row.get("gene") for row in group),
+                "rsids": unique_sorted(row.get("rsID") for row in group),
+                "row_ids": unique_sorted(row.get("row_id") for row in group),
+                "confidence_distribution": group_confidence(group),
+            }
+        )
+
+    category_groups_by_original_label = []
+    for category, group in sorted(category_groups.items()):
+        resolved = category_axis_map.get(category) or {}
+        category_groups_by_original_label.append(
+            {
+                "category": category,
+                "axis_id": resolved.get("axis_id", ""),
+                "axis_name": resolved.get("axis_name", ""),
                 "genes": unique_sorted(row.get("gene") for row in group),
                 "rsids": unique_sorted(row.get("rsID") for row in group),
                 "row_ids": unique_sorted(row.get("row_id") for row in group),
@@ -241,9 +353,16 @@ def build_deterministic_summary(rows: list[dict]) -> dict:
         "unique_rsid_count": len({ascii_text(row.get("rsID")).lower() for row in rows if ascii_text(row.get("rsID"))}),
         "unique_gene_count": len({ascii_text(row.get("gene")).upper() for row in rows if ascii_text(row.get("gene"))}),
         "confidence_distribution": confidence_distribution(rows),
+        "axis_ontology": {
+            "version": ascii_text(ontology.get("version")),
+            "unknown_axis_id": ascii_text(ontology.get("unknown_axis_id")),
+            "axes": [compact_axis(axis) for axis in ontology.get("axes") or []],
+            "category_axis_map": list(category_axis_map.values()),
+        },
         "repeated_rsids": repeated_rsids,
         "multiple_variants_same_gene": multiple_variants_same_gene,
         "genes_by_axis": genes_by_axis,
+        "category_groups": category_groups_by_original_label,
         "conflicting_variants": conflicting_variants,
         "professional_review_variants": professional_review_variants,
         "gene_locus_ambiguities": gene_locus_ambiguities,
@@ -446,9 +565,10 @@ def process(payload: dict) -> dict:
         raise RuntimeError("HEAL_OPENAI_API_KEY or OPENAI_API_KEY must be configured for global interpretation.")
 
     rows = read_csv(input_path)
+    axis_ontology = load_axis_ontology()
     base_language_mode = "es" if language_mode == "en" else language_mode
     variant_interpretations = [compact_variant(row, base_language_mode) for row in rows]
-    deterministic_summary = build_deterministic_summary(rows)
+    deterministic_summary = build_deterministic_summary(rows, axis_ontology)
     llm_payload = {
         "language_mode": base_language_mode,
         "audience_mode": audience_mode,
@@ -456,6 +576,29 @@ def process(payload: dict) -> dict:
         "deterministic_summary": deterministic_summary,
         "variant_interpretations": variant_interpretations,
     }
+    prompt_text = PROMPT_PATH.read_text(encoding="utf-8")
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    audit_metadata = {
+        "pipeline_version": PIPELINE_VERSION,
+        "axis_ontology_version": AXIS_ONTOLOGY_VERSION,
+        "llm2_prompt_version": LLM2_PROMPT_VERSION,
+        "translation_prompt_version": TRANSLATION_PROMPT_VERSION,
+        "global_interpretation_schema_version": GLOBAL_INTERPRETATION_SCHEMA_VERSION,
+        "model_name": model,
+        "model_temperature": "default",
+        "requested_language_mode": language_mode,
+        "base_language_mode": base_language_mode,
+        "audience_mode": audience_mode,
+        "input_hash": file_hash_or_empty(input_path),
+        "deterministic_summary_hash": sha256_json(deterministic_summary),
+        "llm_payload_hash": sha256_json(llm_payload),
+        "llm2_prompt_hash": sha256_text(prompt_text),
+        "global_interpretation_schema_hash": sha256_json(schema),
+        "axis_ontology_hash": sha256_json(axis_ontology),
+        "generated_at": utc_now(),
+    }
+    llm_payload["audit_metadata"] = audit_metadata
+    audit_metadata["llm_payload_with_audit_hash"] = sha256_json(llm_payload)
 
     payload_json = output_dir / "global_interpretation_payload.json"
     deterministic_json = output_dir / "deterministic_summary.json"
@@ -476,6 +619,7 @@ def process(payload: dict) -> dict:
                 "unique_gene_count": deterministic_summary["unique_gene_count"],
                 "confidence_distribution": deterministic_summary["confidence_distribution"],
             },
+            "audit_metadata": audit_metadata,
             "global_report": {
                 "report_title": "HEAL global interpretation dry run",
                 "executive_summary": "Dry run placeholder for global interpretation.",
@@ -504,8 +648,10 @@ def process(payload: dict) -> dict:
     else:
         report = call_openai_structured(llm_payload, api_key=api_key, model=model, timeout_seconds=timeout_seconds)
         report = sanitize_report(report)
+        report["audit_metadata"] = dict(audit_metadata)
         if language_mode == "en":
             write_json(source_es_report_json, report)
+            source_es_report_hash = sha256_file(source_es_report_json)
             report = translate_report(
                 report,
                 target_language_mode="en",
@@ -514,8 +660,20 @@ def process(payload: dict) -> dict:
                 timeout_seconds=timeout_seconds,
             )
             report = sanitize_report(report)
+            report["audit_metadata"] = {
+                **audit_metadata,
+                "translation_source_language_mode": base_language_mode,
+                "translation_target_language_mode": language_mode,
+                "translation_source_report_hash": source_es_report_hash,
+                "translation_model_name": model,
+            }
 
+    report["audit_metadata"] = {
+        **audit_metadata,
+        **(report.get("audit_metadata") or {}),
+    }
     write_json(report_json, report)
+    global_interpretation_file_hash = sha256_file(report_json)
     section_rows = flatten_global_json(report)
     write_csv(
         sections_csv,
@@ -537,8 +695,13 @@ def process(payload: dict) -> dict:
         "model": model,
         "dry_run": dry_run,
         "language_mode": language_mode,
+        "base_language_mode": base_language_mode,
         "audience_mode": audience_mode,
         "overall_readiness": report.get("final_recommendation", {}).get("overall_readiness", ""),
+        "audit_metadata": {
+            **(report.get("audit_metadata") or audit_metadata),
+            "global_interpretation_json_hash": global_interpretation_file_hash,
+        },
     }
     summary = {
         "status": "valid",
@@ -552,6 +715,7 @@ def process(payload: dict) -> dict:
             "globalInterpretationPayloadJson": str(payload_json),
             "deterministicSummaryJson": str(deterministic_json),
             "globalInterpretationJson": str(report_json),
+            "globalInterpretationEsSourceJson": str(source_es_report_json) if source_es_report_json.exists() else "",
             "globalInterpretationSectionsCsv": str(sections_csv),
             "globalInterpretationSummaryJson": str(summary_json),
         },
