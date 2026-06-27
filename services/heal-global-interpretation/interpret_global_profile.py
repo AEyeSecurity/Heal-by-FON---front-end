@@ -277,8 +277,35 @@ def output_text_from_response(response: dict) -> str:
     raise ValueError("OpenAI response did not contain output text.")
 
 
-def call_openai_structured(payload: dict, *, api_key: str, model: str, timeout_seconds: int) -> dict:
-    system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
+def translation_prompt(target_language: str) -> str:
+    return f"""You are a strict medical-report translation assistant.
+
+Translate the provided HEAL report JSON into {target_language}.
+
+Critical requirements:
+- Preserve the exact JSON structure and all keys required by the schema.
+- Preserve the number, order, and grouping of all biological axes.
+- Preserve the number, order, and grouping of notable gene patterns, findings for review, conflicting findings, summaries, limitations, and next steps.
+- Do not add, remove, merge, split, reprioritize, or reinterpret sections.
+- Do not change confidence labels, booleans, counts, gene symbols, rsIDs, review priorities, or readiness values.
+- Translate human-readable prose only.
+- Keep gene symbols and rsIDs exactly unchanged.
+- Keep technical labels such as High, Moderate, Low, Conflicting, high, medium, low, ready, ready_with_minor_review, and needs_review exactly unchanged.
+- Keep the same clinical caution level and the same contextual review strength.
+- The translated report must read naturally, but it must remain a translation of the source report, not a new analysis.
+"""
+
+
+def call_openai_structured(
+    payload: dict,
+    *,
+    api_key: str,
+    model: str,
+    timeout_seconds: int,
+    system_prompt: str | None = None,
+    user_instruction: str | None = None,
+) -> dict:
+    system_prompt = system_prompt if system_prompt is not None else PROMPT_PATH.read_text(encoding="utf-8")
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     body = {
         "model": model,
@@ -287,7 +314,8 @@ def call_openai_structured(payload: dict, *, api_key: str, model: str, timeout_s
             {
                 "role": "user",
                 "content": (
-                    "Create the HEAL global synthesis from this payload. Return JSON matching the schema only.\n\n"
+                    (user_instruction or "Create the HEAL global synthesis from this payload. ")
+                    + "Return JSON matching the schema only.\n\n"
                     f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
                 ),
             },
@@ -314,6 +342,29 @@ def call_openai_structured(payload: dict, *, api_key: str, model: str, timeout_s
         detail = error.read().decode("utf-8", errors="replace")[:1600]
         raise RuntimeError(f"OpenAI API http_{error.code}: {detail}") from error
     return json.loads(output_text_from_response(parsed))
+
+
+def translate_report(
+    report: dict,
+    *,
+    target_language_mode: str,
+    api_key: str,
+    model: str,
+    timeout_seconds: int,
+) -> dict:
+    translated = call_openai_structured(
+        {
+            "target_language_mode": target_language_mode,
+            "source_report": report,
+        },
+        api_key=api_key,
+        model=model,
+        timeout_seconds=timeout_seconds,
+        system_prompt=translation_prompt("English" if target_language_mode == "en" else "Spanish"),
+        user_instruction="Translate this HEAL report JSON while preserving its exact structure. ",
+    )
+    translated["metadata"]["language_mode"] = target_language_mode
+    return translated
 
 
 def flatten_global_json(report: dict) -> list[dict]:
@@ -395,10 +446,11 @@ def process(payload: dict) -> dict:
         raise RuntimeError("HEAL_OPENAI_API_KEY or OPENAI_API_KEY must be configured for global interpretation.")
 
     rows = read_csv(input_path)
-    variant_interpretations = [compact_variant(row, language_mode) for row in rows]
+    base_language_mode = "es" if language_mode == "en" else language_mode
+    variant_interpretations = [compact_variant(row, base_language_mode) for row in rows]
     deterministic_summary = build_deterministic_summary(rows)
     llm_payload = {
-        "language_mode": language_mode,
+        "language_mode": base_language_mode,
         "audience_mode": audience_mode,
         "project_context": project_context(),
         "deterministic_summary": deterministic_summary,
@@ -408,6 +460,7 @@ def process(payload: dict) -> dict:
     payload_json = output_dir / "global_interpretation_payload.json"
     deterministic_json = output_dir / "deterministic_summary.json"
     report_json = output_dir / "global_interpretation.json"
+    source_es_report_json = output_dir / "global_interpretation_es_source.json"
     sections_csv = output_dir / "global_interpretation_sections.csv"
     summary_json = output_dir / "global_interpretation_summary.json"
     write_json(payload_json, llm_payload)
@@ -451,6 +504,16 @@ def process(payload: dict) -> dict:
     else:
         report = call_openai_structured(llm_payload, api_key=api_key, model=model, timeout_seconds=timeout_seconds)
         report = sanitize_report(report)
+        if language_mode == "en":
+            write_json(source_es_report_json, report)
+            report = translate_report(
+                report,
+                target_language_mode="en",
+                api_key=api_key,
+                model=model,
+                timeout_seconds=timeout_seconds,
+            )
+            report = sanitize_report(report)
 
     write_json(report_json, report)
     section_rows = flatten_global_json(report)

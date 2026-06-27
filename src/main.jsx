@@ -85,6 +85,10 @@ function defaultLanguageMode(language) {
   return language === "en" ? "en" : "es";
 }
 
+function reportLanguagesForMode(languageMode) {
+  return languageMode === "both" ? ["es", "en"] : [languageMode === "en" ? "en" : "es"];
+}
+
 const COPY = {
   es: {
     languageLabel: "Idioma",
@@ -291,6 +295,8 @@ const COPY = {
     globalInterpretationPayloadDownload: "Descargar payload LLM2",
     globalInterpretationSummaryDownload: "Descargar resumen deterministico",
     finalReportDownload: "Descargar reporte final Word",
+    finalReportDownloadEs: "Descargar reporte Word ES",
+    finalReportDownloadEn: "Descargar reporte Word EN",
     matchDownloadFailed: "No se pudo descargar el CSV de matches.",
     canonDownloadFailed: "No se pudo descargar el canon.",
     close: "Cerrar",
@@ -503,6 +509,8 @@ const COPY = {
     globalInterpretationPayloadDownload: "Download LLM2 payload",
     globalInterpretationSummaryDownload: "Download deterministic summary",
     finalReportDownload: "Download final Word report",
+    finalReportDownloadEs: "Download Word report ES",
+    finalReportDownloadEn: "Download Word report EN",
     matchDownloadFailed: "Could not download matches CSV.",
     canonDownloadFailed: "Could not download canon.",
     close: "Close",
@@ -1615,6 +1623,12 @@ function App() {
     interpretationNormalization: false,
     globalInterpretation: false,
     finalReport: false,
+    finalReportEs: false,
+    finalReportEn: false,
+  });
+  const [finalReportDownloads, setFinalReportDownloads] = useState({
+    es: null,
+    en: null,
   });
   const [error, setError] = useState(null);
   const [errorDialog, setErrorDialog] = useState(null);
@@ -1635,7 +1649,17 @@ function App() {
   );
   const statusMessage = customMessage || t[messageKey] || t.initialMessage;
 
+  function clearFinalReportDownloads() {
+    setFinalReportDownloads((current) => {
+      Object.values(current).forEach((item) => {
+        if (item?.url) URL.revokeObjectURL(item.url);
+      });
+      return { es: null, en: null };
+    });
+  }
+
   function pickFile(nextFile) {
+    clearFinalReportDownloads();
     setFile(nextFile || null);
     setUploadProgress(0);
     setValidationProgress(0);
@@ -1659,6 +1683,8 @@ function App() {
       interpretationNormalization: false,
       globalInterpretation: false,
       finalReport: false,
+      finalReportEs: false,
+      finalReportEn: false,
     });
     setError(null);
     setErrorDialog(null);
@@ -1705,6 +1731,33 @@ function App() {
     URL.revokeObjectURL(url);
   }
 
+  async function fetchArtifactBlob(endpoint, fallbackName) {
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+      headers: accessHeaders(activeAccessTokenRef.current || getJobAccessToken(matchResult?.jobId)),
+    });
+    if (!response.ok) {
+      const payload = await readJsonResponse(response);
+      throw new Error(payload.error || t.matchDownloadFailed);
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="?([^"]+)"?/i);
+    return {
+      blob,
+      fileName: match?.[1] || fallbackName,
+    };
+  }
+
+  function downloadStoredReport(report) {
+    if (!report?.url) return;
+    const link = document.createElement("a");
+    link.href = report.url;
+    link.download = report.fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
   async function downloadMatchArtifact(kind) {
     if (!matchResult?.jobId) return;
     setError(null);
@@ -1746,6 +1799,10 @@ function App() {
           `/api/vcf-canon-matches/${matchResult.jobId}/final-report`,
           "heal-final-report.docx",
         );
+      } else if (kind === "finalReportEs") {
+        downloadStoredReport(finalReportDownloads.es);
+      } else if (kind === "finalReportEn") {
+        downloadStoredReport(finalReportDownloads.en);
       }
     } catch (caught) {
       setError(caught.message || String(caught));
@@ -1847,7 +1904,7 @@ function App() {
 
   function updateMatchSnapshot(job) {
     const ready = job.artifactsReady || {};
-    setMatchArtifactsReady({
+    setMatchArtifactsReady((current) => ({
       matches: Boolean(ready.matches),
       debug: Boolean(ready.debug),
       preparation: Boolean(ready.preparation),
@@ -1858,7 +1915,9 @@ function App() {
       interpretationNormalization: Boolean(ready.interpretationNormalization),
       globalInterpretation: Boolean(ready.globalInterpretation),
       finalReport: Boolean(ready.finalReport),
-    });
+      finalReportEs: current.finalReportEs,
+      finalReportEn: current.finalReportEn,
+    }));
     const accessToken = activeAccessTokenRef.current || getJobAccessToken(job.id);
     if (accessToken) storeJobAccessToken(job.id, accessToken);
     if (
@@ -2037,6 +2096,7 @@ function App() {
           setInterpretationNormalizationProgress(0);
           setGlobalInterpretationProgress(0);
           setFinalReportProgress(0);
+          clearFinalReportDownloads();
           setMatchArtifactsReady({
             matches: false,
             debug: false,
@@ -2048,6 +2108,8 @@ function App() {
             interpretationNormalization: false,
             globalInterpretation: false,
             finalReport: false,
+            finalReportEs: false,
+            finalReportEn: false,
           });
           setDuplicateCandidate(existingUpload);
           setMessageKey("fileReady");
@@ -2179,18 +2241,23 @@ function App() {
     };
   }
 
-  async function runGlobalInterpretation(jobId) {
+  async function runGlobalInterpretation(jobId, options = {}) {
     if (!jobId) return null;
     setPhase("global_interpretation");
     setMessageKey("globalInterpretationStarting");
     setCustomMessage("");
     setGlobalInterpretationProgress(8);
     const accessToken = activeAccessTokenRef.current || getJobAccessToken(jobId);
+    const baseOptions = llm2Options();
+    const requestOptions = {
+      ...baseOptions,
+      ...options,
+    };
 
     const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${jobId}/global-interpretation`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...accessHeaders(accessToken) },
-      body: JSON.stringify({ accessToken, ...llm2Options() }),
+      body: JSON.stringify({ accessToken, ...requestOptions }),
     });
     const started = await readJsonResponse(response);
     if (!response.ok) throw new Error(started.error || t.globalInterpretationFailed);
@@ -2203,18 +2270,41 @@ function App() {
     return nextMatchResult;
   }
 
-  async function runFinalReport(jobId) {
+  function rememberFinalReport(languageMode, artifact) {
+    const normalizedLanguage = languageMode === "en" ? "en" : "es";
+    const url = URL.createObjectURL(artifact.blob);
+    setFinalReportDownloads((current) => {
+      if (current[normalizedLanguage]?.url) URL.revokeObjectURL(current[normalizedLanguage].url);
+      return {
+        ...current,
+        [normalizedLanguage]: {
+          url,
+          fileName: artifact.fileName,
+        },
+      };
+    });
+    setMatchArtifactsReady((current) => ({
+      ...current,
+      finalReport: true,
+      finalReportEs: current.finalReportEs || normalizedLanguage === "es",
+      finalReportEn: current.finalReportEn || normalizedLanguage === "en",
+    }));
+  }
+
+  async function runFinalReport(jobId, options = {}) {
     if (!jobId) return null;
     setPhase("final_report");
     setMessageKey("finalReportStarting");
     setCustomMessage("");
     setFinalReportProgress(8);
     const accessToken = activeAccessTokenRef.current || getJobAccessToken(jobId);
+    const selectedLanguageMode = options.languageMode || llm2Options().languageMode;
+    const selectedAudienceMode = options.audienceMode || llm2Options().audienceMode;
 
     const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${jobId}/final-report`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...accessHeaders(accessToken) },
-      body: JSON.stringify({ accessToken, languageMode: llm2Options().languageMode, audienceMode: llm2Options().audienceMode }),
+      body: JSON.stringify({ accessToken, languageMode: selectedLanguageMode, audienceMode: selectedAudienceMode }),
     });
     const started = await readJsonResponse(response);
     if (!response.ok) throw new Error(started.error || t.finalReportFailed);
@@ -2224,7 +2314,32 @@ function App() {
     setMessageKey("finalReportComplete");
     setCustomMessage("");
     setFinalReportProgress(100);
+    if (options.capture !== false) {
+      const artifact = await fetchArtifactBlob(
+        `/api/vcf-canon-matches/${jobId}/final-report`,
+        selectedLanguageMode === "en" ? "heal-final-report-en.docx" : "heal-final-report-es.docx",
+      );
+      rememberFinalReport(selectedLanguageMode, artifact);
+    }
     return nextMatchResult;
+  }
+
+  async function runGlobalAndFinalReports(jobId) {
+    if (!jobId) return null;
+    const options = llm2Options();
+    const languages = analysisMode === "qa" ? reportLanguagesForMode(options.languageMode) : [defaultLanguageMode(language)];
+    let latestResult = null;
+    for (const languageMode of languages) {
+      const globalResult = await runGlobalInterpretation(jobId, {
+        ...options,
+        languageMode,
+      });
+      latestResult = await runFinalReport(globalResult?.jobId || jobId, {
+        languageMode,
+        audienceMode: options.audienceMode,
+      });
+    }
+    return latestResult;
   }
 
   async function retryEnrichment() {
@@ -2378,7 +2493,7 @@ function App() {
     try {
       const jobId = matchResult?.jobId;
       if (!jobId) throw new Error(t.finalReportFailed);
-      await runFinalReport(jobId);
+      await runGlobalAndFinalReports(jobId);
     } catch (caught) {
       setPhase("error");
       setError(t.finalReportFailed);
@@ -2394,6 +2509,7 @@ function App() {
     setRetryEnrichmentJobId(null);
     setResult(null);
     setMatchResult(null);
+    clearFinalReportDownloads();
     setMatchArtifactsReady({
       matches: false,
       debug: false,
@@ -2405,6 +2521,8 @@ function App() {
       interpretationNormalization: false,
       globalInterpretation: false,
       finalReport: false,
+      finalReportEs: false,
+      finalReportEn: false,
     });
     setIndividualInterpretationDetail("");
     setUploadProgress(0);
@@ -2434,8 +2552,7 @@ function App() {
       const nextMatchResult = await runMatch(upload);
       const individualResult = await runIndividualInterpretation(nextMatchResult?.jobId);
       const normalizedResult = await runInterpretationNormalization(individualResult?.jobId || nextMatchResult?.jobId);
-      const globalResult = await runGlobalInterpretation(normalizedResult?.jobId || individualResult?.jobId || nextMatchResult?.jobId);
-      await runFinalReport(globalResult?.jobId || normalizedResult?.jobId || individualResult?.jobId || nextMatchResult?.jobId);
+      await runGlobalAndFinalReports(normalizedResult?.jobId || individualResult?.jobId || nextMatchResult?.jobId);
       setTurnstileToken("");
       setTurnstileResetKey((current) => current + 1);
     } catch (caught) {
@@ -2716,6 +2833,22 @@ function App() {
             isBusyPhase(phase)
           }
         />
+        {analysisMode === "qa" && (finalReportDownloads.es || finalReportDownloads.en) && (
+          <div className="report-download-row">
+            {finalReportDownloads.es && (
+              <button className="secondary-button small" type="button" onClick={() => downloadStoredReport(finalReportDownloads.es)}>
+                <Download size={15} />
+                {t.finalReportDownloadEs}
+              </button>
+            )}
+            {finalReportDownloads.en && (
+              <button className="secondary-button small" type="button" onClick={() => downloadStoredReport(finalReportDownloads.en)}>
+                <Download size={15} />
+                {t.finalReportDownloadEn}
+              </button>
+            )}
+          </div>
+        )}
         {error && <p className="error-message">{error}</p>}
         <button className="primary-button" type="button" disabled={!canSend} onClick={submit}>
           <Send size={18} />

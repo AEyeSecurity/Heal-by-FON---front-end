@@ -554,6 +554,14 @@ h1 {
   background: #111827;
 }
 
+.report-download-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 10px;
+}
+
 .error-message {
   margin: 16px 0 0;
   padding: 12px 14px;
