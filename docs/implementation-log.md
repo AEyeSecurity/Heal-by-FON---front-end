@@ -552,3 +552,49 @@ Validation:
 - Global interpretation dry-run passed against `heal-individual-variant-interpretations-normalized-2.csv`.
 - Final report dry-run render passed and produced matching output hash metadata.
 - Active server copies were synchronized under `C:\ServerCIT\services` without touching n8n.
+
+### Canonical Report Frame and Deterministic Rendering
+
+- Added `canonical_analysis_frame` to LLM2:
+  - allowed biological axes
+  - source categories behind each axis
+  - supporting genes and rsIDs
+  - axis strength
+  - suggested axis confidence
+  - evidence mix
+  - top findings for review
+  - informational vs clinical readiness
+  - non-diagnostic constraints
+- Added deterministic validation/repair after LLM2:
+  - drops axes outside the canonical ontology-backed frame
+  - merges duplicate axes
+  - restores deterministic genes/rsIDs/categories
+  - reorders axes to the canonical frame order
+  - fills missing contextual review guidance
+  - restores metadata counts from deterministic summary
+- Expanded the LLM2 JSON schema so every biological axis must include
+  `contextual_review_guidance`.
+- Added `structured_report` to `global_interpretation.json`.
+- Updated the DOCX renderer to prefer `structured_report` and keep this order:
+  - overview
+  - primary biological axes
+  - notable gene patterns
+  - findings for review
+  - limitations
+  - next steps
+  - technical audit
+- The final DOCX now keeps interpretation and contextual review guidance before
+  listing genes, rsIDs, and source categories.
+- Added audit metadata for:
+  - canonical frame version/hash
+  - deterministic validator version
+  - structured report version
+  - report template version `0.2.0`
+
+Validation:
+
+- Python syntax checks passed.
+- `node --check server/dev-api.js` passed.
+- LLM2 dry-run generated `canonical_analysis_frame` with 7 axes and
+  `structured_report` with 7 sections.
+- DOCX dry-run rendered successfully from the structured report.

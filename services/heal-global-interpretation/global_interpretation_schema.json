@@ -76,16 +76,37 @@
           "supporting_rsids",
           "confidence_of_axis",
           "why_it_matters",
-          "cautions"
+          "cautions",
+          "contextual_review_guidance"
         ],
         "properties": {
+          "axis_id": { "type": "string" },
           "axis_name": { "type": "string" },
+          "source_categories": { "type": "array", "items": { "type": "string" } },
           "summary": { "type": "string" },
           "supporting_genes": { "type": "array", "items": { "type": "string" } },
           "supporting_rsids": { "type": "array", "items": { "type": "string" } },
           "confidence_of_axis": { "type": "string", "enum": ["High", "Moderate", "Low", "Conflicting"] },
           "why_it_matters": { "type": "string" },
-          "cautions": { "type": "string" }
+          "cautions": { "type": "string" },
+          "contextual_review_guidance": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "possible_review_domain",
+              "when_it_may_be_relevant",
+              "who_could_review_it",
+              "what_it_should_clarify",
+              "what_not_to_infer"
+            ],
+            "properties": {
+              "possible_review_domain": { "type": "string" },
+              "when_it_may_be_relevant": { "type": "string" },
+              "who_could_review_it": { "type": "string" },
+              "what_it_should_clarify": { "type": "string" },
+              "what_not_to_infer": { "type": "string" }
+            }
+          }
         }
       }
     },

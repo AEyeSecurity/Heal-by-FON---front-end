@@ -8,6 +8,22 @@ formats the already-approved global interpretation sections into a readable
 `.docx` report with metadata, cautions, summaries, biological axes, review
 priorities, and final recommendation.
 
+When `global_interpretation.json` includes `structured_report`, the renderer
+uses that deterministic structure instead of walking the raw JSON generically.
+The current stable section order is:
+
+1. case overview
+2. primary biological axes
+3. notable genetic patterns
+4. findings for review
+5. limitations
+6. next review steps
+7. technical audit
+
+For each biological axis, the report keeps the interpretation and contextual
+review guidance first, then places supporting genes, rsIDs, and source
+categories after the explanatory text.
+
 ## Runtime
 
 Repository source:
@@ -53,6 +69,7 @@ final_report_summary.json
 
 - `report_renderer_version`
 - `report_template_version`
+- `structured_report_version`
 - SHA-256 of the input `global_interpretation.json`
 - SHA-256 of the generated DOCX
 - upstream `audit_metadata` from the global interpretation stage

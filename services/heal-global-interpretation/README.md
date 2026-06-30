@@ -36,6 +36,56 @@ If a canon category does not match a configured pattern, it is assigned to
 `uncategorized_context` so the mapping gap is visible instead of silently
 merged into another axis.
 
+## Canonical Analysis Frame
+
+After building the deterministic summary, the service creates
+`canonical_analysis_frame`. This is the contract LLM2 must follow:
+
+- allowed biological axes
+- source categories behind each axis
+- supporting genes and rsIDs
+- axis strength and suggested axis confidence
+- evidence mix per axis
+- top findings for review
+- informational vs clinical readiness
+- non-diagnostic constraints
+
+The frame is written into `global_interpretation_payload.json` and into the
+final `global_interpretation.json` for audit.
+
+## Deterministic Validation
+
+The LLM2 result is validated and repaired before it is saved:
+
+- axes outside the canonical frame are dropped;
+- duplicate axes are merged;
+- axes are reordered to the canonical frame order;
+- missing support genes/rsIDs are replaced from the deterministic frame;
+- missing `contextual_review_guidance` fields are filled from deterministic
+  defaults;
+- metadata counts are restored from the deterministic summary.
+
+The report stores a `deterministic_validation` block with warnings and the
+frame hash used for validation.
+
+## Structured Report
+
+The service adds a deterministic `structured_report` block to
+`global_interpretation.json`. This is the report-rendering source used by the
+DOCX renderer. The structure is stable across languages:
+
+1. overview
+2. primary biological axes
+3. notable gene patterns
+4. findings for review
+5. limitations
+6. next steps
+7. technical audit
+
+For English output, LLM2 first generates the canonical Spanish report, the
+translation stage translates the structured JSON, and the backend rebuilds the
+same `structured_report` shape from the translated content.
+
 ## Audit Metadata
 
 Each run records version and hash metadata in `audit_metadata` and in the
@@ -47,8 +97,12 @@ summary metadata:
 - `llm2_prompt_version`
 - `translation_prompt_version`
 - `global_interpretation_schema_version`
+- `canonical_frame_version`
+- `deterministic_validator_version`
+- `structured_report_version`
 - input CSV SHA-256
 - deterministic summary SHA-256
+- canonical analysis frame SHA-256
 - LLM payload SHA-256
 - prompt/schema SHA-256
 - final global interpretation JSON SHA-256

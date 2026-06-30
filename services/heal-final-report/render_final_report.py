@@ -25,7 +25,7 @@ from xml.sax.saxutils import escape
 
 NS_WORD = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 REPORT_RENDERER_VERSION = "0.2.0"
-REPORT_TEMPLATE_VERSION = "0.1.0"
+REPORT_TEMPLATE_VERSION = "0.2.0"
 
 
 def sha256_file(path: Path) -> str:
@@ -141,6 +141,75 @@ def human_label(key: str) -> str:
     return re.sub(r"_+", " ", str(key)).strip().capitalize()
 
 
+def add_structured_block(parts: list[str], block: Any) -> None:
+    if isinstance(block, str):
+        if text(block):
+            parts.append(para(block))
+        return
+    if not isinstance(block, dict):
+        if text(block):
+            parts.append(bullet(text(block)))
+        return
+    block_type = text(block.get("type"))
+    if block_type == "paragraph":
+        parts.append(para(block.get("text")))
+        return
+    if block_type == "axis":
+        title = text(block.get("title"))
+        confidence = text(block.get("confidence"))
+        parts.append(para(f"{title} ({confidence})" if confidence else title, "Heading2"))
+        parts.append(para(block.get("interpretation")))
+        parts.append(para(block.get("why_it_matters")))
+        guidance = block.get("contextual_review_guidance") or {}
+        if guidance:
+            parts.append(bullet(f"Review domain: {text(guidance.get('possible_review_domain'))}"))
+            parts.append(bullet(f"When relevant: {text(guidance.get('when_it_may_be_relevant'))}"))
+            parts.append(bullet(f"Who could review it: {text(guidance.get('who_could_review_it'))}"))
+            parts.append(bullet(f"What it should clarify: {text(guidance.get('what_it_should_clarify'))}"))
+            parts.append(bullet(f"What not to infer: {text(guidance.get('what_not_to_infer'))}"))
+        if text(block.get("cautions")):
+            parts.append(bullet(f"Caution: {text(block.get('cautions'))}"))
+        support = []
+        genes = compact_list(block.get("supporting_genes"), limit=40)
+        rsids = compact_list(block.get("supporting_rsids"), limit=40)
+        categories = compact_list(block.get("source_categories"), limit=20)
+        if genes:
+            support.append(f"Genes: {genes}")
+        if rsids:
+            support.append(f"rsIDs: {rsids}")
+        if categories:
+            support.append(f"Source categories: {categories}")
+        for item in support:
+            parts.append(bullet(item))
+        return
+    title = text(block.get("title") or block.get("axis_name") or block.get("gene_or_locus") or block.get("gene"))
+    if title:
+        parts.append(para(title, "Heading2"))
+    for key, value in block.items():
+        if key in {"type", "title", "axis_name", "gene_or_locus", "gene"}:
+            continue
+        if isinstance(value, list):
+            value = compact_list(value)
+        elif isinstance(value, dict):
+            value = "; ".join(f"{human_label(k)}: {text(v)}" for k, v in value.items() if text(v))
+        parts.append(bullet(f"{human_label(key)}: {text(value)}"))
+
+
+def add_structured_report(parts: list[str], structured_report: dict[str, Any]) -> bool:
+    sections = structured_report.get("sections") if isinstance(structured_report, dict) else None
+    if not isinstance(sections, list) or not sections:
+        return False
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        title = text(section.get("title") or section.get("section_id"))
+        if title:
+            parts.append(para(title, "Heading1"))
+        for block in as_list(section.get("blocks")):
+            add_structured_block(parts, block)
+    return True
+
+
 def document_xml(report: dict[str, Any], metadata: dict[str, Any], payload: dict[str, Any]) -> str:
     global_report = report.get("global_report") or {}
     title = (
@@ -187,19 +256,20 @@ def document_xml(report: dict[str, Any], metadata: dict[str, Any], payload: dict
         page_break(),
     ]
 
-    add_section(parts, "Executive Summary", global_report.get("executive_summary"))
-    add_section(parts, "Main Interpretation", global_report.get("main_interpretation"))
-    add_section(parts, "Important Caution", global_report.get("important_caution"))
-    add_section(parts, "Limitations", global_report.get("limitations"))
-    add_section(parts, "Next Review Steps", global_report.get("next_review_steps"))
-    add_section(parts, "Biological Axes", report.get("biological_axes"))
-    add_section(parts, "Notable Gene Patterns", report.get("notable_gene_patterns"))
-    add_section(parts, "Top Findings for Review", report.get("top_findings_for_review"))
-    add_section(parts, "Conflicting or Sensitive Findings", report.get("conflicting_or_sensitive_findings"))
-    add_section(parts, "Low Confidence Findings Summary", report.get("low_confidence_findings_summary"))
-    add_section(parts, "Family Friendly Summary", report.get("family_friendly_summary"))
-    add_section(parts, "Technical Summary", report.get("technical_summary"))
-    add_section(parts, "Final Recommendation", report.get("final_recommendation"))
+    if not add_structured_report(parts, report.get("structured_report") or {}):
+        add_section(parts, "Executive Summary", global_report.get("executive_summary"))
+        add_section(parts, "Main Interpretation", global_report.get("main_interpretation"))
+        add_section(parts, "Important Caution", global_report.get("important_caution"))
+        add_section(parts, "Limitations", global_report.get("limitations"))
+        add_section(parts, "Next Review Steps", global_report.get("next_review_steps"))
+        add_section(parts, "Biological Axes", report.get("biological_axes"))
+        add_section(parts, "Notable Gene Patterns", report.get("notable_gene_patterns"))
+        add_section(parts, "Top Findings for Review", report.get("top_findings_for_review"))
+        add_section(parts, "Conflicting or Sensitive Findings", report.get("conflicting_or_sensitive_findings"))
+        add_section(parts, "Low Confidence Findings Summary", report.get("low_confidence_findings_summary"))
+        add_section(parts, "Family Friendly Summary", report.get("family_friendly_summary"))
+        add_section(parts, "Technical Summary", report.get("technical_summary"))
+        add_section(parts, "Final Recommendation", report.get("final_recommendation"))
 
     body = "".join(parts)
     return (
@@ -303,6 +373,7 @@ def main() -> int:
             "docx_size_bytes": size,
             "report_renderer_version": REPORT_RENDERER_VERSION,
             "report_template_version": REPORT_TEMPLATE_VERSION,
+            "structured_report_version": (report.get("structured_report") or {}).get("version"),
             "input_global_interpretation_hash": source_hash,
             "final_report_docx_hash": docx_hash,
             "upstream_audit_metadata": upstream_audit,

@@ -8,7 +8,8 @@ You will receive:
 
 1. A list of observed variant interpretations.
 2. A deterministic backend summary with grouped information by gene, rsID, canonical biological axis, original canon category, confidence level, repeated rsIDs, multiple variants in the same gene, and review flags.
-3. A project context block describing the scope and limitations of this prototype.
+3. A canonical analysis frame that defines the allowed biological axes, report order, readiness rules, review flags, and non-diagnostic constraints.
+4. A project context block describing the scope and limitations of this prototype.
 
 Use only the provided input. Do not invent new biological associations, do not browse, and do not add diseases, conditions, or mechanisms that are not supported by the input.
 
@@ -26,8 +27,9 @@ Core interpretation principles:
 10. If a gene/locus ambiguity is present, mention it in the technical or review notes, not as a definitive biological conclusion.
 11. Do not change the individual `final_confidence_level` values.
 12. Do not count repeated rsIDs across categories as multiple independent events.
-13. Use the deterministic `genes_by_axis` block as the allowed biological-axis frame. You may choose which axes are most important, but do not invent a new major axis that is absent from the ontology-backed summary.
+13. Use `canonical_analysis_frame.allowed_axes` as the allowed biological-axis frame. You may choose which axes are most important, but do not invent a new major axis that is absent from that frame.
 14. Use `category_groups` and `source_categories` only as supporting audit context. Original canon categories are not automatically final biological axes.
+15. The canonical frame is stronger than your own grouping intuition. If you think a grouping would be useful but it is absent from the frame, mention it only as a limitation or review note, not as a new major axis.
 
 Language:
 
@@ -55,6 +57,7 @@ Required analysis:
 5. Identify findings that should be reviewed by a qualified professional.
 6. Explain the main limitations of the analysis.
 7. Provide next review steps focused only on data review, expert review, or further evidence assessment. Do not provide treatment, medication, supplement, lifestyle, or diagnostic recommendations.
+8. For every biological axis you include, populate `contextual_review_guidance` with a useful but non-diagnostic review implication.
 
 Important handling of repeated variants:
 
@@ -69,6 +72,31 @@ Confidence handling:
 - Do not change individual variant confidence levels.
 - Use existing `final_confidence_level` values as fixed inputs.
 - You may assign confidence to global patterns separately, based on number of supporting variants, independence of rsIDs, confidence levels, gene/pathway coherence, conflict flags, and whether evidence is functional, regulatory, pharmacogenomic, or only associative.
+- Prefer `canonical_analysis_frame.allowed_axes[].suggested_axis_confidence` as the starting point for axis-level confidence. Deviate only when the individual interpretations clearly justify it.
+
+Contextual review recommendations:
+
+For each primary biological axis, provide a useful but non-diagnostic review implication. Do not only say "consult a professional". Explain what type of clinical or contextual review may be relevant if there are compatible symptoms, family history, medications, or lab findings.
+
+Allowed:
+
+- "If there are symptoms or concerns related to attention, impulsivity, stress regulation, sleep, learning, or development, this axis may be worth discussing in a formal neurodevelopmental, psychological, psychiatric, or clinical evaluation."
+- "If there are allergic, inflammatory, autoimmune-like symptoms, recurrent infections, or relevant family history, this immune/inflammatory axis may be worth reviewing with a clinician, immunologist, allergist, or relevant specialist."
+- "If there are abnormal folate, B12, homocysteine, methylation-related labs, or relevant medication context, this nutrient/methylation axis may be worth reviewing with a clinician or qualified nutrition/metabolism professional."
+- "If there are current or planned medications, adverse drug reactions, or pharmacogenomic questions, this PGx axis may be worth reviewing with a pharmacogenomics professional."
+- "If there are sleep complaints, circadian issues, or stimulant/caffeine sensitivity, this circadian axis may be worth contextual review."
+
+Not allowed:
+
+- Do not say that the genetic profile diagnoses ADHD, autism, depression, autoimmune disease, allergy, inflammation, nutrient deficiency, sleep disorder, or any other condition.
+- Do not say the patient should start treatment, medication, supplements, or lifestyle changes.
+- Do not imply that genetic findings alone justify a clinical diagnosis.
+- Do not recommend a specific test as mandatory.
+- Do not infer symptoms from variants.
+
+Use this type of wording:
+
+"This does not diagnose X. However, if there are symptoms, family history, medication questions, lab findings, or clinical concerns compatible with X or related conditions, this axis may help decide what to review with a qualified professional."
 
 Writing style:
 
