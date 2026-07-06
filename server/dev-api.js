@@ -114,6 +114,13 @@ const jobs = new Map();
 const canonJobs = new Map();
 const uploads = new Map();
 const initRateLimits = new Map();
+const CANON_STAGE_ORDER = [
+  "schema_detection",
+  "row_normalization",
+  "gene_resolution",
+  "artifact_build",
+  "activation",
+];
 
 app.use((req, res, next) => {
   const requestOrigin = req.headers.origin;
@@ -367,11 +374,66 @@ function publicCanonJob(job) {
     sourceFileName: job.sourceFileName,
     assembly: job.assembly,
     schemaDetected: job.schemaDetected || null,
+    stages: CANON_STAGE_ORDER.map((key) => job.stages?.[key]).filter(Boolean),
     result: job.result || null,
     error: job.error || null,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
   };
+}
+
+function createCanonStageState() {
+  return {
+    schema_detection: { key: "schema_detection", status: "pending", progress: 0, message: "" },
+    row_normalization: { key: "row_normalization", status: "pending", progress: 0, message: "" },
+    gene_resolution: { key: "gene_resolution", status: "pending", progress: 0, message: "" },
+    artifact_build: { key: "artifact_build", status: "pending", progress: 0, message: "" },
+    activation: { key: "activation", status: "pending", progress: 0, message: "" },
+  };
+}
+
+function updateCanonStage(job, stageKey, patch) {
+  if (!job.stages) {
+    job.stages = createCanonStageState();
+  }
+  const current = job.stages[stageKey] || { key: stageKey, status: "pending", progress: 0, message: "" };
+  const next = {
+    ...current,
+    ...patch,
+    key: stageKey,
+  };
+  next.progress = Math.max(0, Math.min(100, Number(next.progress || 0)));
+  next.message = next.message || current.message || "";
+  job.stages[stageKey] = next;
+}
+
+async function refreshCanonJobProgress(job) {
+  if (!job?.progressPath || job.status !== "running") return;
+  const raw = await readFile(job.progressPath, "utf8").catch(() => null);
+  if (!raw) return;
+  let payload = null;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (payload.schemaVersion && !job.schemaDetected) {
+    job.schemaDetected = payload.schemaVersion;
+  }
+  if (payload.message) {
+    job.message = payload.message;
+  }
+  if (payload.stages && typeof payload.stages === "object") {
+    for (const stageKey of Object.keys(payload.stages)) {
+      if (!CANON_STAGE_ORDER.includes(stageKey)) continue;
+      updateCanonStage(job, stageKey, payload.stages[stageKey]);
+    }
+  }
+  const progressValue = Number(payload.progress || 0);
+  if (Number.isFinite(progressValue) && progressValue > job.progress) {
+    job.progress = Math.min(98, progressValue);
+  }
+  job.updatedAt = new Date().toISOString();
 }
 
 function sanitizeValidationResult(result, upload) {
@@ -1405,6 +1467,7 @@ app.post("/api/canon/upload", express.raw({ type: "*/*", limit: MAX_CANON_FILE_S
   const stagingDir = path.join(paths.incoming, runId);
   const outputDir = path.join(paths.runs, runId);
   const inputPath = path.join(stagingDir, fileName);
+  const progressPath = path.join(outputDir, "canon_progress.json");
   await mkdir(stagingDir, { recursive: true });
   await mkdir(outputDir, { recursive: true });
   await writeFile(inputPath, body);
@@ -1423,11 +1486,18 @@ app.post("/api/canon/upload", express.raw({ type: "*/*", limit: MAX_CANON_FILE_S
     sourceFileName: fileName,
     assembly,
     schemaDetected,
+    progressPath,
+    stages: createCanonStageState(),
     result: null,
     error: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
+  updateCanonStage(job, "schema_detection", {
+    status: schemaDetected ? "complete" : "running",
+    progress: schemaDetected ? 100 : 25,
+    message: schemaDetected ? `Detected canon schema: ${schemaDetected}` : "Detecting canon schema",
+  });
   canonJobs.set(job.id, job);
 
   (async () => {
@@ -1444,6 +1514,7 @@ app.post("/api/canon/upload", express.raw({ type: "*/*", limit: MAX_CANON_FILE_S
         sizeBytes: body.length,
         inputPath,
         outputDir,
+        progressPath,
         assembly,
         requestedAt: new Date().toISOString(),
       };
@@ -1452,22 +1523,38 @@ app.post("/api/canon/upload", express.raw({ type: "*/*", limit: MAX_CANON_FILE_S
         job.progress = 35;
         job.message = "Resolving genes, transcripts, and features";
         job.updatedAt = new Date().toISOString();
+        updateCanonStage(job, "gene_resolution", {
+          status: "running",
+          progress: 5,
+          message: "Resolving genes, transcripts, and features",
+        });
         summary = await runBase64JsonScript(CANON_PROCESSOR_SCRIPT, payload);
       } else {
         job.progress = 35;
         job.message = "Processing legacy canon";
         job.updatedAt = new Date().toISOString();
+        updateCanonStage(job, "row_normalization", {
+          status: "running",
+          progress: 5,
+          message: "Processing legacy canon",
+        });
         summary = (await processCanonWithN8n(payload)) || (await runBase64JsonScript(CANON_PROCESSOR_SCRIPT, payload));
       }
       if (summary.activationStatus === "blocked") {
         throw new Error("Canon preprocessing completed but activation is blocked by missing required runtime artifacts or unresolved genes.");
       }
+      await refreshCanonJobProgress(job);
 
       let rsidResolution = null;
       if (summary.schemaVersion !== "gene_module_v2") {
         job.progress = 75;
         job.message = "Resolving rsID coordinates";
         job.updatedAt = new Date().toISOString();
+        updateCanonStage(job, "activation", {
+          status: "running",
+          progress: 35,
+          message: "Resolving rsID coordinates",
+        });
         rsidResolution = await resolveRsidForCanon(runId, summary);
       }
 
@@ -1486,12 +1573,22 @@ app.post("/api/canon/upload", express.raw({ type: "*/*", limit: MAX_CANON_FILE_S
       job.message = "Canon preprocessing completed";
       job.result = current;
       job.schemaDetected = summary.schemaVersion || schemaDetected;
+      updateCanonStage(job, "activation", {
+        status: "complete",
+        progress: 100,
+        message: "Canon published as current version",
+      });
       job.updatedAt = new Date().toISOString();
     } catch (error) {
       job.status = "failed";
       job.progress = 100;
       job.error = error.message || String(error);
       job.message = "Canon preprocessing failed";
+      updateCanonStage(job, "activation", {
+        status: "failed",
+        progress: Math.max(0, job.stages?.activation?.progress || 0),
+        message: job.error,
+      });
       job.updatedAt = new Date().toISOString();
     }
   })();
@@ -1499,12 +1596,13 @@ app.post("/api/canon/upload", express.raw({ type: "*/*", limit: MAX_CANON_FILE_S
   res.status(202).json(publicCanonJob(job));
 });
 
-app.get("/api/canon/jobs/:jobId", (req, res) => {
+app.get("/api/canon/jobs/:jobId", async (req, res) => {
   const job = canonJobs.get(req.params.jobId);
   if (!job) {
     res.status(404).json({ error: "Canon job not found." });
     return;
   }
+  await refreshCanonJobProgress(job);
   res.json(publicCanonJob(job));
 });
 

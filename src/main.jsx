@@ -274,6 +274,9 @@ const COPY = {
     canonUpload: "Subir y limpiar canon",
     canonUploading: "Procesando canon...",
     canonProgress: "Carga y procesamiento del canon",
+    canonStructureProgress: "Estructura y limpieza",
+    canonCoreProcessingProgress: "Procesamiento central del canon",
+    canonActivationProgress: "Artefactos y activacion",
     canonLoaded: "Canon cargado",
     canonRows: "Filas no vacias",
     canonUniqueRsids: "rsIDs unicos",
@@ -495,6 +498,9 @@ const COPY = {
     canonUpload: "Upload and clean canon",
     canonUploading: "Processing canon...",
     canonProgress: "Canon upload and processing",
+    canonStructureProgress: "Structure and cleanup",
+    canonCoreProcessingProgress: "Core canon processing",
+    canonActivationProgress: "Artifacts and activation",
     canonLoaded: "Canon loaded",
     canonRows: "Non-empty rows",
     canonUniqueRsids: "Unique rsIDs",
@@ -607,6 +613,51 @@ function ProgressBar({
       </div>
     </div>
   );
+}
+
+function buildCanonProgressGroups(job, schemaVersion, t) {
+  if (!job) return [];
+  const stageMap = new Map((job.stages || []).map((stage) => [stage.key, stage]));
+  const schemaStage = stageMap.get("schema_detection");
+  const rowStage = stageMap.get("row_normalization");
+  const geneStage = stageMap.get("gene_resolution");
+  const artifactStage = stageMap.get("artifact_build");
+  const activationStage = stageMap.get("activation");
+  const resolvedSchema = schemaVersion || job.schemaDetected || "";
+  const isV2 = resolvedSchema === "gene_module_v2";
+  const averageProgress = (stages) => {
+    const active = stages.filter((stage) => stage && (stage.progress > 0 || stage.status !== "pending"));
+    if (active.length === 0) return 0;
+    return Math.round(active.reduce((sum, stage) => sum + Number(stage.progress || 0), 0) / active.length);
+  };
+  const latestMessage = (stages) =>
+    stages
+      .slice()
+      .reverse()
+      .find((stage) => stage?.message)?.message || "";
+
+  const groups = [
+    {
+      key: "structure",
+      label: t.canonStructureProgress,
+      value: averageProgress([schemaStage, rowStage]),
+      detail: latestMessage([schemaStage, rowStage]),
+    },
+    {
+      key: "core",
+      label: t.canonCoreProcessingProgress,
+      value: isV2 ? averageProgress([geneStage]) : averageProgress([artifactStage]),
+      detail: isV2 ? latestMessage([geneStage]) : latestMessage([artifactStage]),
+    },
+    {
+      key: "activation",
+      label: t.canonActivationProgress,
+      value: isV2 ? averageProgress([artifactStage, activationStage]) : averageProgress([activationStage]),
+      detail: isV2 ? latestMessage([artifactStage, activationStage]) : latestMessage([activationStage]),
+    },
+  ];
+
+  return groups.filter((group) => group.value > 0 || group.detail);
 }
 
 function PipelineStepper({ phase, t }) {
@@ -862,13 +913,6 @@ function CanonModal({ open, onClose, language, locale, t }) {
   function postCanonWithProgress(selectedFile) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      let processingTimer = null;
-      const clearProcessingTimer = () => {
-        if (processingTimer) {
-          window.clearInterval(processingTimer);
-          processingTimer = null;
-        }
-      };
 
       xhr.open("POST", `${API_BASE}/api/canon/upload`);
       xhr.setRequestHeader("Content-Type", "application/octet-stream");
@@ -884,13 +928,9 @@ function CanonModal({ open, onClose, language, locale, t }) {
 
       xhr.upload.onload = () => {
         setCanonProgress((current) => Math.max(current, 55));
-        processingTimer = window.setInterval(() => {
-          setCanonProgress((current) => Math.min(92, current + 4));
-        }, 450);
       };
 
       xhr.onload = () => {
-        clearProcessingTimer();
         const payload = (() => {
           try {
             return xhr.responseText ? JSON.parse(xhr.responseText) : {};
@@ -907,11 +947,9 @@ function CanonModal({ open, onClose, language, locale, t }) {
       };
 
       xhr.onerror = () => {
-        clearProcessingTimer();
         reject(new Error("Could not upload canon."));
       };
       xhr.onabort = () => {
-        clearProcessingTimer();
         reject(new Error("Canon upload was aborted."));
       };
 
@@ -926,9 +964,7 @@ function CanonModal({ open, onClose, language, locale, t }) {
       const payload = await readJsonResponse(response);
       if (!response.ok) throw new Error(payload.error || "Could not poll canon job.");
       setCanonJob(payload);
-      setCanonProgress((current) => Math.max(current, payload.progress || 0));
       if (payload.status === "complete") {
-        setCanonProgress(100);
         setCanonState(payload.result || null);
         return payload.result || null;
       }
@@ -1005,6 +1041,7 @@ function CanonModal({ open, onClose, language, locale, t }) {
   const sourceGroups = current?.metadata?.source_group_counts || {};
   const loadedAt = current?.createdAt || current?.timestamps?.completedAt;
   const effectiveRsidLabel = current?.schemaVersion === "gene_module_v2" ? t.canonGeneMasterDownload : t.rsidMasterDownload;
+  const canonProgressGroups = buildCanonProgressGroups(canonJob, canonJob?.schemaDetected || current?.schemaVersion, t);
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="canon-title">
@@ -1025,7 +1062,7 @@ function CanonModal({ open, onClose, language, locale, t }) {
             {loading ? (
               <span>{t.canonUploading}</span>
             ) : uploading || canonJob?.status === "queued" || canonJob?.status === "running" ? (
-              <span>{canonJob?.status === "queued" ? t.canonJobQueued : t.canonJobRunning}</span>
+              <span>{canonJob?.message || (canonJob?.status === "queued" ? t.canonJobQueued : t.canonJobRunning)}</span>
             ) : current ? (
               <span>
                 {current.sourceFileName}
@@ -1109,6 +1146,9 @@ function CanonModal({ open, onClose, language, locale, t }) {
           />
           {error && <p className="error-message">{error}</p>}
           {(uploading || canonProgress > 0) && <ProgressBar label={t.canonProgress} value={canonProgress} tone="green" />}
+          {canonProgressGroups.map((group) => (
+            <ProgressBar key={group.key} label={group.label} value={group.value} detail={group.detail} tone="blue" />
+          ))}
           <button className="primary-button" type="button" disabled={!canonFile || uploading} onClick={uploadCanon}>
             {uploading ? <Loader2 className="spin" size={18} /> : <UploadCloud size={18} />}
             {uploading ? t.canonUploading : t.canonUpload}

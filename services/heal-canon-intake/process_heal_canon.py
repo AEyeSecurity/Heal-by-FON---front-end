@@ -246,6 +246,14 @@ CATEGORY_HINTS = {
     "stress reactivity & regulation",
 }
 
+CANON_PROGRESS_WEIGHTS = {
+    "schema_detection": 10,
+    "row_normalization": 20,
+    "gene_resolution": 45,
+    "artifact_build": 20,
+    "activation": 5,
+}
+
 
 def utc_now() -> str:
     return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -272,6 +280,68 @@ def ensure_int(value, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+class ProgressReporter:
+    def __init__(self, path: Path | None = None, schema_version: str = "") -> None:
+        self.path = Path(path) if path else None
+        self.schema_version = schema_version
+        self.stages: dict[str, dict] = {}
+        self.message = ""
+
+    def update(
+        self,
+        stage_key: str,
+        progress: int,
+        message: str,
+        *,
+        status: str = "running",
+        total: int | None = None,
+        completed: int | None = None,
+    ) -> None:
+        if not self.path:
+            return
+        stage = {
+            "key": stage_key,
+            "status": status,
+            "progress": max(0, min(100, ensure_int(progress))),
+            "message": clean_cell(message),
+            "updatedAt": utc_now(),
+        }
+        if total is not None:
+            stage["total"] = max(0, ensure_int(total))
+        if completed is not None:
+            stage["completed"] = max(0, ensure_int(completed))
+        self.stages[stage_key] = stage
+        if stage["message"]:
+            self.message = stage["message"]
+        self.flush()
+
+    def flush(self) -> None:
+        if not self.path:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schemaVersion": self.schema_version or "",
+            "progress": self.overall_progress(),
+            "message": self.message,
+            "stages": self.stages,
+            "updatedAt": utc_now(),
+        }
+        self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def overall_progress(self) -> int:
+        weighted_total = 0
+        weight_sum = 0
+        for stage_key, weight in CANON_PROGRESS_WEIGHTS.items():
+            stage = self.stages.get(stage_key)
+            if not stage:
+                continue
+            weighted_total += weight * max(0, min(100, ensure_int(stage.get("progress"))))
+            weight_sum += weight
+        if weight_sum == 0:
+            return 0
+        return max(0, min(100, round(weighted_total / weight_sum)))
 
 
 def excel_col_to_index(cell_ref: str) -> int:
@@ -603,13 +673,26 @@ def write_csv(path: Path, rows: list[dict], fieldnames: list[str] | None = None)
         writer.writerows(rows)
 
 
-def process_legacy(input_path: Path, output_dir: Path, source_file_name: str) -> dict:
+def process_legacy(
+    input_path: Path, output_dir: Path, source_file_name: str, progress: ProgressReporter | None = None
+) -> dict:
     started_at = utc_now()
     errors: list[str] = []
     warnings: list[str] = []
+    if progress:
+        progress.update("row_normalization", 10, "Loading and normalizing legacy canon rows")
     raw_rows, load_meta = load_table(input_path)
     rows, meta = normalize_rows_legacy(raw_rows)
     rsids_long, rsid_master = build_rsid_outputs(rows)
+    if progress:
+        progress.update(
+            "row_normalization",
+            100,
+            f"Normalized {meta['rows_nonempty']} legacy rows",
+            status="complete",
+            total=meta["rows_nonempty"],
+            completed=meta["rows_nonempty"],
+        )
 
     if meta["rows_nonempty"] == 0:
         errors.append("Canon file has no non-empty rows.")
@@ -651,6 +734,8 @@ def process_legacy(input_path: Path, output_dir: Path, source_file_name: str) ->
         "col_D",
         "extra_columns",
     ]
+    if progress:
+        progress.update("artifact_build", 20, "Building legacy rsID artifacts")
     write_csv(output_dir / "canon_clean_rows.csv", rows, clean_fields)
     write_csv(output_dir / "targets_ok.csv", [row for row in rows if row["source_group"] == "df_ok"], clean_fields)
     write_csv(
@@ -692,6 +777,9 @@ def process_legacy(input_path: Path, output_dir: Path, source_file_name: str) ->
         "columns": clean_fields,
     }
     (output_dir / "canon_preview.json").write_text(json.dumps(preview, ensure_ascii=False, indent=2), encoding="utf-8")
+    if progress:
+        progress.update("artifact_build", 100, "Legacy rsID artifacts generated", status="complete")
+        progress.update("activation", 100, "Legacy canon ready for publication", status="complete")
 
     summary = {
         "status": status,
@@ -1425,12 +1513,29 @@ def insert_many(connection: sqlite3.Connection, table: str, rows: list[dict]) ->
     )
 
 
-def process_gene_module_v2(input_path: Path, output_dir: Path, source_file_name: str, assembly: str) -> dict:
+def process_gene_module_v2(
+    input_path: Path,
+    output_dir: Path,
+    source_file_name: str,
+    assembly: str,
+    progress: ProgressReporter | None = None,
+) -> dict:
     started_at = utc_now()
     output_dir.mkdir(parents=True, exist_ok=True)
     cache_root = output_dir / "cache"
+    if progress:
+        progress.update("row_normalization", 10, "Loading and normalizing canon rows")
     raw_rows, load_meta = load_table(input_path)
     rows, meta = normalize_module_rows(raw_rows)
+    if progress:
+        progress.update(
+            "row_normalization",
+            100,
+            f"Normalized {meta['rows_total']} module rows",
+            status="complete",
+            total=meta["rows_total"],
+            completed=meta["rows_total"],
+        )
     canon_version_id = f"{safe_slug(Path(source_file_name).stem)}_{safe_slug(assembly)}_ensembl"
     warnings: list[dict] = []
 
@@ -1488,8 +1593,18 @@ def process_gene_module_v2(input_path: Path, output_dir: Path, source_file_name:
     genes_ambiguous = 0
     genes_unresolved = 0
     annotation_release = "live"
+    total_symbols = len(unique_symbols)
+    if progress:
+        progress.update(
+            "gene_resolution",
+            5 if total_symbols else 100,
+            "Resolving genes against HGNC and Ensembl" if total_symbols else "No genes available to resolve",
+            status="running" if total_symbols else "complete",
+            total=total_symbols,
+            completed=0 if total_symbols else 0,
+        )
 
-    for symbol in unique_symbols:
+    for index, symbol in enumerate(unique_symbols, start=1):
         related_rows = candidate_rows_for_symbol(gene_rows, symbol)
         full_gene_name = clean_cell(related_rows[0]["full_gene_name"]) if related_rows else ""
         resolved, resolution_status, resolution_notes = resolve_gene_identity(symbol, full_gene_name, assembly, cache_root)
@@ -1508,6 +1623,15 @@ def process_gene_module_v2(input_path: Path, output_dir: Path, source_file_name:
                     resolution_notes,
                     "Review the gene symbol or curate the canon row.",
                     canon_row_id=row["canon_row_id"],
+                )
+            if progress and (index == total_symbols or index % 5 == 0):
+                progress.update(
+                    "gene_resolution",
+                    max(8, round((index / total_symbols) * 100)),
+                    f"Resolving genes ({index}/{total_symbols})",
+                    status="complete" if index == total_symbols else "running",
+                    total=total_symbols,
+                    completed=index,
                 )
             continue
 
@@ -1662,8 +1786,29 @@ def process_gene_module_v2(input_path: Path, output_dir: Path, source_file_name:
             )
 
         gene_master_rows.append(create_gene_master_row(gene_row, related_rows, transcript_rows_for_gene, feature_rows, merged_rows))
+        if progress and (index == total_symbols or index % 5 == 0):
+            progress.update(
+                "gene_resolution",
+                max(8, round((index / total_symbols) * 100)),
+                f"Resolving genes ({index}/{total_symbols})",
+                status="complete" if index == total_symbols else "running",
+                total=total_symbols,
+                completed=index,
+            )
+
+    if progress and total_symbols and total_symbols % 5 != 0:
+        progress.update(
+            "gene_resolution",
+            100,
+            f"Resolving genes ({total_symbols}/{total_symbols})",
+            status="complete",
+            total=total_symbols,
+            completed=total_symbols,
+        )
 
     priority_rules = seed_local_priority_rules()
+    if progress:
+        progress.update("artifact_build", 15, "Building SQLite, indexes, and clean exports")
     insert_many(connection, "genes", genes_for_db)
     insert_many(connection, "gene_modules", gene_module_rows)
     insert_many(connection, "gene_envelopes", envelopes_for_db)
@@ -1719,6 +1864,8 @@ def process_gene_module_v2(input_path: Path, output_dir: Path, source_file_name:
     write_csv(gene_master_path, gene_master_rows)
     export_gene_envelope_index(canon_version_id, assembly, gene_master_rows, envelope_index_path)
     export_merged_feature_index(canon_version_id, assembly, merged_rows_all, merged_index_path)
+    if progress:
+        progress.update("artifact_build", 100, "SQLite and runtime indexes generated", status="complete")
 
     preview_columns = [
         "canon_row_id",
@@ -1764,6 +1911,15 @@ def process_gene_module_v2(input_path: Path, output_dir: Path, source_file_name:
     report_path.write_text(json.dumps(preprocessing_report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     status = "warning" if warnings else "valid"
+    if progress:
+        activation_message = (
+            "Canon ready for activation with warnings"
+            if genes_resolved > 0 and warnings
+            else "Canon ready for activation"
+            if genes_resolved > 0
+            else "Canon blocked: no resolvable genes"
+        )
+        progress.update("activation", 100, activation_message, status="complete")
     summary = {
         "status": status,
         "errors": [],
@@ -1798,7 +1954,13 @@ def process_gene_module_v2(input_path: Path, output_dir: Path, source_file_name:
     return summary
 
 
-def process(input_path: Path, output_dir: Path, source_file_name: str | None = None, assembly: str = "GRCh38") -> dict:
+def process(
+    input_path: Path,
+    output_dir: Path,
+    source_file_name: str | None = None,
+    assembly: str = "GRCh38",
+    progress_path: Path | None = None,
+) -> dict:
     source_file_name = source_file_name or input_path.name
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
@@ -1807,10 +1969,12 @@ def process(input_path: Path, output_dir: Path, source_file_name: str | None = N
 
     raw_rows, _ = load_table(input_path)
     schema_version = detect_schema_from_rows(raw_rows)
+    progress = ProgressReporter(progress_path, schema_version)
+    progress.update("schema_detection", 100, f"Detected canon schema: {schema_version}", status="complete")
     if schema_version == GENE_MODULE_SCHEMA_VERSION:
-        return process_gene_module_v2(input_path, output_dir, source_file_name, assembly)
+        return process_gene_module_v2(input_path, output_dir, source_file_name, assembly, progress=progress)
     if schema_version == LEGACY_SCHEMA_VERSION:
-        return process_legacy(input_path, output_dir, source_file_name)
+        return process_legacy(input_path, output_dir, source_file_name, progress=progress)
     raise ValueError("Unsupported canon schema.")
 
 
@@ -1825,6 +1989,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", help="Directory for generated outputs.")
     parser.add_argument("--source-file-name", default="", help="Original file name shown to users.")
     parser.add_argument("--assembly", default="GRCh38", help="Requested genome assembly.")
+    parser.add_argument("--progress-path", default="", help="Optional JSON path for progress updates.")
     parser.add_argument("--detect-schema", action="store_true", help="Only detect canon schema and exit.")
     parser.add_argument("--input-json-base64", default="", help="Base64 JSON payload for wrapper use.")
     args = parser.parse_args()
@@ -1834,6 +1999,7 @@ def parse_args() -> argparse.Namespace:
         args.output_dir = payload.get("outputDir") or payload.get("output_dir")
         args.source_file_name = payload.get("sourceFileName") or payload.get("fileName") or ""
         args.assembly = payload.get("assembly") or args.assembly
+        args.progress_path = payload.get("progressPath") or payload.get("progress_path") or args.progress_path
         args.detect_schema = bool(payload.get("detectSchema")) or args.detect_schema
     if not args.input:
         parser.error("--input is required.")
@@ -1848,7 +2014,13 @@ def main() -> int:
         if args.detect_schema:
             print(json.dumps(detect_schema(Path(args.input)), ensure_ascii=False))
             return 0
-        summary = process(Path(args.input), Path(args.output_dir), args.source_file_name or None, args.assembly)
+        summary = process(
+            Path(args.input),
+            Path(args.output_dir),
+            args.source_file_name or None,
+            args.assembly,
+            Path(args.progress_path) if args.progress_path else None,
+        )
         print(json.dumps(summary, ensure_ascii=False))
         return 0 if summary["status"] in {"valid", "warning"} else 2
     except Exception as exc:  # noqa: BLE001
