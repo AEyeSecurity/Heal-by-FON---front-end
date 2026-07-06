@@ -279,6 +279,13 @@ const COPY = {
     canonUniqueRsids: "rsIDs unicos",
     canonRepeatedRsids: "rsIDs repetidos",
     canonManualReview: "Revision manual",
+    canonAssembly: "Assembly",
+    canonSchema: "Schema",
+    canonWarnings: "Warnings",
+    canonGenesResolved: "Genes resueltos",
+    canonJobQueued: "Canon en cola...",
+    canonJobRunning: "Procesando canon...",
+    canonGeneMasterDownload: "Descargar gene master",
     canonPreview: "Vista previa limpia",
     canonDownload: "Descargar canon completo",
     rsidMasterDownload: "Descargar rsID master",
@@ -493,6 +500,13 @@ const COPY = {
     canonUniqueRsids: "Unique rsIDs",
     canonRepeatedRsids: "Repeated rsIDs",
     canonManualReview: "Manual review",
+    canonAssembly: "Assembly",
+    canonSchema: "Schema",
+    canonWarnings: "Warnings",
+    canonGenesResolved: "Resolved genes",
+    canonJobQueued: "Canon queued...",
+    canonJobRunning: "Processing canon...",
+    canonGeneMasterDownload: "Download gene master",
     canonPreview: "Clean preview",
     canonDownload: "Download full canon",
     rsidMasterDownload: "Download rsID master",
@@ -800,10 +814,12 @@ function CanonModal({ open, onClose, language, locale, t }) {
   const fileInputRef = useRef(null);
   const [canonState, setCanonState] = useState(null);
   const [canonFile, setCanonFile] = useState(null);
+  const [canonAssembly, setCanonAssembly] = useState("GRCh38");
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [canonProgress, setCanonProgress] = useState(0);
   const [error, setError] = useState(null);
+  const [canonJob, setCanonJob] = useState(null);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileResetKey, setTurnstileResetKey] = useState(0);
 
@@ -835,7 +851,9 @@ function CanonModal({ open, onClose, language, locale, t }) {
     if (open) {
       loadCanon();
       setCanonFile(null);
+      setCanonAssembly("GRCh38");
       setCanonProgress(0);
+      setCanonJob(null);
       setTurnstileToken("");
       setTurnstileResetKey((current) => current + 1);
     }
@@ -855,6 +873,7 @@ function CanonModal({ open, onClose, language, locale, t }) {
       xhr.open("POST", `${API_BASE}/api/canon/upload`);
       xhr.setRequestHeader("Content-Type", "application/octet-stream");
       xhr.setRequestHeader("X-Canon-File-Name", encodeURIComponent(selectedFile.name));
+      xhr.setRequestHeader("X-Canon-Assembly", canonAssembly);
       xhr.setRequestHeader("X-Turnstile-Token", turnstileToken);
 
       xhr.upload.onprogress = (event) => {
@@ -901,6 +920,25 @@ function CanonModal({ open, onClose, language, locale, t }) {
     });
   }
 
+  async function pollCanonJob(jobId) {
+    for (;;) {
+      const response = await fetch(`${API_BASE}/api/canon/jobs/${jobId}`);
+      const payload = await readJsonResponse(response);
+      if (!response.ok) throw new Error(payload.error || "Could not poll canon job.");
+      setCanonJob(payload);
+      setCanonProgress((current) => Math.max(current, payload.progress || 0));
+      if (payload.status === "complete") {
+        setCanonProgress(100);
+        setCanonState(payload.result || null);
+        return payload.result || null;
+      }
+      if (payload.status === "failed") {
+        throw new Error(payload.error || "Could not upload canon.");
+      }
+      await sleep(900);
+    }
+  }
+
   async function uploadCanon() {
     if (!canonFile) return;
     if (TURNSTILE_SITE_KEY && !turnstileToken) {
@@ -912,7 +950,8 @@ function CanonModal({ open, onClose, language, locale, t }) {
     setCanonProgress(0);
     try {
       const payload = await postCanonWithProgress(canonFile);
-      setCanonState(payload);
+      setCanonJob(payload);
+      await pollCanonJob(payload.id);
       setCanonFile(null);
       setTurnstileToken("");
       setTurnstileResetKey((current) => current + 1);
@@ -962,8 +1001,10 @@ function CanonModal({ open, onClose, language, locale, t }) {
 
   const current = canonState?.current;
   const rows = canonState?.preview?.rows || [];
+  const previewColumns = (canonState?.preview?.columns || []).slice(0, 6);
   const sourceGroups = current?.metadata?.source_group_counts || {};
   const loadedAt = current?.createdAt || current?.timestamps?.completedAt;
+  const effectiveRsidLabel = current?.schemaVersion === "gene_module_v2" ? t.canonGeneMasterDownload : t.rsidMasterDownload;
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="canon-title">
@@ -983,6 +1024,8 @@ function CanonModal({ open, onClose, language, locale, t }) {
             <strong>{t.canonCurrent}</strong>
             {loading ? (
               <span>{t.canonUploading}</span>
+            ) : uploading || canonJob?.status === "queued" || canonJob?.status === "running" ? (
+              <span>{canonJob?.status === "queued" ? t.canonJobQueued : t.canonJobRunning}</span>
             ) : current ? (
               <span>
                 {current.sourceFileName}
@@ -995,9 +1038,28 @@ function CanonModal({ open, onClose, language, locale, t }) {
           {current && (
             <>
               <div className="canon-mini-grid">
-                <MetricCard label={t.canonRows} value={formatNumber(current.metadata?.rows_nonempty, locale)} />
-                <MetricCard label={t.canonUniqueRsids} value={formatNumber(current.metadata?.unique_rsids, locale)} />
-                <MetricCard label={t.canonRepeatedRsids} value={formatNumber(current.metadata?.duplicate_rsids, locale)} />
+                <MetricCard label={t.canonRows} value={formatNumber(current.metadata?.rows_nonempty ?? current.metadata?.rows_total, locale)} />
+                <MetricCard
+                  label={current.schemaVersion === "gene_module_v2" ? t.canonGenesResolved : t.canonUniqueRsids}
+                  value={formatNumber(current.schemaVersion === "gene_module_v2" ? current.metadata?.genes_resolved : current.metadata?.unique_rsids, locale)}
+                />
+                <MetricCard
+                  label={current.schemaVersion === "gene_module_v2" ? t.canonWarnings : t.canonRepeatedRsids}
+                  value={formatNumber(current.schemaVersion === "gene_module_v2" ? current.metadata?.warnings_count : current.metadata?.duplicate_rsids, locale)}
+                />
+                <MetricCard
+                  label={current.schemaVersion === "gene_module_v2" ? t.canonAssembly : t.canonManualReview}
+                  value={
+                    current.schemaVersion === "gene_module_v2"
+                      ? current.assembly || "-"
+                      : formatNumber(sourceGroups.revision_manual || 0, locale)
+                  }
+                />
+              </div>
+              <div className="canon-mini-grid">
+                <MetricCard label={t.canonSchema} value={current.schemaVersion || "-"} />
+                <MetricCard label={t.canonAssembly} value={current.assembly || "-"} />
+                <MetricCard label={t.canonWarnings} value={formatNumber(current.warnings?.length || 0, locale)} />
                 <MetricCard label={t.canonManualReview} value={formatNumber(sourceGroups.revision_manual || 0, locale)} />
               </div>
               <button className="secondary-button canon-download-button" type="button" onClick={downloadCanon}>
@@ -1006,7 +1068,7 @@ function CanonModal({ open, onClose, language, locale, t }) {
               </button>
               <button className="secondary-button canon-download-button" type="button" onClick={downloadRsidMaster}>
                 <Download size={17} />
-                {t.rsidMasterDownload}
+                {effectiveRsidLabel}
               </button>
             </>
           )}
@@ -1031,6 +1093,13 @@ function CanonModal({ open, onClose, language, locale, t }) {
             </button>
             <span>{canonFile ? `${canonFile.name} - ${formatBytes(canonFile.size, locale)}` : ""}</span>
           </div>
+          <label className="parser-control">
+            <span>{t.canonAssembly}</span>
+            <select value={canonAssembly} onChange={(event) => setCanonAssembly(event.target.value)}>
+              <option value="GRCh38">GRCh38</option>
+              <option value="GRCh37">GRCh37</option>
+            </select>
+          </label>
           <TurnstileBox
             siteKey={TURNSTILE_SITE_KEY}
             language={language}
@@ -1052,28 +1121,22 @@ function CanonModal({ open, onClose, language, locale, t }) {
             <table>
               <thead>
                 <tr>
-                  <th>row_id</th>
-                  <th>source_group</th>
-                  <th>category</th>
-                  <th>gene</th>
-                  <th>rsid</th>
-                  <th>effect</th>
+                  {previewColumns.map((column) => (
+                    <th key={column}>{column}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 {rows.slice(0, 60).map((row) => (
-                  <tr key={row.row_id}>
-                    <td>{row.row_id}</td>
-                    <td>{row.source_group}</td>
-                    <td>{row.category || "-"}</td>
-                    <td>{row.gene || "-"}</td>
-                    <td>{row.rsid || "-"}</td>
-                    <td>{row.effect || "-"}</td>
+                  <tr key={row.row_id || row.canon_row_id || JSON.stringify(row)}>
+                    {previewColumns.map((column) => (
+                      <td key={column}>{row[column] || "-"}</td>
+                    ))}
                   </tr>
                 ))}
                 {rows.length === 0 && (
                   <tr>
-                    <td colSpan="6">{t.canonNone}</td>
+                    <td colSpan={Math.max(1, previewColumns.length)}>{t.canonNone}</td>
                   </tr>
                 )}
               </tbody>
@@ -1192,10 +1255,12 @@ function MatchResultPanel({ result, locale, t }) {
 
   const isValid = result.status === "valid";
   const Icon = isValid ? CheckCircle2 : XCircle;
+  const isGeneModuleV2 = result.schemaVersion === "gene_module_v2";
   const metadata = result.metadata || {};
   const statusCounts = metadata.match_status_counts || {};
   const preparation = result.matchPreparation?.metadata || {};
   const confidenceCounts = preparation.confidence_level_counts || {};
+  const preparationReviewCounts = preparation.review_status_counts || {};
   const enrichment = result.variantEnrichment?.metadata || {};
   const individualInterpretation = result.individualInterpretation?.metadata || {};
   const interpretationNormalization = result.interpretationNormalization?.metadata || {};
@@ -1208,24 +1273,43 @@ function MatchResultPanel({ result, locale, t }) {
     0,
   );
   const fileLabel = metadata.file_name || metadata.upload_id || "";
-  const cards = [
-    [t.matchTargets, formatNumber(metadata.target_keys, locale)],
-    [t.matchCandidates, formatNumber(metadata.vcf_candidates_rows, locale)],
-    [t.matchStatusStrict, formatNumber(statusCounts.match_strict || 0, locale)],
-    [t.matchStatusAltReview, formatNumber(statusCounts.match_likely_needs_alt_review || 0, locale)],
-    [t.matchStatusNoPosition, formatNumber(statusCounts.no_vcf_match_by_chr_pos || 0, locale)],
-    [t.matchStatusNoRsid, formatNumber(statusCounts.no_rsid_detected || 0, locale)],
-    [t.matchScannedRows, formatNumber(metadata.scanned_variant_rows, locale)],
-    [t.sample, metadata.sample_name || "-"],
-  ];
-  const preparationCards = result.matchPreparation
+  const cards = isGeneModuleV2
     ? [
-        [t.preparationRows, formatNumber(preparation.rows_total, locale)],
-        [t.preparationObserved, formatNumber(preparation.rows_with_genotype, locale)],
-        [t.preparationHigh, formatNumber(confidenceCounts.High || 0, locale)],
-        [t.preparationModerate, formatNumber(confidenceCounts.Moderate || 0, locale)],
-        [t.preparationLow, formatNumber(confidenceCounts.Low || 0, locale)],
+        [t.matchCandidates, formatNumber(metadata.variant_gene_candidates, locale)],
+        [t.preparationRows, formatNumber(metadata.sheet_final_rows, locale)],
+        [t.enrichmentObserved, formatNumber(metadata.unique_gene_matches, locale)],
+        [t.preparationLow, formatNumber(metadata.background_rows, locale)],
+        [t.preparationModerate, formatNumber(metadata.optional_annotation_rows, locale)],
+        [t.preparationHigh, formatNumber(metadata.annotation_needed_rows, locale)],
+        [t.matchScannedRows, formatNumber(metadata.scanned_variant_rows, locale)],
+        [t.sample, metadata.sample_name || "-"],
       ]
+    : [
+        [t.matchTargets, formatNumber(metadata.target_keys, locale)],
+        [t.matchCandidates, formatNumber(metadata.vcf_candidates_rows, locale)],
+        [t.matchStatusStrict, formatNumber(statusCounts.match_strict || 0, locale)],
+        [t.matchStatusAltReview, formatNumber(statusCounts.match_likely_needs_alt_review || 0, locale)],
+        [t.matchStatusNoPosition, formatNumber(statusCounts.no_vcf_match_by_chr_pos || 0, locale)],
+        [t.matchStatusNoRsid, formatNumber(statusCounts.no_rsid_detected || 0, locale)],
+        [t.matchScannedRows, formatNumber(metadata.scanned_variant_rows, locale)],
+        [t.sample, metadata.sample_name || "-"],
+      ];
+  const preparationCards = result.matchPreparation
+    ? isGeneModuleV2
+      ? [
+          [t.preparationRows, formatNumber(preparation.rows_total, locale)],
+          [t.preparationObserved, formatNumber(preparation.rows_with_genotype, locale)],
+          [t.preparationHigh, formatNumber(preparationReviewCounts.ready_for_annotation || 0, locale)],
+          [t.preparationModerate, formatNumber(preparationReviewCounts.optional_annotation || 0, locale)],
+          [t.preparationLow, formatNumber(preparationReviewCounts.background_only || 0, locale)],
+        ]
+      : [
+          [t.preparationRows, formatNumber(preparation.rows_total, locale)],
+          [t.preparationObserved, formatNumber(preparation.rows_with_genotype, locale)],
+          [t.preparationHigh, formatNumber(confidenceCounts.High || 0, locale)],
+          [t.preparationModerate, formatNumber(confidenceCounts.Moderate || 0, locale)],
+          [t.preparationLow, formatNumber(confidenceCounts.Low || 0, locale)],
+        ]
     : [];
   const enrichmentCards = result.variantEnrichment
     ? [
@@ -1486,7 +1570,7 @@ function MatchResultPanel({ result, locale, t }) {
         </>
       )}
       <div className="match-download-actions">
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadFinalReport}>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadFinalReport}>
           <Download size={17} />
           {t.finalReportDownload}
         </button>
@@ -1502,27 +1586,27 @@ function MatchResultPanel({ result, locale, t }) {
           <Download size={17} />
           {t.matchPreparationMinimalDownload}
         </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadEnrichment}>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadEnrichment}>
           <Download size={17} />
           {t.enrichmentDownload}
         </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadEnrichmentPlus}>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadEnrichmentPlus}>
           <Download size={17} />
           {t.enrichmentPlusDownload}
         </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadEnrichmentQa}>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadEnrichmentQa}>
           <Download size={17} />
           {t.enrichmentQaDownload}
         </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadIndividualInterpretations}>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadIndividualInterpretations}>
           <Download size={17} />
           {t.individualInterpretationDownload}
         </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadNormalizedInterpretations}>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadNormalizedInterpretations}>
           <Download size={17} />
           {t.interpretationNormalizationDownload}
         </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadGlobalInterpretationSections}>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadGlobalInterpretationSections}>
           <Download size={17} />
           {t.globalInterpretationSectionsDownload}
         </button>
@@ -2024,7 +2108,9 @@ function App() {
 
       if (job.status === "complete") {
         setPreparationProgress(100);
-        setEnrichmentProgress(100);
+        if (job.result?.metadata?.downstream_supported !== false && (job.artifactsReady?.enrichment || job.result?.variantEnrichment)) {
+          setEnrichmentProgress(100);
+        }
         if (job.artifactsReady?.individualInterpretation || job.result?.individualInterpretation) {
           setIndividualInterpretationProgress(100);
         }
@@ -2176,11 +2262,14 @@ function App() {
     const nextMatchResult = await pollMatch(matchJob.id);
     setMatchResult(nextMatchResult);
     setPhase("done");
-    setMessageKey("enrichmentComplete");
+    const downstreamSupported = nextMatchResult?.metadata?.downstream_supported !== false;
+    setMessageKey(downstreamSupported ? "enrichmentComplete" : "preparationComplete");
     setCustomMessage("");
     setMatchProgress(100);
     setPreparationProgress(100);
-    setEnrichmentProgress(100);
+    if (downstreamSupported && (nextMatchResult?.artifactsReady?.enrichment || nextMatchResult?.variantEnrichment)) {
+      setEnrichmentProgress(100);
+    }
     return nextMatchResult;
   }
 
@@ -2550,6 +2639,11 @@ function App() {
         return;
       }
       const nextMatchResult = await runMatch(upload);
+      if (nextMatchResult?.metadata?.downstream_supported === false) {
+        setTurnstileToken("");
+        setTurnstileResetKey((current) => current + 1);
+        return;
+      }
       const individualResult = await runIndividualInterpretation(nextMatchResult?.jobId);
       const normalizedResult = await runInterpretationNormalization(individualResult?.jobId || nextMatchResult?.jobId);
       await runGlobalAndFinalReports(normalizedResult?.jobId || individualResult?.jobId || nextMatchResult?.jobId);

@@ -111,6 +111,7 @@ const TURNSTILE_ALLOWED_HOSTNAMES = (process.env.HEAL_TURNSTILE_ALLOWED_HOSTNAME
   .filter(Boolean);
 
 const jobs = new Map();
+const canonJobs = new Map();
 const uploads = new Map();
 const initRateLimits = new Map();
 
@@ -131,7 +132,7 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, X-Chunk-Index, X-Upload-Id, X-Canon-File-Name, X-Turnstile-Token, X-HEAL-Access-Token",
+    "Content-Type, X-Chunk-Index, X-Upload-Id, X-Canon-File-Name, X-Canon-Assembly, X-Turnstile-Token, X-HEAL-Access-Token",
   );
   if (req.method === "OPTIONS") {
     res.status(204).send();
@@ -338,6 +339,11 @@ function publicCanon(summary, preview, manifest) {
       runId: manifest?.runId || null,
       sourceFileName: summary.sourceFileName || manifest?.sourceFileName || null,
       status: summary.status,
+      schemaVersion: summary.schemaVersion || manifest?.schemaVersion || null,
+      adapter: summary.adapter || manifest?.adapter || null,
+      assembly: summary.assembly || manifest?.assembly || null,
+      activationStatus: summary.activationStatus || manifest?.activationStatus || null,
+      warningsSummary: summary.warningsSummary || manifest?.warningsSummary || {},
       errors: summary.errors || [],
       warnings: summary.warnings || [],
       metadata: summary.metadata || {},
@@ -349,6 +355,22 @@ function publicCanon(summary, preview, manifest) {
       rows: preview?.rows || [],
       generatedAt: preview?.generatedAt || null,
     },
+  };
+}
+
+function publicCanonJob(job) {
+  return {
+    id: job.id,
+    status: job.status,
+    progress: job.progress,
+    message: job.message,
+    sourceFileName: job.sourceFileName,
+    assembly: job.assembly,
+    schemaDetected: job.schemaDetected || null,
+    result: job.result || null,
+    error: job.error || null,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
   };
 }
 
@@ -461,6 +483,11 @@ function normalizeAudienceMode(value) {
 function normalizeAnalysisMode(value) {
   const mode = String(value || "quick").trim().toLowerCase();
   return ["quick", "complete", "qa"].includes(mode) ? mode : "quick";
+}
+
+function normalizeAssembly(value) {
+  const assembly = String(value || "GRCh38").trim().toUpperCase();
+  return assembly === "GRCH37" ? "GRCh37" : "GRCh38";
 }
 
 function resolveLlm2Model({ analysisMode, requestedModel }) {
@@ -622,6 +649,37 @@ function runCanonProcessor(inputPath, outputDir, sourceFileName) {
   });
 }
 
+function runCanonSchemaProbe(inputPath) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(PYTHON_EXE, [CANON_PROCESSOR_SCRIPT, "--input", inputPath, "--detect-schema"], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      try {
+        const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+        const payload = JSON.parse(lines[lines.length - 1] || "{}");
+        if (code !== 0 && !payload.schemaVersion) {
+          reject(new Error(stderr || "Could not detect canon schema."));
+          return;
+        }
+        resolve(payload.schemaVersion || null);
+      } catch (error) {
+        reject(new Error(`Canon schema probe returned invalid JSON. ${stderr || error.message}`));
+      }
+    });
+  });
+}
+
 async function processCanonWithN8n(payload) {
   if (!N8N_CANON_WEBHOOK_URL) return null;
   const headers = { "Content-Type": "application/json" };
@@ -779,6 +837,9 @@ async function processRsidResolution(payload) {
 }
 
 async function processVcfCanonMatch(payload) {
+  if (payload.adapter === "gene_module_canon_adapter") {
+    return await runBase64JsonScript(path.join(VCF_CANON_MATCH_ROOT, "match_vcf_to_gene_module_ready.py"), payload);
+  }
   return (
     (await postWorkflowForSummary(N8N_VCF_CANON_MATCH_WEBHOOK_URL, payload, "n8n VCF-canon match")) ||
     (await runBase64JsonScript(path.join(VCF_CANON_MATCH_ROOT, "match_vcf_to_rsid_ready.py"), payload))
@@ -937,6 +998,11 @@ async function saveCurrentCanon(runId, sourceFileName, summary) {
   const manifest = {
     runId,
     sourceFileName,
+    schemaVersion: summary.schemaVersion || null,
+    adapter: summary.adapter || null,
+    assembly: summary.assembly || null,
+    activationStatus: summary.activationStatus || null,
+    warningsSummary: summary.warningsSummary || {},
     summaryPath: path.join(paths.runs, runId, "canon_summary.json"),
     previewPath: path.join(paths.runs, runId, "canon_preview.json"),
     createdAt: new Date().toISOString(),
@@ -987,6 +1053,10 @@ function publicJob(job) {
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
   };
+}
+
+function downstreamBlockedForJob(job) {
+  return job?.result?.metadata?.downstream_supported === false;
 }
 
 function shouldPersistVcfCanonJob(job) {
@@ -1195,6 +1265,22 @@ app.get("/api/canon/current/rsid-master", async (req, res) => {
   }
 
   const summary = JSON.parse(await readFile(summaryPath, "utf8"));
+  if (summary.schemaVersion === "gene_module_v2") {
+    const geneMasterPath = path.resolve(summary.outputs?.geneMasterCsv || "");
+    if (!isPathInside(paths.root, geneMasterPath)) {
+      res.status(400).json({ error: "Current gene master CSV is outside the allowed root." });
+      return;
+    }
+    const geneMasterStat = await stat(geneMasterPath).catch(() => null);
+    if (!geneMasterStat || geneMasterStat.size <= 0) {
+      res.status(404).json({ error: "Current gene master CSV was not found." });
+      return;
+    }
+    const baseName = safeFileName(String(summary.sourceFileName || "heal-canon").replace(/\.(csv|xlsx)$/i, ""));
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.download(geneMasterPath, `${baseName}_gene_master.csv`);
+    return;
+  }
   const resolutionPaths = rsidResolutionPaths();
   const resolutionManifest = await loadCurrentRsidResolutionManifest().catch(() => null);
   let rsidMasterPath = "";
@@ -1230,19 +1316,6 @@ app.get("/api/canon/current/debug/:artifact", async (req, res) => {
     return;
   }
 
-  const artifactMap = {
-    targets_ok: "targetsOkCsv",
-    targets_repeated_rsids: "targetsRepeatedRsidsCsv",
-    targets_manual_review: "targetsManualReviewCsv",
-    rsids_long: "rsidsLongCsv",
-    rsid_master_raw: "rsidMasterCsv",
-  };
-  const artifactKey = artifactMap[req.params.artifact];
-  if (!artifactKey) {
-    res.status(404).json({ error: "Unknown canon debug artifact." });
-    return;
-  }
-
   const paths = canonPaths();
   const manifest = await loadCurrentCanonManifest().catch(() => null);
   if (!manifest) {
@@ -1256,6 +1329,25 @@ app.get("/api/canon/current/debug/:artifact", async (req, res) => {
     return;
   }
   const summary = JSON.parse(await readFile(summaryPath, "utf8"));
+  const artifactMap =
+    summary.schemaVersion === "gene_module_v2"
+      ? {
+          gene_master: "geneMasterCsv",
+          preprocessing_warnings: "preprocessingWarningsCsv",
+          clean_rows: "cleanRowsCsv",
+        }
+      : {
+          targets_ok: "targetsOkCsv",
+          targets_repeated_rsids: "targetsRepeatedRsidsCsv",
+          targets_manual_review: "targetsManualReviewCsv",
+          rsids_long: "rsidsLongCsv",
+          rsid_master_raw: "rsidMasterCsv",
+        };
+  const artifactKey = artifactMap[req.params.artifact];
+  if (!artifactKey) {
+    res.status(404).json({ error: "Unknown canon debug artifact." });
+    return;
+  }
   const csvPath = path.resolve(summary.outputs?.[artifactKey] || "");
   if (!isPathInside(paths.root, csvPath)) {
     res.status(400).json({ error: "Canon debug CSV is outside the allowed root." });
@@ -1303,6 +1395,7 @@ app.post("/api/canon/upload", express.raw({ type: "*/*", limit: MAX_CANON_FILE_S
     res.status(403).json({ error: turnstile.error });
     return;
   }
+  const assembly = normalizeAssembly(req.headers["x-canon-assembly"]);
 
   await cleanupOldCanons();
   const paths = canonPaths();
@@ -1315,30 +1408,104 @@ app.post("/api/canon/upload", express.raw({ type: "*/*", limit: MAX_CANON_FILE_S
   await mkdir(stagingDir, { recursive: true });
   await mkdir(outputDir, { recursive: true });
   await writeFile(inputPath, body);
-
+  let schemaDetected = null;
   try {
-    const payload = {
-      event: "heal.canon.sheet_intake.requested",
-      runId,
-      fileName,
-      sizeBytes: body.length,
-      inputPath,
-      outputDir,
-      requestedAt: new Date().toISOString(),
-    };
-    const summary = (await processCanonWithN8n(payload)) || (await runCanonProcessor(inputPath, outputDir, fileName));
-    const rsidResolution = await resolveRsidForCanon(runId, summary);
-    const current = await saveCurrentCanon(runId, fileName, summary);
-    current.current.rsidResolution = {
-      status: rsidResolution.summary.status,
-      runId: rsidResolution.manifest.runId,
-      metadata: rsidResolution.summary.metadata || {},
-      createdAt: rsidResolution.manifest.createdAt,
-    };
-    res.status(201).json(current);
-  } catch (error) {
-    res.status(422).json({ error: error.message || String(error), runId });
+    schemaDetected = await runCanonSchemaProbe(inputPath);
+  } catch {
+    schemaDetected = null;
   }
+
+  const job = {
+    id: runId,
+    status: "queued",
+    progress: 5,
+    message: "Queued canon preprocessing",
+    sourceFileName: fileName,
+    assembly,
+    schemaDetected,
+    result: null,
+    error: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  canonJobs.set(job.id, job);
+
+  (async () => {
+    try {
+      job.status = "running";
+      job.progress = 15;
+      job.message = "Detecting canon schema";
+      job.updatedAt = new Date().toISOString();
+
+      const payload = {
+        event: "heal.canon.sheet_intake.requested",
+        runId,
+        fileName,
+        sizeBytes: body.length,
+        inputPath,
+        outputDir,
+        assembly,
+        requestedAt: new Date().toISOString(),
+      };
+      let summary;
+      if (schemaDetected === "gene_module_v2") {
+        job.progress = 35;
+        job.message = "Resolving genes, transcripts, and features";
+        job.updatedAt = new Date().toISOString();
+        summary = await runBase64JsonScript(CANON_PROCESSOR_SCRIPT, payload);
+      } else {
+        job.progress = 35;
+        job.message = "Processing legacy canon";
+        job.updatedAt = new Date().toISOString();
+        summary = (await processCanonWithN8n(payload)) || (await runBase64JsonScript(CANON_PROCESSOR_SCRIPT, payload));
+      }
+      if (summary.activationStatus === "blocked") {
+        throw new Error("Canon preprocessing completed but activation is blocked by missing required runtime artifacts or unresolved genes.");
+      }
+
+      let rsidResolution = null;
+      if (summary.schemaVersion !== "gene_module_v2") {
+        job.progress = 75;
+        job.message = "Resolving rsID coordinates";
+        job.updatedAt = new Date().toISOString();
+        rsidResolution = await resolveRsidForCanon(runId, summary);
+      }
+
+      const current = await saveCurrentCanon(runId, fileName, summary);
+      if (rsidResolution) {
+        current.current.rsidResolution = {
+          status: rsidResolution.summary.status,
+          runId: rsidResolution.manifest.runId,
+          metadata: rsidResolution.summary.metadata || {},
+          createdAt: rsidResolution.manifest.createdAt,
+        };
+      }
+
+      job.status = "complete";
+      job.progress = 100;
+      job.message = "Canon preprocessing completed";
+      job.result = current;
+      job.schemaDetected = summary.schemaVersion || schemaDetected;
+      job.updatedAt = new Date().toISOString();
+    } catch (error) {
+      job.status = "failed";
+      job.progress = 100;
+      job.error = error.message || String(error);
+      job.message = "Canon preprocessing failed";
+      job.updatedAt = new Date().toISOString();
+    }
+  })();
+
+  res.status(202).json(publicCanonJob(job));
+});
+
+app.get("/api/canon/jobs/:jobId", (req, res) => {
+  const job = canonJobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "Canon job not found." });
+    return;
+  }
+  res.json(publicCanonJob(job));
 });
 
 app.post("/api/uploads/lookup", async (req, res) => {
@@ -1737,13 +1904,28 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
     res.status(400).json({ error: "Current canon clean CSV is outside the allowed root." });
     return;
   }
-
-  const resolutionPaths = rsidResolutionPaths();
-  const resolutionManifest = await loadCurrentRsidResolutionManifest().catch(() => null);
-  const rsidReadyPath = path.resolve(resolutionManifest?.rsidMatchReadyCsv || "");
-  if (!resolutionManifest || !isPathInside(resolutionPaths.root, rsidReadyPath)) {
-    res.status(409).json({ error: "The current canon does not have an rsID match-ready file yet." });
-    return;
+  const isGeneModuleV2 = canonSummary.schemaVersion === "gene_module_v2";
+  let resolutionManifest = null;
+  let rsidReadyPath = "";
+  let geneMasterPath = "";
+  let geneEnvelopeIndexPath = "";
+  let mergedFeatureIndexPath = "";
+  if (isGeneModuleV2) {
+    geneMasterPath = path.resolve(canonSummary.outputs?.geneMasterCsv || "");
+    geneEnvelopeIndexPath = path.resolve(canonSummary.outputs?.geneEnvelopeIndexJson || "");
+    mergedFeatureIndexPath = path.resolve(canonSummary.outputs?.mergedFeatureIndexJson || "");
+    if (!isPathInside(canonRoot, geneMasterPath) || !isPathInside(canonRoot, geneEnvelopeIndexPath) || !isPathInside(canonRoot, mergedFeatureIndexPath)) {
+      res.status(409).json({ error: "The current gene-module canon is missing required runtime artifacts." });
+      return;
+    }
+  } else {
+    const resolutionPaths = rsidResolutionPaths();
+    resolutionManifest = await loadCurrentRsidResolutionManifest().catch(() => null);
+    rsidReadyPath = path.resolve(resolutionManifest?.rsidMatchReadyCsv || "");
+    if (!resolutionManifest || !isPathInside(resolutionPaths.root, rsidReadyPath)) {
+      res.status(409).json({ error: "The current canon does not have an rsID match-ready file yet." });
+      return;
+    }
   }
 
   const job = {
@@ -1783,9 +1965,14 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         uploadId: upload.uploadId,
         fileName: upload.fileName,
         canonRunId: canonManifest.runId,
-        rsidResolutionRunId: resolutionManifest.runId,
+        rsidResolutionRunId: resolutionManifest?.runId || null,
+        adapter: canonSummary.adapter || null,
+        schemaVersion: canonSummary.schemaVersion || null,
         canonCleanPath,
         rsidReadyPath,
+        geneMasterPath,
+        geneEnvelopeIndexPath,
+        mergedFeatureIndexPath,
         vcfPath: resolvedStoredPath,
         outputDir,
         vcfParser: normalizeVcfParser(vcfParser),
@@ -1835,6 +2022,22 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         ...sanitizeVcfCanonMatchResult(summary, upload),
         matchPreparation: sanitizeMatchPreparationResult(preparationSummary),
       };
+      if (isGeneModuleV2) {
+        job.status = "complete";
+        job.progress = 100;
+        job.stage = "preparing";
+        job.stageProgress = 100;
+        job.message = "Gene-module canon v2 preparation completed";
+        job.result = {
+          ...job.result,
+          metadata: {
+            ...(job.result?.metadata || {}),
+            downstream_supported: false,
+            downstream_message: "not yet supported for canon schema v2",
+          },
+        };
+        return;
+      }
       job.progress = 86;
       job.stage = "enriching";
       job.stageProgress = 12;
@@ -1909,6 +2112,10 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job) {
     res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (downstreamBlockedForJob(job)) {
+    res.status(409).json({ error: "not yet supported for canon schema v2" });
     return;
   }
   if (job.status === "running") {
@@ -1999,6 +2206,10 @@ app.post("/api/vcf-canon-matches/:jobId/individual-interpretation", async (req, 
   const job = jobs.get(req.params.jobId);
   if (!job) {
     res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (downstreamBlockedForJob(job)) {
+    res.status(409).json({ error: "not yet supported for canon schema v2" });
     return;
   }
   if (job.status === "running") {
@@ -2109,6 +2320,10 @@ app.post("/api/vcf-canon-matches/:jobId/interpretation-normalization", async (re
     res.status(404).json({ error: "VCF-canon match job not found." });
     return;
   }
+  if (downstreamBlockedForJob(job)) {
+    res.status(409).json({ error: "not yet supported for canon schema v2" });
+    return;
+  }
   if (job.status === "running") {
     res.status(409).json({ error: "This job is already running." });
     return;
@@ -2206,6 +2421,10 @@ app.post("/api/vcf-canon-matches/:jobId/global-interpretation", async (req, res)
   const job = jobs.get(req.params.jobId);
   if (!job) {
     res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (downstreamBlockedForJob(job)) {
+    res.status(409).json({ error: "not yet supported for canon schema v2" });
     return;
   }
   if (job.status === "running") {
@@ -2316,6 +2535,10 @@ app.post("/api/vcf-canon-matches/:jobId/final-report", async (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job) {
     res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (downstreamBlockedForJob(job)) {
+    res.status(409).json({ error: "not yet supported for canon schema v2" });
     return;
   }
   if (job.status === "running") {

@@ -125,7 +125,11 @@ def notes(row: dict) -> str:
     return ""
 
 
-def build_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+def is_v2_match_row(row: dict) -> bool:
+    return "module_id" in row and "local_region_class" in row
+
+
+def build_rows_legacy(rows: list[dict]) -> tuple[list[dict], list[dict]]:
     minimal_rows = []
     audit_rows = []
 
@@ -163,6 +167,91 @@ def build_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
     return minimal_rows, audit_rows
 
 
+def interpretation_placeholder_v2(row: dict) -> str:
+    local_region_class = clean_str(row.get("local_region_class")) or "candidate"
+    gene = clean_str(row.get("approved_symbol")) or clean_str(row.get("gene_symbol_original")) or "this gene"
+    if as_bool(row.get("background_only")):
+        return f"Observed variant in {gene}; local classification is {local_region_class} and currently background-only."
+    return f"Observed variant in {gene}; local classification is {local_region_class} and may require downstream annotation."
+
+
+def review_status_v2(row: dict) -> str:
+    if as_bool(row.get("background_only")):
+        return "background_only"
+    annotation_needed = clean_str(row.get("annotation_needed"))
+    if annotation_needed == "true":
+        return "ready_for_annotation"
+    if annotation_needed == "optional":
+        return "optional_annotation"
+    return "local_review_only"
+
+
+def notes_v2(row: dict) -> str:
+    pieces = []
+    if clean_str(row.get("module_status")).lower() == "draft":
+        pieces.append("Draft module included with explicit flag.")
+    overlap = clean_str(row.get("overlap_feature_types"))
+    if overlap:
+        pieces.append(f"Matched via {overlap}.")
+    if as_bool(row.get("background_only")):
+        pieces.append("Kept for audit but classified as background-only.")
+    return " ".join(pieces)
+
+
+def build_rows_v2(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    minimal_rows = []
+    audit_rows = []
+
+    for row in rows:
+        minimal = {
+            "Gene": clean_str(row.get("approved_symbol")) or clean_str(row.get("gene_symbol_original")),
+            "Module ID": clean_str(row.get("module_id")),
+            "Module Name": clean_str(row.get("module_name")),
+            "System Within Module": clean_str(row.get("system_within_module")),
+            "Genotype": genotype_for_deliverable(row.get("gt_alleles")),
+            "Zygosity": clean_str(row.get("zygosity")) or "NA",
+            "Ref/Alt": ref_alt_for_deliverable(row),
+            "Local Region Class": clean_str(row.get("local_region_class")),
+            "Local Feature Priority": clean_str(row.get("local_feature_priority")),
+            "Interpretation (1 sentence)": interpretation_placeholder_v2(row),
+        }
+        audit = {
+            **minimal,
+            "Evidence Tier": clean_str(row.get("evidence_tier")),
+            "Module Status": clean_str(row.get("module_status")),
+            "Is Draft": clean_str(row.get("is_draft")) or "false",
+            "Annotation Needed": clean_str(row.get("annotation_needed")),
+            "Background Only": clean_str(row.get("background_only")),
+            "Review Status": review_status_v2(row),
+            "Notes": notes_v2(row),
+            "gene_id": clean_str(row.get("gene_id")),
+            "canon_row_id": clean_str(row.get("canon_row_id")),
+            "variant_start": clean_str(row.get("variant_start")),
+            "variant_end": clean_str(row.get("variant_end")),
+            "chrom_vcf": clean_str(row.get("chrom_vcf")),
+            "pos_vcf": clean_str(row.get("pos_vcf")),
+            "id_vcf": clean_str(row.get("id_vcf")),
+            "gt_raw": clean_str(row.get("gt_raw")),
+            "gt_alleles": clean_str(row.get("gt_alleles")),
+            "gene_envelope_match": clean_str(row.get("gene_envelope_match")),
+            "overlap_feature_types": clean_str(row.get("overlap_feature_types")),
+            "has_genotype": "true" if as_bool(row.get("has_genotype")) else "false",
+        }
+        minimal_rows.append(minimal)
+        audit_rows.append(audit)
+
+    minimal_rows = [row for row, source in zip(minimal_rows, rows, strict=False) if not as_bool(source.get("background_only"))]
+    return minimal_rows, audit_rows
+
+
+def build_rows(rows: list[dict]) -> tuple[list[dict], list[dict], str]:
+    if rows and is_v2_match_row(rows[0]):
+        minimal_rows, audit_rows = build_rows_v2(rows)
+        return minimal_rows, audit_rows, "gene_module_v2"
+    minimal_rows, audit_rows = build_rows_legacy(rows)
+    return minimal_rows, audit_rows, "legacy_rsid_canon"
+
+
 def process(input_path: Path, output_dir: Path) -> dict:
     started_at = utc_now()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -171,44 +260,79 @@ def process(input_path: Path, output_dir: Path) -> dict:
     if not source_rows:
         raise ValueError("sheet_final_consolidated.csv is empty.")
 
-    minimal_rows, audit_rows = build_rows(source_rows)
+    minimal_rows, audit_rows, schema_version = build_rows(source_rows)
     minimal_path = output_dir / "heal_fon_deliverable_presentation_min.csv"
     audit_path = output_dir / "heal_fon_deliverable_presentation_audit.csv"
 
-    minimal_fields = [
-        "Gene",
-        "SNP (rsID)",
-        "Genotype",
-        "Zygosity",
-        "Ref/Alt",
-        "Canon Effect",
-        "Interpretation (1 sentence)",
-        "Confidence Level",
-    ]
-    audit_fields = minimal_fields + [
-        "Category / Module",
-        "Review Status",
-        "Notes",
-        "row_id",
-        "source_group",
-        "match_status",
-        "gt_alleles",
-        "gt_raw",
-        "ref",
-        "alt",
-        "ref_vcf",
-        "alt_vcf",
-        "has_genotype",
-        "found_in_vcf_by_chr_pos",
-    ]
+    if schema_version == "gene_module_v2":
+        minimal_fields = [
+            "Gene",
+            "Module ID",
+            "Module Name",
+            "System Within Module",
+            "Genotype",
+            "Zygosity",
+            "Ref/Alt",
+            "Local Region Class",
+            "Local Feature Priority",
+            "Interpretation (1 sentence)",
+        ]
+        audit_fields = minimal_fields + [
+            "Evidence Tier",
+            "Module Status",
+            "Is Draft",
+            "Annotation Needed",
+            "Background Only",
+            "Review Status",
+            "Notes",
+            "gene_id",
+            "canon_row_id",
+            "variant_start",
+            "variant_end",
+            "chrom_vcf",
+            "pos_vcf",
+            "id_vcf",
+            "gt_raw",
+            "gt_alleles",
+            "gene_envelope_match",
+            "overlap_feature_types",
+            "has_genotype",
+        ]
+    else:
+        minimal_fields = [
+            "Gene",
+            "SNP (rsID)",
+            "Genotype",
+            "Zygosity",
+            "Ref/Alt",
+            "Canon Effect",
+            "Interpretation (1 sentence)",
+            "Confidence Level",
+        ]
+        audit_fields = minimal_fields + [
+            "Category / Module",
+            "Review Status",
+            "Notes",
+            "row_id",
+            "source_group",
+            "match_status",
+            "gt_alleles",
+            "gt_raw",
+            "ref",
+            "alt",
+            "ref_vcf",
+            "alt_vcf",
+            "has_genotype",
+            "found_in_vcf_by_chr_pos",
+        ]
 
     write_csv(minimal_path, minimal_rows, minimal_fields)
     write_csv(audit_path, audit_rows, audit_fields)
 
-    confidence_counts = Counter(row["Confidence Level"] for row in audit_rows)
+    confidence_counts = Counter(row.get("Confidence Level", "") for row in audit_rows if row.get("Confidence Level"))
     review_counts = Counter(row["Review Status"] for row in audit_rows)
-    match_counts = Counter(row["match_status"] for row in audit_rows)
-    source_counts = Counter(row["source_group"] for row in audit_rows)
+    match_counts = Counter(row.get("match_status", row.get("Local Region Class", "")) for row in audit_rows if row.get("match_status", row.get("Local Region Class", "")))
+    source_counts = Counter(row.get("source_group", row.get("Module Status", "")) for row in audit_rows if row.get("source_group", row.get("Module Status", "")))
 
     summary = {
         "status": "valid",
@@ -216,6 +340,7 @@ def process(input_path: Path, output_dir: Path) -> dict:
         "warnings": [],
         "inputPath": str(input_path),
         "outputDir": str(output_dir),
+        "schemaVersion": schema_version,
         "metadata": {
             "rows_total": len(source_rows),
             "rows_with_genotype": sum(1 for row in audit_rows if row["has_genotype"] == "true"),
