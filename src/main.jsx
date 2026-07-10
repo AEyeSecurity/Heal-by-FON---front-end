@@ -34,6 +34,8 @@ const BUSY_PHASES = [
   "preparing",
   "triaging",
   "enriching",
+  "grouping_preparation",
+  "grouped_individual_interpretation",
   "individual_interpretation",
   "interpretation_normalization",
   "global_interpretation",
@@ -45,7 +47,13 @@ function isBusyPhase(phase) {
 }
 
 function isLongPollingStage(stage) {
-  return ["individual_interpretation", "interpretation_normalization", "global_interpretation", "final_report"].includes(stage);
+  return [
+    "grouped_individual_interpretation",
+    "individual_interpretation",
+    "interpretation_normalization",
+    "global_interpretation",
+    "final_report",
+  ].includes(stage);
 }
 
 function readJobAccessTokens() {
@@ -133,6 +141,8 @@ const COPY = {
     preparationProgress: "Preparacion del match",
     aiTriageProgress: "Triage IA",
     enrichmentProgress: "Enriquecimiento externo",
+    groupingPreparationProgress: "Agrupacion gene+modulo",
+    groupedInterpretationProgress: "Interpretacion individual agrupada",
     individualInterpretationProgress: "Interpretacion individual",
     interpretationNormalizationProgress: "Normalizacion QA",
     globalInterpretationProgress: "Interpretacion global",
@@ -155,6 +165,11 @@ const COPY = {
     matching: "Matcheando VCF contra canon...",
     preparing: "Preparando CSVs de auditoria...",
     enriching: "Enriqueciendo variantes observadas...",
+    groupingPreparing: "Preparando payloads agrupados por gen y modulo...",
+    groupedInterpretationStarting: "Iniciando interpretacion individual agrupada...",
+    groupedInterpreting: "Interpretando grupos gen-modulo...",
+    groupedInterpretationComplete: "Interpretacion individual agrupada finalizada.",
+    groupedInterpretationFailed: "No se pudo completar la interpretacion individual agrupada.",
     enrichmentFailed: "No se pudo completar el enriquecimiento externo.",
     aiTriageFailed: "No se pudo completar el triage IA.",
     retryEnrichment: "Reintentar enriquecimiento",
@@ -220,6 +235,7 @@ const COPY = {
     preparationTitle: "Preparacion del match",
     aiTriageTitle: "Triage deterministico IA",
     enrichmentTitle: "Enriquecimiento de variantes observadas",
+    groupingPreparationTitle: "Preparacion de grupos gene+modulo",
     preparationRows: "Filas preparadas",
     preparationObserved: "Con genotipo observado",
     preparationHigh: "Confianza alta",
@@ -239,6 +255,19 @@ const COPY = {
     enrichmentSources: "Fuentes externas",
     enrichmentCacheHits: "Cache hits",
     enrichmentSourceErrors: "Errores de fuentes",
+    groupingPreparationGroups: "Grupos gene+modulo",
+    groupingPreparationVariants: "Variantes fuente",
+    groupingPreparationAverageSize: "Tamano promedio",
+    groupingPreparationLargeGroups: "Grupos >25 variantes",
+    groupedInterpretationTitle: "Interpretacion individual agrupada",
+    groupedInterpretationGroups: "Grupos interpretados",
+    groupedInterpretationSourceGroups: "Grupos fuente",
+    groupedInterpretationSourceVariants: "Variantes agrupadas",
+    groupedInterpretationAverageSize: "Tamano promedio",
+    groupedInterpretationConflictGroups: "Grupos con conflicto",
+    groupedInterpretationReviewGroups: "Grupos con review",
+    groupedInterpretationErrors: "Grupos con error",
+    groupedInterpretationModel: "Modelo LLM1 agrupado",
     individualInterpretationTitle: "Interpretacion individual",
     individualInterpretationRows: "Filas interpretadas",
     individualInterpretationSourceRows: "Filas fuente LLM1",
@@ -313,6 +342,11 @@ const COPY = {
     enrichmentDownload: "Descargar CSV interpretativo",
     enrichmentPlusDownload: "Descargar CSV Enrichment Plus",
     enrichmentQaDownload: "Descargar CSV tecnico QA",
+    groupingPayloadsDownload: "Descargar payloads agrupados",
+    groupingVariantDetailDownload: "Descargar detalle por variante",
+    groupingSummaryDownload: "Descargar resumen de grupos",
+    groupedInterpretationDownload: "Descargar interpretacion agrupada",
+    groupedInterpretationSummaryDownload: "Descargar resumen interpretacion agrupada",
     individualInterpretationDownload: "Descargar CSV interpretacion individual",
     interpretationNormalizationDownload: "Descargar CSV normalizado",
     globalInterpretationDownload: "Descargar interpretacion global JSON",
@@ -371,6 +405,8 @@ const COPY = {
     preparationProgress: "Match preparation",
     aiTriageProgress: "AI triage",
     enrichmentProgress: "External enrichment",
+    groupingPreparationProgress: "Gene+module grouping",
+    groupedInterpretationProgress: "Grouped individual interpretation",
     individualInterpretationProgress: "Individual interpretation",
     interpretationNormalizationProgress: "QA normalization",
     globalInterpretationProgress: "Global interpretation",
@@ -393,6 +429,11 @@ const COPY = {
     matching: "Matching VCF against canon...",
     preparing: "Preparing audit CSVs...",
     enriching: "Enriching observed variants...",
+    groupingPreparing: "Preparing grouped gene-module payloads...",
+    groupedInterpretationStarting: "Starting grouped individual interpretation...",
+    groupedInterpreting: "Interpreting gene-module groups...",
+    groupedInterpretationComplete: "Grouped individual interpretation finished.",
+    groupedInterpretationFailed: "Could not complete grouped individual interpretation.",
     enrichmentFailed: "Could not complete external enrichment.",
     aiTriageFailed: "Could not complete AI triage.",
     retryEnrichment: "Retry enrichment",
@@ -458,6 +499,7 @@ const COPY = {
     preparationTitle: "Match preparation",
     aiTriageTitle: "Deterministic AI triage",
     enrichmentTitle: "Observed variant enrichment",
+    groupingPreparationTitle: "Gene+module group preparation",
     preparationRows: "Prepared rows",
     preparationObserved: "Observed genotypes",
     preparationHigh: "High confidence",
@@ -477,6 +519,19 @@ const COPY = {
     enrichmentSources: "External sources",
     enrichmentCacheHits: "Cache hits",
     enrichmentSourceErrors: "Source errors",
+    groupingPreparationGroups: "Gene+module groups",
+    groupingPreparationVariants: "Source variants",
+    groupingPreparationAverageSize: "Average size",
+    groupingPreparationLargeGroups: "Groups >25 variants",
+    groupedInterpretationTitle: "Grouped individual interpretation",
+    groupedInterpretationGroups: "Interpreted groups",
+    groupedInterpretationSourceGroups: "Source groups",
+    groupedInterpretationSourceVariants: "Grouped source variants",
+    groupedInterpretationAverageSize: "Average size",
+    groupedInterpretationConflictGroups: "Conflict groups",
+    groupedInterpretationReviewGroups: "Review groups",
+    groupedInterpretationErrors: "Groups with errors",
+    groupedInterpretationModel: "Grouped LLM1 model",
     individualInterpretationTitle: "Individual interpretation",
     individualInterpretationRows: "Interpreted rows",
     individualInterpretationSourceRows: "LLM1 source rows",
@@ -551,6 +606,11 @@ const COPY = {
     enrichmentDownload: "Download interpretive CSV",
     enrichmentPlusDownload: "Download Enrichment Plus CSV",
     enrichmentQaDownload: "Download technical QA CSV",
+    groupingPayloadsDownload: "Download grouped payloads",
+    groupingVariantDetailDownload: "Download grouped variant detail",
+    groupingSummaryDownload: "Download grouped summary",
+    groupedInterpretationDownload: "Download grouped interpretation CSV",
+    groupedInterpretationSummaryDownload: "Download grouped interpretation summary",
     individualInterpretationDownload: "Download individual interpretation CSV",
     interpretationNormalizationDownload: "Download normalized CSV",
     globalInterpretationDownload: "Download global interpretation JSON",
@@ -1332,6 +1392,8 @@ function MatchResultPanel({ result, locale, t }) {
   const confidenceCounts = preparation.confidence_level_counts || {};
   const preparationReviewCounts = preparation.review_status_counts || {};
   const enrichment = result.variantEnrichment?.metadata || {};
+  const groupingPreparation = result.groupPrep?.metadata || {};
+  const groupedInterpretation = result.groupedIndividualInterpretation?.metadata || {};
   const individualInterpretation = result.individualInterpretation?.metadata || {};
   const interpretationNormalization = result.interpretationNormalization?.metadata || {};
   const globalInterpretation = result.globalInterpretation?.metadata || {};
@@ -1401,6 +1463,26 @@ function MatchResultPanel({ result, locale, t }) {
         [t.enrichmentSources, formatNumber(enrichment.sources?.length || 0, locale)],
         [t.enrichmentCacheHits, formatNumber(enrichment.cache_hits, locale)],
         [t.enrichmentSourceErrors, formatNumber(enrichmentSourceErrors, locale)],
+      ]
+    : [];
+  const groupingPreparationCards = result.groupPrep
+    ? [
+        [t.groupingPreparationGroups, formatNumber(groupingPreparation.total_groups, locale)],
+        [t.groupingPreparationVariants, formatNumber(groupingPreparation.source_variants_total, locale)],
+        [t.groupingPreparationAverageSize, formatNumber(groupingPreparation.average_group_size, locale)],
+        [t.groupingPreparationLargeGroups, formatNumber(groupingPreparation.groups_gt_25, locale)],
+      ]
+    : [];
+  const groupedInterpretationCards = result.groupedIndividualInterpretation
+    ? [
+        [t.groupedInterpretationSourceGroups, formatNumber(groupedInterpretation.source_groups, locale)],
+        [t.groupedInterpretationGroups, formatNumber(groupedInterpretation.interpreted_groups, locale)],
+        [t.groupedInterpretationSourceVariants, formatNumber(groupedInterpretation.source_variants_total, locale)],
+        [t.groupedInterpretationAverageSize, formatNumber(groupedInterpretation.average_group_size, locale)],
+        [t.groupedInterpretationConflictGroups, formatNumber(groupedInterpretation.groups_with_conflict_flag, locale)],
+        [t.groupedInterpretationReviewGroups, formatNumber(groupedInterpretation.groups_requires_review, locale)],
+        [t.groupedInterpretationErrors, formatNumber(groupedInterpretation.error_groups, locale)],
+        [t.groupedInterpretationModel, groupedInterpretation.model || "-"],
       ]
     : [];
   const individualInterpretationCards = result.individualInterpretation
@@ -1540,6 +1622,35 @@ function MatchResultPanel({ result, locale, t }) {
     );
   }
 
+  async function downloadGroupedPayloads() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/grouped-payloads`, "gene_module_group_payloads.csv");
+  }
+
+  async function downloadGroupedVariantDetail() {
+    await downloadCsv(
+      `/api/vcf-canon-matches/${result.jobId}/grouped-variant-detail`,
+      "gene_module_group_variant_detail.csv",
+    );
+  }
+
+  async function downloadGroupedSummary() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/grouped-summary`, "gene_module_grouping_summary.json");
+  }
+
+  async function downloadGroupedInterpretations() {
+    await downloadCsv(
+      `/api/vcf-canon-matches/${result.jobId}/grouped-interpretations`,
+      "gene_module_group_interpretations.csv",
+    );
+  }
+
+  async function downloadGroupedInterpretationSummary() {
+    await downloadCsv(
+      `/api/vcf-canon-matches/${result.jobId}/grouped-interpretation-summary`,
+      "gene_module_group_interpretation_summary.json",
+    );
+  }
+
   async function downloadEnrichmentQa() {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/enrichment`, "heal-observed-variant-enrichment.csv");
   }
@@ -1635,6 +1746,26 @@ function MatchResultPanel({ result, locale, t }) {
           </div>
         </>
       )}
+      {groupingPreparationCards.length > 0 && (
+        <>
+          <h3 className="result-subtitle">{t.groupingPreparationTitle}</h3>
+          <div className="metrics-grid">
+            {groupingPreparationCards.map(([label, value]) => (
+              <MetricCard label={label} value={value} key={label} />
+            ))}
+          </div>
+        </>
+      )}
+      {groupedInterpretationCards.length > 0 && (
+        <>
+          <h3 className="result-subtitle">{t.groupedInterpretationTitle}</h3>
+          <div className="metrics-grid">
+            {groupedInterpretationCards.map(([label, value]) => (
+              <MetricCard label={label} value={value} key={label} />
+            ))}
+          </div>
+        </>
+      )}
       {individualInterpretationCards.length > 0 && (
         <>
           <h3 className="result-subtitle">{t.individualInterpretationTitle}</h3>
@@ -1704,17 +1835,37 @@ function MatchResultPanel({ result, locale, t }) {
           <Download size={17} />
           {t.aiTriageSummaryDownload}
         </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadEnrichment}>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.variantEnrichment} onClick={downloadEnrichment}>
           <Download size={17} />
           {t.enrichmentDownload}
         </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadEnrichmentPlus}>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.variantEnrichment} onClick={downloadEnrichmentPlus}>
           <Download size={17} />
           {t.enrichmentPlusDownload}
         </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadEnrichmentQa}>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.variantEnrichment} onClick={downloadEnrichmentQa}>
           <Download size={17} />
           {t.enrichmentQaDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.groupPrep} onClick={downloadGroupedPayloads}>
+          <Download size={17} />
+          {t.groupingPayloadsDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.groupPrep} onClick={downloadGroupedVariantDetail}>
+          <Download size={17} />
+          {t.groupingVariantDetailDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.groupPrep} onClick={downloadGroupedSummary}>
+          <Download size={17} />
+          {t.groupingSummaryDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.groupedIndividualInterpretation} onClick={downloadGroupedInterpretations}>
+          <Download size={17} />
+          {t.groupedInterpretationDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.groupedIndividualInterpretation} onClick={downloadGroupedInterpretationSummary}>
+          <Download size={17} />
+          {t.groupedInterpretationSummaryDownload}
         </button>
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadIndividualInterpretations}>
           <Download size={17} />
@@ -1801,6 +1952,8 @@ function App() {
   const [preparationProgress, setPreparationProgress] = useState(0);
   const [aiTriageProgress, setAiTriageProgress] = useState(0);
   const [enrichmentProgress, setEnrichmentProgress] = useState(0);
+  const [groupingPreparationProgress, setGroupingPreparationProgress] = useState(0);
+  const [groupedInterpretationProgress, setGroupedInterpretationProgress] = useState(0);
   const [individualInterpretationProgress, setIndividualInterpretationProgress] = useState(0);
   const [interpretationNormalizationProgress, setInterpretationNormalizationProgress] = useState(0);
   const [globalInterpretationProgress, setGlobalInterpretationProgress] = useState(0);
@@ -1823,6 +1976,9 @@ function App() {
     enrichment: false,
     enrichmentInterpretive: false,
     enrichmentPlus: false,
+    groupedPayloads: false,
+    groupedVariantDetail: false,
+    groupedInterpretation: false,
     individualInterpretation: false,
     interpretationNormalization: false,
     globalInterpretation: false,
@@ -1871,6 +2027,8 @@ function App() {
     setPreparationProgress(0);
     setAiTriageProgress(0);
     setEnrichmentProgress(0);
+    setGroupingPreparationProgress(0);
+    setGroupedInterpretationProgress(0);
     setIndividualInterpretationProgress(0);
     setInterpretationNormalizationProgress(0);
     setGlobalInterpretationProgress(0);
@@ -1885,6 +2043,9 @@ function App() {
       enrichment: false,
       enrichmentInterpretive: false,
       enrichmentPlus: false,
+      groupedPayloads: false,
+      groupedVariantDetail: false,
+      groupedInterpretation: false,
       individualInterpretation: false,
       interpretationNormalization: false,
       globalInterpretation: false,
@@ -1999,6 +2160,31 @@ function App() {
         await downloadCsv(
           `/api/vcf-canon-matches/${matchResult.jobId}/enrichment-plus`,
           "heal-fon-interpretation-enrichment-plus.csv",
+        );
+      } else if (kind === "groupedPayloads") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/grouped-payloads`,
+          "gene_module_group_payloads.csv",
+        );
+      } else if (kind === "groupedVariantDetail") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/grouped-variant-detail`,
+          "gene_module_group_variant_detail.csv",
+        );
+      } else if (kind === "groupedSummary") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/grouped-summary`,
+          "gene_module_grouping_summary.json",
+        );
+      } else if (kind === "groupedInterpretation") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/grouped-interpretations`,
+          "gene_module_group_interpretations.csv",
+        );
+      } else if (kind === "groupedInterpretationSummary") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/grouped-interpretation-summary`,
+          "gene_module_group_interpretation_summary.json",
         );
       } else if (kind === "individualInterpretation") {
         await downloadCsv(
@@ -2133,6 +2319,9 @@ function App() {
       enrichment: Boolean(ready.enrichment),
       enrichmentInterpretive: Boolean(ready.enrichmentInterpretive),
       enrichmentPlus: Boolean(ready.enrichmentPlus),
+      groupedPayloads: Boolean(ready.groupedPayloads),
+      groupedVariantDetail: Boolean(ready.groupedVariantDetail),
+      groupedInterpretation: Boolean(ready.groupedInterpretation),
       individualInterpretation: Boolean(ready.individualInterpretation),
       interpretationNormalization: Boolean(ready.interpretationNormalization),
       globalInterpretation: Boolean(ready.globalInterpretation),
@@ -2150,6 +2339,9 @@ function App() {
       ready.enrichment ||
       ready.enrichmentInterpretive ||
       ready.enrichmentPlus ||
+      ready.groupedPayloads ||
+      ready.groupedVariantDetail ||
+      ready.groupedInterpretation ||
       ready.individualInterpretation ||
       ready.interpretationNormalization ||
       ready.globalInterpretation ||
@@ -2208,12 +2400,31 @@ function App() {
         setAiTriageProgress(100);
         setEnrichmentProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.enriching);
+      } else if (job.stage === "grouping_preparation") {
+        setPhase("grouping_preparation");
+        setMatchProgress(100);
+        setPreparationProgress(100);
+        setAiTriageProgress(100);
+        setEnrichmentProgress(100);
+        setGroupingPreparationProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.groupingPreparing);
+      } else if (job.stage === "grouped_individual_interpretation") {
+        setPhase("grouped_individual_interpretation");
+        setMatchProgress(100);
+        setPreparationProgress(100);
+        setAiTriageProgress(100);
+        setEnrichmentProgress(100);
+        setGroupingPreparationProgress(100);
+        setGroupedInterpretationProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.groupedInterpreting);
       } else if (job.stage === "individual_interpretation") {
         setPhase("individual_interpretation");
         setMatchProgress(100);
         setPreparationProgress(100);
         setAiTriageProgress(100);
         setEnrichmentProgress(100);
+        setGroupingPreparationProgress(100);
+        setGroupedInterpretationProgress(100);
         setIndividualInterpretationProgress(job.stageProgress ?? job.progress ?? 0);
         setIndividualInterpretationDetail(job.message || "");
         setCustomMessage(t.individualInterpreting);
@@ -2223,6 +2434,8 @@ function App() {
         setPreparationProgress(100);
         setAiTriageProgress(100);
         setEnrichmentProgress(100);
+        setGroupingPreparationProgress(100);
+        setGroupedInterpretationProgress(100);
         setIndividualInterpretationProgress(100);
         setIndividualInterpretationDetail("");
         setInterpretationNormalizationProgress(job.stageProgress ?? job.progress ?? 0);
@@ -2233,6 +2446,8 @@ function App() {
         setPreparationProgress(100);
         setAiTriageProgress(100);
         setEnrichmentProgress(100);
+        setGroupingPreparationProgress(100);
+        setGroupedInterpretationProgress(100);
         setIndividualInterpretationProgress(100);
         setIndividualInterpretationDetail("");
         setInterpretationNormalizationProgress(100);
@@ -2244,6 +2459,8 @@ function App() {
         setPreparationProgress(100);
         setAiTriageProgress(100);
         setEnrichmentProgress(100);
+        setGroupingPreparationProgress(100);
+        setGroupedInterpretationProgress(100);
         setIndividualInterpretationProgress(100);
         setIndividualInterpretationDetail("");
         setInterpretationNormalizationProgress(100);
@@ -2261,8 +2478,14 @@ function App() {
         if (job.artifactsReady?.aiTriage || job.result?.aiTriage) {
           setAiTriageProgress(100);
         }
-        if (job.result?.metadata?.downstream_supported !== false && (job.artifactsReady?.enrichment || job.result?.variantEnrichment)) {
+        if (job.artifactsReady?.enrichment || job.result?.variantEnrichment) {
           setEnrichmentProgress(100);
+        }
+        if (job.artifactsReady?.groupedPayloads || job.result?.groupPrep) {
+          setGroupingPreparationProgress(100);
+        }
+        if (job.artifactsReady?.groupedInterpretation || job.result?.groupedIndividualInterpretation) {
+          setGroupedInterpretationProgress(100);
         }
         if (job.artifactsReady?.individualInterpretation || job.result?.individualInterpretation) {
           setIndividualInterpretationProgress(100);
@@ -2289,6 +2512,10 @@ function App() {
                 ? t.globalInterpretationFailed
               : job.stage === "final_report"
                 ? t.finalReportFailed
+              : job.stage === "grouped_individual_interpretation"
+                ? t.groupedInterpretationFailed
+              : job.stage === "grouping_preparation"
+                ? t.groupedInterpretationFailed
               : job.stage === "triaging"
                 ? t.aiTriageFailed
               : job.stage === "individual_interpretation"
@@ -2334,6 +2561,8 @@ function App() {
           setPreparationProgress(0);
           setAiTriageProgress(0);
           setEnrichmentProgress(0);
+          setGroupingPreparationProgress(0);
+          setGroupedInterpretationProgress(0);
           setIndividualInterpretationProgress(0);
           setInterpretationNormalizationProgress(0);
           setGlobalInterpretationProgress(0);
@@ -2347,6 +2576,9 @@ function App() {
             enrichment: false,
             enrichmentInterpretive: false,
             enrichmentPlus: false,
+            groupedPayloads: false,
+            groupedVariantDetail: false,
+            groupedInterpretation: false,
             individualInterpretation: false,
             interpretationNormalization: false,
             globalInterpretation: false,
@@ -2405,6 +2637,8 @@ function App() {
     setPreparationProgress(0);
     setAiTriageProgress(0);
     setEnrichmentProgress(0);
+    setGroupingPreparationProgress(0);
+    setGroupedInterpretationProgress(0);
     setIndividualInterpretationProgress(0);
     setInterpretationNormalizationProgress(0);
     setGlobalInterpretationProgress(0);
@@ -2421,15 +2655,27 @@ function App() {
     setMatchResult(nextMatchResult);
     setPhase("done");
     const downstreamSupported = nextMatchResult?.metadata?.downstream_supported !== false;
-    setMessageKey(downstreamSupported ? "enrichmentComplete" : "aiTriageComplete");
+    setMessageKey(
+      downstreamSupported
+        ? "enrichmentComplete"
+        : nextMatchResult?.groupedIndividualInterpretation
+          ? "groupedInterpretationComplete"
+          : "aiTriageComplete",
+    );
     setCustomMessage("");
     setMatchProgress(100);
     setPreparationProgress(100);
     if (nextMatchResult?.artifactsReady?.aiTriage || nextMatchResult?.aiTriage) {
       setAiTriageProgress(100);
     }
-    if (downstreamSupported && (nextMatchResult?.artifactsReady?.enrichment || nextMatchResult?.variantEnrichment)) {
+    if (nextMatchResult?.artifactsReady?.enrichment || nextMatchResult?.variantEnrichment) {
       setEnrichmentProgress(100);
+    }
+    if (nextMatchResult?.artifactsReady?.groupedPayloads || nextMatchResult?.groupPrep) {
+      setGroupingPreparationProgress(100);
+    }
+    if (nextMatchResult?.artifactsReady?.groupedInterpretation || nextMatchResult?.groupedIndividualInterpretation) {
+      setGroupedInterpretationProgress(100);
     }
     return nextMatchResult;
   }
@@ -2678,6 +2924,8 @@ function App() {
         setError(t.enrichmentFailed);
         setErrorDialog(true);
         setRetryEnrichmentJobId(caught.jobId || matchResult?.jobId || null);
+      } else if (caught.stage === "grouped_individual_interpretation" || caught.stage === "grouping_preparation") {
+        setError(t.groupedInterpretationFailed);
       } else if (caught.stage === "individual_interpretation") {
         setError(t.individualInterpretationFailed);
       } else {
@@ -2768,6 +3016,9 @@ function App() {
       enrichment: false,
       enrichmentInterpretive: false,
       enrichmentPlus: false,
+      groupedPayloads: false,
+      groupedVariantDetail: false,
+      groupedInterpretation: false,
       individualInterpretation: false,
       interpretationNormalization: false,
       globalInterpretation: false,
@@ -2782,6 +3033,8 @@ function App() {
     setPreparationProgress(0);
     setAiTriageProgress(0);
     setEnrichmentProgress(0);
+    setGroupingPreparationProgress(0);
+    setGroupedInterpretationProgress(0);
     setIndividualInterpretationProgress(0);
     setInterpretationNormalizationProgress(0);
     setGlobalInterpretationProgress(0);
@@ -3036,6 +3289,22 @@ function App() {
             result.status === "invalid" ||
             isBusyPhase(phase)
           }
+        />
+        <ProgressBar
+          label={t.groupingPreparationProgress}
+          value={groupingPreparationProgress}
+          tone="blue"
+          downloadLabel={t.groupingPayloadsDownload}
+          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("groupedPayloads") : null}
+          downloadReady={matchArtifactsReady.groupedPayloads}
+        />
+        <ProgressBar
+          label={t.groupedInterpretationProgress}
+          value={groupedInterpretationProgress}
+          tone="blue"
+          downloadLabel={t.groupedInterpretationDownload}
+          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("groupedInterpretation") : null}
+          downloadReady={matchArtifactsReady.groupedInterpretation}
         />
         <ProgressBar
           label={t.individualInterpretationProgress}

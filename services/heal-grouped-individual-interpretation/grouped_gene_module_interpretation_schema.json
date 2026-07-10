@@ -1,0 +1,90 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "group_id",
+    "gene",
+    "module_id",
+    "module_name",
+    "system_within_module",
+    "group_size_total",
+    "focus_variant_count",
+    "interpretation_scope",
+    "interpretation_one_sentence_en",
+    "interpretation_one_sentence_es",
+    "interpretation_long_en",
+    "interpretation_long_es",
+    "technical_interpretation_en",
+    "technical_interpretation_es",
+    "final_confidence_level",
+    "confidence_rationale_en",
+    "confidence_rationale_es",
+    "family_notes_en",
+    "family_notes_es",
+    "recommended_next_review_step_en",
+    "recommended_next_review_step_es",
+    "requires_professional_review",
+    "group_conflict_flag",
+    "focus_variant_refs",
+    "evidence_used",
+    "evidence_limitations"
+  ],
+  "properties": {
+    "group_id": { "type": "string" },
+    "gene": { "type": "string" },
+    "module_id": { "type": "string" },
+    "module_name": { "type": "string" },
+    "system_within_module": { "type": "string" },
+    "group_size_total": { "type": "integer" },
+    "focus_variant_count": { "type": "integer" },
+    "interpretation_scope": {
+      "type": "string",
+      "enum": [
+        "coding_signal_dominant",
+        "mixed_signal_with_priority_variants",
+        "utr_contextual_signal",
+        "conflicting_group_review_needed",
+        "limited_group_signal"
+      ]
+    },
+    "interpretation_one_sentence_en": { "type": "string" },
+    "interpretation_one_sentence_es": { "type": "string" },
+    "interpretation_long_en": { "type": "string" },
+    "interpretation_long_es": { "type": "string" },
+    "technical_interpretation_en": { "type": "string" },
+    "technical_interpretation_es": { "type": "string" },
+    "final_confidence_level": {
+      "type": "string",
+      "enum": ["High", "Moderate", "Low", "Conflicting"]
+    },
+    "confidence_rationale_en": { "type": "string" },
+    "confidence_rationale_es": { "type": "string" },
+    "family_notes_en": { "type": "string" },
+    "family_notes_es": { "type": "string" },
+    "recommended_next_review_step_en": { "type": "string" },
+    "recommended_next_review_step_es": { "type": "string" },
+    "requires_professional_review": { "type": "boolean" },
+    "group_conflict_flag": { "type": "boolean" },
+    "focus_variant_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "evidence_used": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "field", "value"],
+        "properties": {
+          "source": { "type": "string" },
+          "field": { "type": "string" },
+          "value": { "type": "string" }
+        }
+      }
+    },
+    "evidence_limitations": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

@@ -34,6 +34,12 @@ const AI_TRIAGE_ROOT =
 const VARIANT_ENRICHMENT_ROOT =
   process.env.HEAL_VARIANT_ENRICHMENT_ROOT ||
   "C:\\ServerCIT\\services\\heal-variant-enrichment";
+const GROUPED_INTERPRETATION_PREP_ROOT =
+  process.env.HEAL_GROUPED_INTERPRETATION_PREP_ROOT ||
+  "C:\\ServerCIT\\services\\heal-grouped-interpretation-prep";
+const GROUPED_INDIVIDUAL_INTERPRETATION_ROOT =
+  process.env.HEAL_GROUPED_INDIVIDUAL_INTERPRETATION_ROOT ||
+  "C:\\ServerCIT\\services\\heal-grouped-individual-interpretation";
 const INDIVIDUAL_INTERPRETATION_ROOT =
   process.env.HEAL_INDIVIDUAL_INTERPRETATION_ROOT ||
   "C:\\ServerCIT\\services\\heal-individual-interpretation";
@@ -219,6 +225,22 @@ function variantEnrichmentPaths() {
 
 function aiTriagePaths() {
   const root = path.resolve(AI_TRIAGE_ROOT);
+  return {
+    root,
+    runs: path.join(root, "runs"),
+  };
+}
+
+function groupedInterpretationPrepPaths() {
+  const root = path.resolve(GROUPED_INTERPRETATION_PREP_ROOT);
+  return {
+    root,
+    runs: path.join(root, "runs"),
+  };
+}
+
+function groupedIndividualInterpretationPaths() {
+  const root = path.resolve(GROUPED_INDIVIDUAL_INTERPRETATION_ROOT);
   return {
     root,
     runs: path.join(root, "runs"),
@@ -492,6 +514,22 @@ function sanitizeAiTriageResult(result) {
   return publicResult;
 }
 
+function sanitizeGroupedInterpretationPrepResult(result) {
+  const publicResult = JSON.parse(JSON.stringify(result || {}));
+  delete publicResult.inputPath;
+  delete publicResult.outputDir;
+  delete publicResult.outputs;
+  return publicResult;
+}
+
+function sanitizeGroupedIndividualInterpretationResult(result) {
+  const publicResult = JSON.parse(JSON.stringify(result || {}));
+  delete publicResult.inputPath;
+  delete publicResult.outputDir;
+  delete publicResult.outputs;
+  return publicResult;
+}
+
 function sanitizeIndividualInterpretationResult(result) {
   const publicResult = JSON.parse(JSON.stringify(result || {}));
   delete publicResult.inputPath;
@@ -540,6 +578,9 @@ function publicArtifactsReady(job) {
     enrichment: Boolean(artifacts.observedVariantEnrichmentCsv),
     enrichmentInterpretive: Boolean(artifacts.observedVariantInterpretiveCsv),
     enrichmentPlus: Boolean(artifacts.observedVariantEnrichmentPlusCsv),
+    groupedPayloads: Boolean(artifacts.groupPayloadsCsv || artifacts.groupPayloadsJsonl),
+    groupedVariantDetail: Boolean(artifacts.groupVariantDetailCsv),
+    groupedInterpretation: Boolean(artifacts.groupInterpretationsCsv),
     individualInterpretation: Boolean(artifacts.individualVariantInterpretationsCsv),
     interpretationNormalization: Boolean(artifacts.individualVariantInterpretationsNormalizedCsv),
     globalInterpretation: Boolean(artifacts.globalInterpretationJson || artifacts.globalInterpretationSectionsCsv),
@@ -859,6 +900,24 @@ async function updateIndividualInterpretationJobProgress(payload, job, { final =
   await persistVcfCanonJob(job);
 }
 
+async function updateGroupedIndividualInterpretationJobProgress(payload, job, { final = false } = {}) {
+  const progressPath = path.join(payload.outputDir, "gene_module_group_interpretation_progress.json");
+  const raw = await readFile(progressPath, "utf8").catch(() => null);
+  if (!raw) return;
+  const progress = JSON.parse(raw);
+  const totalGroups = Number(progress.totalGroups || 0);
+  const completedGroups = Number(progress.completedGroups || 0);
+  const percent = totalGroups > 0 ? Math.round((completedGroups / totalGroups) * 100) : 8;
+  job.stage = "grouped_individual_interpretation";
+  job.stageProgress = final ? Math.min(100, Math.max(8, percent)) : Math.min(98, Math.max(8, percent));
+  job.message =
+    totalGroups > 0
+      ? `Interpreting grouped gene-module payloads (${completedGroups}/${totalGroups})`
+      : "Interpreting grouped gene-module payloads";
+  job.updatedAt = new Date().toISOString();
+  await persistVcfCanonJob(job);
+}
+
 function runIndividualInterpretationScript(payload, job) {
   return new Promise((resolve, reject) => {
     const scriptPath = path.join(INDIVIDUAL_INTERPRETATION_ROOT, "interpret_observed_variants.py");
@@ -911,6 +970,58 @@ function runIndividualInterpretationScript(payload, job) {
   });
 }
 
+function runGroupedIndividualInterpretationScript(payload, job) {
+  return new Promise((resolve, reject) => {
+    const scriptPath = path.join(GROUPED_INDIVIDUAL_INTERPRETATION_ROOT, "interpret_gene_module_groups.py");
+    const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
+    const child = spawn(PYTHON_EXE, [scriptPath, "--input-json-base64", encoded], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let progressUpdating = false;
+    const progressTimer = setInterval(() => {
+      if (progressUpdating) return;
+      progressUpdating = true;
+      updateGroupedIndividualInterpretationJobProgress(payload, job)
+        .catch(() => {})
+        .finally(() => {
+          progressUpdating = false;
+        });
+    }, 2500);
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (error) => {
+      clearInterval(progressTimer);
+      reject(error);
+    });
+    child.on("close", async (code) => {
+      clearInterval(progressTimer);
+      await updateGroupedIndividualInterpretationJobProgress(payload, job, { final: true }).catch(() => {});
+      const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+      const lastLine = lines[lines.length - 1] || "{}";
+      let result;
+      try {
+        result = JSON.parse(lastLine);
+      } catch (error) {
+        reject(new Error(`Grouped interpretation returned invalid JSON. ${stderr || error.message}`));
+        return;
+      }
+      if (code !== 0 && result.status !== "warning") {
+        reject(new Error(result.errors?.[0] || stderr || `Grouped interpretation exited with code ${code}.`));
+        return;
+      }
+      resolve(result);
+    });
+  });
+}
+
 async function processRsidResolution(payload) {
   return (
     (await postWorkflowForSummary(N8N_RSID_RESOLUTION_WEBHOOK_URL, payload, "n8n rsID resolution")) ||
@@ -941,6 +1052,17 @@ async function processVariantEnrichment(payload) {
     (await postWorkflowForSummary(N8N_VARIANT_ENRICHMENT_WEBHOOK_URL, payload, "n8n variant enrichment")) ||
     (await runBase64JsonScript(path.join(VARIANT_ENRICHMENT_ROOT, "enrich_observed_variants.py"), payload))
   );
+}
+
+async function processGroupedInterpretationPrep(payload) {
+  return await runBase64JsonScript(
+    path.join(GROUPED_INTERPRETATION_PREP_ROOT, "prepare_gene_module_group_payloads.py"),
+    payload,
+  );
+}
+
+async function processGroupedIndividualInterpretation(payload, job) {
+  return await runGroupedIndividualInterpretationScript(payload, job);
 }
 
 async function processIndividualInterpretation(payload, job) {
@@ -1012,6 +1134,27 @@ async function processIndividualInterpretationWithRetry(payload, job, attempts =
     }
   }
   throw new Error(`Individual interpretation failed after ${attempts} attempts: ${errors.join(" | ")}`);
+}
+
+async function processGroupedIndividualInterpretationWithRetry(payload, job, attempts = 2) {
+  const errors = [];
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      job.stage = "grouped_individual_interpretation";
+      job.stageProgress = Math.max(job.stageProgress || 8, attempt === 1 ? 8 : 16);
+      job.message =
+        attempt === 1
+          ? "Interpreting grouped gene-module payloads"
+          : `Retrying grouped interpretation (${attempt}/${attempts})`;
+      job.updatedAt = new Date().toISOString();
+      return await processGroupedIndividualInterpretation(payload, job);
+    } catch (error) {
+      errors.push(error.message || String(error));
+      if (attempt >= attempts) break;
+      await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+    }
+  }
+  throw new Error(`Grouped interpretation failed after ${attempts} attempts: ${errors.join(" | ")}`);
 }
 
 async function loadCurrentCanon() {
@@ -1148,7 +1291,7 @@ function downstreamBlockedForJob(job) {
 function downstreamBlockedMessage(job) {
   return (
     job?.result?.metadata?.downstream_message ||
-    "Downstream interpretation is blocked for this canon schema. Supported handoff is ai_triage."
+    "Downstream interpretation is blocked for this canon schema. Supported handoff is grouped_individual_interpretation."
   );
 }
 
@@ -1160,6 +1303,8 @@ function shouldPersistVcfCanonJob(job) {
         "preparing",
         "triaging",
         "enriching",
+        "grouping_preparation",
+        "grouped_individual_interpretation",
         "individual_interpretation",
         "interpretation_normalization",
         "global_interpretation",
@@ -1258,6 +1403,8 @@ app.get("/api/health", (_req, res) => {
     matchPreparationRoot: MATCH_PREPARATION_ROOT,
     aiTriageRoot: AI_TRIAGE_ROOT,
     variantEnrichmentRoot: VARIANT_ENRICHMENT_ROOT,
+    groupedInterpretationPrepRoot: GROUPED_INTERPRETATION_PREP_ROOT,
+    groupedIndividualInterpretationRoot: GROUPED_INDIVIDUAL_INTERPRETATION_ROOT,
     individualInterpretationRoot: INDIVIDUAL_INTERPRETATION_ROOT,
     interpretationNormalizationRoot: INTERPRETATION_NORMALIZATION_ROOT,
     globalInterpretationRoot: GLOBAL_INTERPRETATION_ROOT,
@@ -2176,20 +2323,129 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         job.artifacts.aiTriageCsv = aiTriageSummary.outputs?.aiTriageCsv || "";
         job.artifacts.aiTriageExcludedAuditCsv = aiTriageSummary.outputs?.aiTriageExcludedAuditCsv || "";
         job.artifacts.aiTriageSummaryJson = aiTriageSummary.outputs?.aiTriageSummaryJson || "";
-        job.status = "complete";
-        job.progress = 100;
-        job.stage = "triaging";
-        job.stageProgress = 100;
-        job.message = "Gene-module canon v2 triage completed";
         job.result = {
           ...job.result,
           aiTriage: sanitizeAiTriageResult(aiTriageSummary),
+        };
+
+        job.progress = 90;
+        job.stage = "enriching";
+        job.stageProgress = 12;
+        job.message = "Enriching AI-triaged gene-module variants";
+        job.updatedAt = new Date().toISOString();
+
+        const enrichmentPaths = variantEnrichmentPaths();
+        await mkdir(enrichmentPaths.runs, { recursive: true });
+        await mkdir(enrichmentPaths.cache, { recursive: true });
+        const enrichmentRunId = `variant-enrichment-${runId}`;
+        const enrichmentOutputDir = path.join(enrichmentPaths.runs, enrichmentRunId);
+        await mkdir(enrichmentOutputDir, { recursive: true });
+        const aiTriageCsvPath = path.resolve(job.artifacts.aiTriageCsv || "");
+        if (!isPathInside(aiTriagePathsRoot.root, aiTriageCsvPath)) {
+          throw new Error("Variant enrichment input is outside the allowed AI triage root.");
+        }
+        const enrichmentPayload = {
+          event: "heal.variant_enrichment.requested",
+          runId: enrichmentRunId,
+          matchRunId: runId,
+          uploadId: upload.uploadId,
+          fileName: upload.fileName,
+          inputPath: aiTriageCsvPath,
+          outputDir: enrichmentOutputDir,
+          cacheDir: enrichmentPaths.cache,
+          requestedAt: new Date().toISOString(),
+        };
+        const enrichmentSummary = await processVariantEnrichmentWithRetry(enrichmentPayload, job, 3);
+        job.artifacts.observedVariantEnrichmentCsv = enrichmentSummary.outputs?.observedVariantEnrichmentCsv || "";
+        job.artifacts.observedVariantInterpretiveCsv = enrichmentSummary.outputs?.observedVariantInterpretiveCsv || "";
+        job.artifacts.observedVariantEnrichmentPlusCsv = enrichmentSummary.outputs?.observedVariantEnrichmentPlusCsv || "";
+        job.result = {
+          ...job.result,
+          variantEnrichment: sanitizeVariantEnrichmentResult(enrichmentSummary),
+        };
+
+        job.progress = 94;
+        job.stage = "grouping_preparation";
+        job.stageProgress = 15;
+        job.message = "Preparing grouped gene-module payloads";
+        job.updatedAt = new Date().toISOString();
+        const groupedPrepPathsRoot = groupedInterpretationPrepPaths();
+        await mkdir(groupedPrepPathsRoot.runs, { recursive: true });
+        const groupedPrepRunId = `group-prep-${runId}`;
+        const groupedPrepOutputDir = path.join(groupedPrepPathsRoot.runs, groupedPrepRunId);
+        await mkdir(groupedPrepOutputDir, { recursive: true });
+        const enrichmentPlusPath = path.resolve(job.artifacts.observedVariantEnrichmentPlusCsv || "");
+        if (!isPathInside(enrichmentPaths.root, enrichmentPlusPath)) {
+          throw new Error("Grouped interpretation prep input is outside the allowed enrichment root.");
+        }
+        const groupedPrepPayload = {
+          event: "heal.grouped_interpretation_prep.requested",
+          runId: groupedPrepRunId,
+          matchRunId: runId,
+          inputPath: enrichmentPlusPath,
+          outputDir: groupedPrepOutputDir,
+          requestedAt: new Date().toISOString(),
+        };
+        const groupedPrepSummary = await processGroupedInterpretationPrep(groupedPrepPayload);
+        job.artifacts.groupPayloadsJsonl = groupedPrepSummary.outputs?.groupPayloadsJsonl || "";
+        job.artifacts.groupPayloadsCsv = groupedPrepSummary.outputs?.groupPayloadsCsv || "";
+        job.artifacts.groupVariantDetailCsv = groupedPrepSummary.outputs?.groupVariantDetailCsv || "";
+        job.artifacts.groupingSummaryJson = groupedPrepSummary.outputs?.groupingSummaryJson || "";
+        job.result = {
+          ...job.result,
+          groupPrep: sanitizeGroupedInterpretationPrepResult(groupedPrepSummary),
+        };
+
+        job.progress = 97;
+        job.stage = "grouped_individual_interpretation";
+        job.stageProgress = 8;
+        job.message = "Interpreting grouped gene-module payloads";
+        job.updatedAt = new Date().toISOString();
+        const groupedInterpretationPathsRoot = groupedIndividualInterpretationPaths();
+        await mkdir(groupedInterpretationPathsRoot.runs, { recursive: true });
+        const groupedInterpretationRunId = `grouped-interpretation-${runId}`;
+        const groupedInterpretationOutputDir = path.join(groupedInterpretationPathsRoot.runs, groupedInterpretationRunId);
+        await mkdir(groupedInterpretationOutputDir, { recursive: true });
+        const groupPayloadsJsonlPath = path.resolve(job.artifacts.groupPayloadsJsonl || "");
+        if (!isPathInside(groupedPrepPathsRoot.root, groupPayloadsJsonlPath)) {
+          throw new Error("Grouped interpretation input is outside the allowed grouping-prep root.");
+        }
+        const groupedInterpretationPayload = {
+          event: "heal.grouped_individual_interpretation.requested",
+          runId: groupedInterpretationRunId,
+          matchRunId: runId,
+          uploadId: upload.uploadId,
+          fileName: upload.fileName,
+          inputPath: groupPayloadsJsonlPath,
+          outputDir: groupedInterpretationOutputDir,
+          model: LLM1_MODEL,
+          dryRun: ALLOW_LLM_DRY_RUN ? normalizeAnalysisMode(analysisMode) === "qa" : false,
+          requestedAt: new Date().toISOString(),
+        };
+        const groupedInterpretationSummary = await processGroupedIndividualInterpretationWithRetry(
+          groupedInterpretationPayload,
+          job,
+          2,
+        );
+        job.artifacts.groupInterpretationsJsonl = groupedInterpretationSummary.outputs?.groupInterpretationsJsonl || "";
+        job.artifacts.groupInterpretationsCsv = groupedInterpretationSummary.outputs?.groupInterpretationsCsv || "";
+        job.artifacts.groupInterpretationErrorsCsv = groupedInterpretationSummary.outputs?.groupInterpretationErrorsCsv || "";
+        job.artifacts.groupInterpretationProgressJson = groupedInterpretationSummary.outputs?.groupInterpretationProgressJson || "";
+        job.artifacts.groupInterpretationSummaryJson = groupedInterpretationSummary.outputs?.groupInterpretationSummaryJson || "";
+        job.status = "complete";
+        job.progress = 100;
+        job.stage = "grouped_individual_interpretation";
+        job.stageProgress = 100;
+        job.message = "Gene-module canon v2 grouped interpretation completed";
+        job.result = {
+          ...job.result,
+          groupedIndividualInterpretation: sanitizeGroupedIndividualInterpretationResult(groupedInterpretationSummary),
           metadata: {
             ...(job.result?.metadata || {}),
             downstream_supported: false,
-            downstream_input: "ai_triage",
+            downstream_input: "grouped_individual_interpretation",
             downstream_message:
-              "Downstream interpretation is blocked for canon schema v2. Supported handoff is ai_triage.",
+              "Downstream normalization/global/report remain blocked for canon schema v2. Supported handoff is grouped_individual_interpretation.",
           },
         };
         return;
@@ -2243,6 +2499,10 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
       job.message =
         job.stage === "enriching"
           ? "Variant enrichment failed"
+          : job.stage === "grouping_preparation"
+            ? "Grouped payload preparation failed"
+            : job.stage === "grouped_individual_interpretation"
+              ? "Grouped individual interpretation failed"
           : job.stage === "triaging"
             ? "AI triage failed"
           : job.stage === "preparing"
@@ -2969,6 +3229,55 @@ async function downloadAiTriageArtifact(req, res, artifactKey, suffix, { json = 
   res.download(artifactPath, `${baseName}_${suffix}.csv`);
 }
 
+async function downloadGroupedArtifact(req, res, artifactKey, suffix, { json = false, jsonl = false } = {}) {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (!job.artifacts?.[artifactKey]) {
+    res.status(409).json({ error: "Grouped interpretation artifact is not ready yet." });
+    return;
+  }
+
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload && !canAccessUpload(req, upload)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+
+  const roots = [groupedInterpretationPrepPaths().root, groupedIndividualInterpretationPaths().root];
+  const artifactPath = path.resolve(job.artifacts?.[artifactKey] || "");
+  if (!roots.some((root) => isPathInside(root, artifactPath))) {
+    res.status(400).json({ error: "Grouped interpretation artifact is outside the allowed roots." });
+    return;
+  }
+  const artifactStat = await stat(artifactPath).catch(() => null);
+  if (!artifactStat || artifactStat.size <= 0) {
+    res.status(404).json({ error: "Grouped interpretation artifact was not found." });
+    return;
+  }
+
+  const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
+  if (json) {
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.download(artifactPath, `${baseName}_${suffix}.json`);
+    return;
+  }
+  if (jsonl) {
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    res.download(artifactPath, `${baseName}_${suffix}.jsonl`);
+    return;
+  }
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.download(artifactPath, `${baseName}_${suffix}.csv`);
+}
+
 app.get("/api/vcf-canon-matches/:jobId/preparation-audit", async (req, res) => {
   await downloadMatchPreparationArtifact(req, res, "deliverableAuditCsv", "match_preparation_audit");
 });
@@ -2987,6 +3296,30 @@ app.get("/api/vcf-canon-matches/:jobId/ai-triage-excluded", async (req, res) => 
 
 app.get("/api/vcf-canon-matches/:jobId/ai-triage-summary", async (req, res) => {
   await downloadAiTriageArtifact(req, res, "aiTriageSummaryJson", "ai_triage_summary", { json: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-payloads", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadsCsv", "gene_module_group_payloads");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-payloads-jsonl", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadsJsonl", "gene_module_group_payloads", { jsonl: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-variant-detail", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupVariantDetailCsv", "gene_module_group_variant_detail");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-summary", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupingSummaryJson", "gene_module_grouping_summary", { json: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-interpretations", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupInterpretationsCsv", "gene_module_group_interpretations");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-interpretation-summary", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupInterpretationSummaryJson", "gene_module_group_interpretation_summary", { json: true });
 });
 
 app.get("/api/vcf-canon-matches/:jobId/enrichment", async (req, res) => {
