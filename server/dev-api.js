@@ -28,6 +28,9 @@ const VCF_CANON_MATCH_ROOT =
 const MATCH_PREPARATION_ROOT =
   process.env.HEAL_MATCH_PREPARATION_ROOT ||
   "C:\\ServerCIT\\services\\heal-match-preparation";
+const AI_TRIAGE_ROOT =
+  process.env.HEAL_AI_TRIAGE_ROOT ||
+  "C:\\ServerCIT\\services\\heal-ai-triage";
 const VARIANT_ENRICHMENT_ROOT =
   process.env.HEAL_VARIANT_ENRICHMENT_ROOT ||
   "C:\\ServerCIT\\services\\heal-variant-enrichment";
@@ -211,6 +214,14 @@ function variantEnrichmentPaths() {
     root,
     runs: path.join(root, "runs"),
     cache: path.join(root, "cache"),
+  };
+}
+
+function aiTriagePaths() {
+  const root = path.resolve(AI_TRIAGE_ROOT);
+  return {
+    root,
+    runs: path.join(root, "runs"),
   };
 }
 
@@ -473,6 +484,14 @@ function sanitizeVariantEnrichmentResult(result) {
   return publicResult;
 }
 
+function sanitizeAiTriageResult(result) {
+  const publicResult = JSON.parse(JSON.stringify(result || {}));
+  delete publicResult.inputPath;
+  delete publicResult.outputDir;
+  delete publicResult.outputs;
+  return publicResult;
+}
+
 function sanitizeIndividualInterpretationResult(result) {
   const publicResult = JSON.parse(JSON.stringify(result || {}));
   delete publicResult.inputPath;
@@ -517,6 +536,7 @@ function publicArtifactsReady(job) {
         artifacts.sheetFinalNoVcfMatchByChrPosCsv,
     ),
     preparation: Boolean(artifacts.deliverableAuditCsv || artifacts.deliverableMinCsv),
+    aiTriage: Boolean(artifacts.aiTriageCsv),
     enrichment: Boolean(artifacts.observedVariantEnrichmentCsv),
     enrichmentInterpretive: Boolean(artifacts.observedVariantInterpretiveCsv),
     enrichmentPlus: Boolean(artifacts.observedVariantEnrichmentPlusCsv),
@@ -912,6 +932,10 @@ async function processMatchPreparation(payload) {
   return await runBase64JsonScript(path.join(MATCH_PREPARATION_ROOT, "prepare_match_deliverable.py"), payload);
 }
 
+async function processAiTriage(payload) {
+  return await runBase64JsonScript(path.join(AI_TRIAGE_ROOT, "triage_for_ai.py"), payload);
+}
+
 async function processVariantEnrichment(payload) {
   return (
     (await postWorkflowForSummary(N8N_VARIANT_ENRICHMENT_WEBHOOK_URL, payload, "n8n variant enrichment")) ||
@@ -1121,12 +1145,20 @@ function downstreamBlockedForJob(job) {
   return job?.result?.metadata?.downstream_supported === false;
 }
 
+function downstreamBlockedMessage(job) {
+  return (
+    job?.result?.metadata?.downstream_message ||
+    "Downstream interpretation is blocked for this canon schema. Supported handoff is ai_triage."
+  );
+}
+
 function shouldPersistVcfCanonJob(job) {
   return Boolean(
     job?.artifacts ||
       [
         "matching",
         "preparing",
+        "triaging",
         "enriching",
         "individual_interpretation",
         "interpretation_normalization",
@@ -1224,6 +1256,7 @@ app.get("/api/health", (_req, res) => {
     rsidResolutionRoot: RSID_RESOLUTION_ROOT,
     vcfCanonMatchRoot: VCF_CANON_MATCH_ROOT,
     matchPreparationRoot: MATCH_PREPARATION_ROOT,
+    aiTriageRoot: AI_TRIAGE_ROOT,
     variantEnrichmentRoot: VARIANT_ENRICHMENT_ROOT,
     individualInterpretationRoot: INDIVIDUAL_INTERPRETATION_ROOT,
     interpretationNormalizationRoot: INTERPRETATION_NORMALIZATION_ROOT,
@@ -2121,17 +2154,42 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         matchPreparation: sanitizeMatchPreparationResult(preparationSummary),
       };
       if (isGeneModuleV2) {
+        const aiTriagePathsRoot = aiTriagePaths();
+        await mkdir(aiTriagePathsRoot.runs, { recursive: true });
+        const aiTriageRunId = `ai-triage-${runId}`;
+        const aiTriageOutputDir = path.join(aiTriagePathsRoot.runs, aiTriageRunId);
+        await mkdir(aiTriageOutputDir, { recursive: true });
+        job.progress = 86;
+        job.stage = "triaging";
+        job.stageProgress = 12;
+        job.message = "Applying deterministic AI triage";
+        job.updatedAt = new Date().toISOString();
+        const aiTriagePayload = {
+          event: "heal.ai_triage.requested",
+          runId: aiTriageRunId,
+          matchRunId: runId,
+          inputPath: matchCsvPath,
+          outputDir: aiTriageOutputDir,
+          requestedAt: new Date().toISOString(),
+        };
+        const aiTriageSummary = await processAiTriage(aiTriagePayload);
+        job.artifacts.aiTriageCsv = aiTriageSummary.outputs?.aiTriageCsv || "";
+        job.artifacts.aiTriageExcludedAuditCsv = aiTriageSummary.outputs?.aiTriageExcludedAuditCsv || "";
+        job.artifacts.aiTriageSummaryJson = aiTriageSummary.outputs?.aiTriageSummaryJson || "";
         job.status = "complete";
         job.progress = 100;
-        job.stage = "preparing";
+        job.stage = "triaging";
         job.stageProgress = 100;
-        job.message = "Gene-module canon v2 preparation completed";
+        job.message = "Gene-module canon v2 triage completed";
         job.result = {
           ...job.result,
+          aiTriage: sanitizeAiTriageResult(aiTriageSummary),
           metadata: {
             ...(job.result?.metadata || {}),
             downstream_supported: false,
-            downstream_message: "not yet supported for canon schema v2",
+            downstream_input: "ai_triage",
+            downstream_message:
+              "Downstream interpretation is blocked for canon schema v2. Supported handoff is ai_triage.",
           },
         };
         return;
@@ -2185,6 +2243,8 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
       job.message =
         job.stage === "enriching"
           ? "Variant enrichment failed"
+          : job.stage === "triaging"
+            ? "AI triage failed"
           : job.stage === "preparing"
             ? "Match preparation failed"
             : "VCF-canon match failed";
@@ -2213,7 +2273,7 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
     return;
   }
   if (downstreamBlockedForJob(job)) {
-    res.status(409).json({ error: "not yet supported for canon schema v2" });
+    res.status(409).json({ error: downstreamBlockedMessage(job) });
     return;
   }
   if (job.status === "running") {
@@ -2307,7 +2367,7 @@ app.post("/api/vcf-canon-matches/:jobId/individual-interpretation", async (req, 
     return;
   }
   if (downstreamBlockedForJob(job)) {
-    res.status(409).json({ error: "not yet supported for canon schema v2" });
+    res.status(409).json({ error: downstreamBlockedMessage(job) });
     return;
   }
   if (job.status === "running") {
@@ -2419,7 +2479,7 @@ app.post("/api/vcf-canon-matches/:jobId/interpretation-normalization", async (re
     return;
   }
   if (downstreamBlockedForJob(job)) {
-    res.status(409).json({ error: "not yet supported for canon schema v2" });
+    res.status(409).json({ error: downstreamBlockedMessage(job) });
     return;
   }
   if (job.status === "running") {
@@ -2522,7 +2582,7 @@ app.post("/api/vcf-canon-matches/:jobId/global-interpretation", async (req, res)
     return;
   }
   if (downstreamBlockedForJob(job)) {
-    res.status(409).json({ error: "not yet supported for canon schema v2" });
+    res.status(409).json({ error: downstreamBlockedMessage(job) });
     return;
   }
   if (job.status === "running") {
@@ -2636,7 +2696,7 @@ app.post("/api/vcf-canon-matches/:jobId/final-report", async (req, res) => {
     return;
   }
   if (downstreamBlockedForJob(job)) {
-    res.status(409).json({ error: "not yet supported for canon schema v2" });
+    res.status(409).json({ error: downstreamBlockedMessage(job) });
     return;
   }
   if (job.status === "running") {
@@ -2865,12 +2925,68 @@ async function downloadMatchPreparationArtifact(req, res, artifactKey, suffix) {
   res.download(csvPath, `${baseName}_${suffix}.csv`);
 }
 
+async function downloadAiTriageArtifact(req, res, artifactKey, suffix, { json = false } = {}) {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (!job.artifacts?.[artifactKey]) {
+    res.status(409).json({ error: "AI triage artifact is not ready yet." });
+    return;
+  }
+
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload && !canAccessUpload(req, upload)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+
+  const paths = aiTriagePaths();
+  const artifactPath = path.resolve(job.artifacts?.[artifactKey] || "");
+  if (!isPathInside(paths.root, artifactPath)) {
+    res.status(400).json({ error: "AI triage artifact is outside the allowed root." });
+    return;
+  }
+  const artifactStat = await stat(artifactPath).catch(() => null);
+  if (!artifactStat || artifactStat.size <= 0) {
+    res.status(404).json({ error: "AI triage artifact was not found." });
+    return;
+  }
+
+  const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
+  if (json) {
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.download(artifactPath, `${baseName}_${suffix}.json`);
+    return;
+  }
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.download(artifactPath, `${baseName}_${suffix}.csv`);
+}
+
 app.get("/api/vcf-canon-matches/:jobId/preparation-audit", async (req, res) => {
   await downloadMatchPreparationArtifact(req, res, "deliverableAuditCsv", "match_preparation_audit");
 });
 
 app.get("/api/vcf-canon-matches/:jobId/preparation-minimal", async (req, res) => {
   await downloadMatchPreparationArtifact(req, res, "deliverableMinCsv", "match_preparation_minimal");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/ai-triage", async (req, res) => {
+  await downloadAiTriageArtifact(req, res, "aiTriageCsv", "ai_triage");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/ai-triage-excluded", async (req, res) => {
+  await downloadAiTriageArtifact(req, res, "aiTriageExcludedAuditCsv", "ai_triage_excluded_audit");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/ai-triage-summary", async (req, res) => {
+  await downloadAiTriageArtifact(req, res, "aiTriageSummaryJson", "ai_triage_summary", { json: true });
 });
 
 app.get("/api/vcf-canon-matches/:jobId/enrichment", async (req, res) => {

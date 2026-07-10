@@ -32,6 +32,7 @@ const BUSY_PHASES = [
   "validating",
   "matching",
   "preparing",
+  "triaging",
   "enriching",
   "individual_interpretation",
   "interpretation_normalization",
@@ -130,6 +131,7 @@ const COPY = {
     validationProgress: "Validacion del VCF",
     matchProgress: "Match VCF-Canon",
     preparationProgress: "Preparacion del match",
+    aiTriageProgress: "Triage IA",
     enrichmentProgress: "Enriquecimiento externo",
     individualInterpretationProgress: "Interpretacion individual",
     interpretationNormalizationProgress: "Normalizacion QA",
@@ -154,6 +156,7 @@ const COPY = {
     preparing: "Preparando CSVs de auditoria...",
     enriching: "Enriqueciendo variantes observadas...",
     enrichmentFailed: "No se pudo completar el enriquecimiento externo.",
+    aiTriageFailed: "No se pudo completar el triage IA.",
     retryEnrichment: "Reintentar enriquecimiento",
     individualInterpretationStarting: "Iniciando interpretacion individual...",
     individualInterpreting: "Interpretando variantes observadas una por una...",
@@ -186,6 +189,7 @@ const COPY = {
     complete: "Validacion finalizada.",
     matchComplete: "Match VCF-Canon finalizado.",
     preparationComplete: "Preparacion del match finalizada.",
+    aiTriageComplete: "Triage IA finalizado.",
     enrichmentComplete: "Enriquecimiento externo finalizado.",
     resultValid: "VCF validado",
     resultWarning: "Validado con warnings",
@@ -214,12 +218,20 @@ const COPY = {
     checksum: "SHA-256",
     matchTitle: "Match VCF-Canon",
     preparationTitle: "Preparacion del match",
+    aiTriageTitle: "Triage deterministico IA",
     enrichmentTitle: "Enriquecimiento de variantes observadas",
     preparationRows: "Filas preparadas",
     preparationObserved: "Con genotipo observado",
     preparationHigh: "Confianza alta",
     preparationModerate: "Confianza moderada",
     preparationLow: "Confianza baja",
+    aiTriageIncluded: "Filas elegibles para IA",
+    aiTriageStrong: "Fuertes cod/splice",
+    aiTriageUtr: "UTR fuertes",
+    aiTriageBackgroundExcluded: "Excluidas background",
+    aiTriageUtrExcluded: "Excluidas UTR debiles",
+    aiTriageDraftExcluded: "Excluidas Draft optional",
+    aiTriageNoncodingExcluded: "Excluidas no codificantes optional",
     enrichmentObserved: "Filas enriquecidas",
     enrichmentInputRows: "Filas fuente",
     enrichmentPlusRows: "Filas Enrichment Plus",
@@ -295,6 +307,9 @@ const COPY = {
     matchDownload: "Descargar CSV de matches",
     matchPreparationAuditDownload: "Descargar CSV preparado",
     matchPreparationMinimalDownload: "Descargar CSV minimo",
+    aiTriageDownload: "Descargar CSV triage IA",
+    aiTriageExcludedDownload: "Descargar audit de excluidas",
+    aiTriageSummaryDownload: "Descargar resumen triage IA",
     enrichmentDownload: "Descargar CSV interpretativo",
     enrichmentPlusDownload: "Descargar CSV Enrichment Plus",
     enrichmentQaDownload: "Descargar CSV tecnico QA",
@@ -354,6 +369,7 @@ const COPY = {
     validationProgress: "VCF validation",
     matchProgress: "VCF-Canon match",
     preparationProgress: "Match preparation",
+    aiTriageProgress: "AI triage",
     enrichmentProgress: "External enrichment",
     individualInterpretationProgress: "Individual interpretation",
     interpretationNormalizationProgress: "QA normalization",
@@ -378,6 +394,7 @@ const COPY = {
     preparing: "Preparing audit CSVs...",
     enriching: "Enriching observed variants...",
     enrichmentFailed: "Could not complete external enrichment.",
+    aiTriageFailed: "Could not complete AI triage.",
     retryEnrichment: "Retry enrichment",
     individualInterpretationStarting: "Starting individual interpretation...",
     individualInterpreting: "Interpreting observed variants one by one...",
@@ -410,6 +427,7 @@ const COPY = {
     complete: "Validation finished.",
     matchComplete: "VCF-Canon match finished.",
     preparationComplete: "Match preparation finished.",
+    aiTriageComplete: "AI triage finished.",
     enrichmentComplete: "External enrichment finished.",
     resultValid: "VCF validated",
     resultWarning: "Validated with warnings",
@@ -438,12 +456,20 @@ const COPY = {
     checksum: "SHA-256",
     matchTitle: "VCF-Canon match",
     preparationTitle: "Match preparation",
+    aiTriageTitle: "Deterministic AI triage",
     enrichmentTitle: "Observed variant enrichment",
     preparationRows: "Prepared rows",
     preparationObserved: "Observed genotypes",
     preparationHigh: "High confidence",
     preparationModerate: "Moderate confidence",
     preparationLow: "Low confidence",
+    aiTriageIncluded: "AI-eligible rows",
+    aiTriageStrong: "Strong coding/splice",
+    aiTriageUtr: "Strong UTR",
+    aiTriageBackgroundExcluded: "Background excluded",
+    aiTriageUtrExcluded: "Weak UTR excluded",
+    aiTriageDraftExcluded: "Draft optional excluded",
+    aiTriageNoncodingExcluded: "Optional noncoding excluded",
     enrichmentObserved: "Enriched rows",
     enrichmentInputRows: "Source rows",
     enrichmentPlusRows: "Enrichment Plus rows",
@@ -519,6 +545,9 @@ const COPY = {
     matchDownload: "Download matches CSV",
     matchPreparationAuditDownload: "Download prepared CSV",
     matchPreparationMinimalDownload: "Download minimal CSV",
+    aiTriageDownload: "Download AI triage CSV",
+    aiTriageExcludedDownload: "Download excluded audit",
+    aiTriageSummaryDownload: "Download AI triage summary",
     enrichmentDownload: "Download interpretive CSV",
     enrichmentPlusDownload: "Download Enrichment Plus CSV",
     enrichmentQaDownload: "Download technical QA CSV",
@@ -1299,6 +1328,7 @@ function MatchResultPanel({ result, locale, t }) {
   const metadata = result.metadata || {};
   const statusCounts = metadata.match_status_counts || {};
   const preparation = result.matchPreparation?.metadata || {};
+  const aiTriage = result.aiTriage?.metadata || {};
   const confidenceCounts = preparation.confidence_level_counts || {};
   const preparationReviewCounts = preparation.review_status_counts || {};
   const enrichment = result.variantEnrichment?.metadata || {};
@@ -1350,6 +1380,17 @@ function MatchResultPanel({ result, locale, t }) {
           [t.preparationModerate, formatNumber(confidenceCounts.Moderate || 0, locale)],
           [t.preparationLow, formatNumber(confidenceCounts.Low || 0, locale)],
         ]
+    : [];
+  const aiTriageCards = result.aiTriage
+    ? [
+        [t.aiTriageIncluded, formatNumber(aiTriage.included_for_ai, locale)],
+        [t.aiTriageStrong, formatNumber(aiTriage.included_strong_region, locale)],
+        [t.aiTriageUtr, formatNumber(aiTriage.included_strong_utr, locale)],
+        [t.aiTriageBackgroundExcluded, formatNumber(aiTriage.excluded_background, locale)],
+        [t.aiTriageUtrExcluded, formatNumber(aiTriage.excluded_utr_weak, locale)],
+        [t.aiTriageDraftExcluded, formatNumber(aiTriage.excluded_draft_optional, locale)],
+        [t.aiTriageNoncodingExcluded, formatNumber(aiTriage.excluded_optional_noncoding, locale)],
+      ]
     : [];
   const enrichmentCards = result.variantEnrichment
     ? [
@@ -1470,6 +1511,21 @@ function MatchResultPanel({ result, locale, t }) {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/preparation-minimal`, "heal-match-preparation-minimal.csv");
   }
 
+  async function downloadAiTriage() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/ai-triage`, "heal-fon-ai-triage.csv");
+  }
+
+  async function downloadAiTriageExcluded() {
+    await downloadCsv(
+      `/api/vcf-canon-matches/${result.jobId}/ai-triage-excluded`,
+      "heal-fon-ai-triage-excluded-audit.csv",
+    );
+  }
+
+  async function downloadAiTriageSummary() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/ai-triage-summary`, "heal-fon-ai-triage-summary.json");
+  }
+
   async function downloadEnrichment() {
     await downloadCsv(
       `/api/vcf-canon-matches/${result.jobId}/enrichment-interpretive`,
@@ -1559,6 +1615,16 @@ function MatchResultPanel({ result, locale, t }) {
           </div>
         </>
       )}
+      {aiTriageCards.length > 0 && (
+        <>
+          <h3 className="result-subtitle">{t.aiTriageTitle}</h3>
+          <div className="metrics-grid">
+            {aiTriageCards.map(([label, value]) => (
+              <MetricCard label={label} value={value} key={label} />
+            ))}
+          </div>
+        </>
+      )}
       {enrichmentCards.length > 0 && (
         <>
           <h3 className="result-subtitle">{t.enrichmentTitle}</h3>
@@ -1625,6 +1691,18 @@ function MatchResultPanel({ result, locale, t }) {
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadPreparedMinimal}>
           <Download size={17} />
           {t.matchPreparationMinimalDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.aiTriage} onClick={downloadAiTriage}>
+          <Download size={17} />
+          {t.aiTriageDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.aiTriage} onClick={downloadAiTriageExcluded}>
+          <Download size={17} />
+          {t.aiTriageExcludedDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.aiTriage} onClick={downloadAiTriageSummary}>
+          <Download size={17} />
+          {t.aiTriageSummaryDownload}
         </button>
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadEnrichment}>
           <Download size={17} />
@@ -1721,6 +1799,7 @@ function App() {
   const [validationProgress, setValidationProgress] = useState(0);
   const [matchProgress, setMatchProgress] = useState(0);
   const [preparationProgress, setPreparationProgress] = useState(0);
+  const [aiTriageProgress, setAiTriageProgress] = useState(0);
   const [enrichmentProgress, setEnrichmentProgress] = useState(0);
   const [individualInterpretationProgress, setIndividualInterpretationProgress] = useState(0);
   const [interpretationNormalizationProgress, setInterpretationNormalizationProgress] = useState(0);
@@ -1740,6 +1819,7 @@ function App() {
     matches: false,
     debug: false,
     preparation: false,
+    aiTriage: false,
     enrichment: false,
     enrichmentInterpretive: false,
     enrichmentPlus: false,
@@ -1789,6 +1869,7 @@ function App() {
     setValidationProgress(0);
     setMatchProgress(0);
     setPreparationProgress(0);
+    setAiTriageProgress(0);
     setEnrichmentProgress(0);
     setIndividualInterpretationProgress(0);
     setInterpretationNormalizationProgress(0);
@@ -1800,6 +1881,7 @@ function App() {
       matches: false,
       debug: false,
       preparation: false,
+      aiTriage: false,
       enrichment: false,
       enrichmentInterpretive: false,
       enrichmentPlus: false,
@@ -1892,6 +1974,21 @@ function App() {
         await downloadCsv(
           `/api/vcf-canon-matches/${matchResult.jobId}/preparation-audit`,
           "heal-match-preparation-audit.csv",
+        );
+      } else if (kind === "aiTriage") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/ai-triage`,
+          "heal-fon-ai-triage.csv",
+        );
+      } else if (kind === "aiTriageExcluded") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/ai-triage-excluded`,
+          "heal-fon-ai-triage-excluded-audit.csv",
+        );
+      } else if (kind === "aiTriageSummary") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/ai-triage-summary`,
+          "heal-fon-ai-triage-summary.json",
         );
       } else if (kind === "enrichment") {
         await downloadCsv(
@@ -2032,6 +2129,7 @@ function App() {
       matches: Boolean(ready.matches),
       debug: Boolean(ready.debug),
       preparation: Boolean(ready.preparation),
+      aiTriage: Boolean(ready.aiTriage),
       enrichment: Boolean(ready.enrichment),
       enrichmentInterpretive: Boolean(ready.enrichmentInterpretive),
       enrichmentPlus: Boolean(ready.enrichmentPlus),
@@ -2048,6 +2146,7 @@ function App() {
       job.result ||
       ready.matches ||
       ready.preparation ||
+      ready.aiTriage ||
       ready.enrichment ||
       ready.enrichmentInterpretive ||
       ready.enrichmentPlus ||
@@ -2096,16 +2195,24 @@ function App() {
         setMatchProgress(100);
         setPreparationProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.preparing);
+      } else if (job.stage === "triaging") {
+        setPhase("triaging");
+        setMatchProgress(100);
+        setPreparationProgress(100);
+        setAiTriageProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.aiTriageProgress);
       } else if (job.stage === "enriching") {
         setPhase("enriching");
         setMatchProgress(100);
         setPreparationProgress(100);
+        setAiTriageProgress(100);
         setEnrichmentProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.enriching);
       } else if (job.stage === "individual_interpretation") {
         setPhase("individual_interpretation");
         setMatchProgress(100);
         setPreparationProgress(100);
+        setAiTriageProgress(100);
         setEnrichmentProgress(100);
         setIndividualInterpretationProgress(job.stageProgress ?? job.progress ?? 0);
         setIndividualInterpretationDetail(job.message || "");
@@ -2114,6 +2221,7 @@ function App() {
         setPhase("interpretation_normalization");
         setMatchProgress(100);
         setPreparationProgress(100);
+        setAiTriageProgress(100);
         setEnrichmentProgress(100);
         setIndividualInterpretationProgress(100);
         setIndividualInterpretationDetail("");
@@ -2123,6 +2231,7 @@ function App() {
         setPhase("global_interpretation");
         setMatchProgress(100);
         setPreparationProgress(100);
+        setAiTriageProgress(100);
         setEnrichmentProgress(100);
         setIndividualInterpretationProgress(100);
         setIndividualInterpretationDetail("");
@@ -2133,6 +2242,7 @@ function App() {
         setPhase("final_report");
         setMatchProgress(100);
         setPreparationProgress(100);
+        setAiTriageProgress(100);
         setEnrichmentProgress(100);
         setIndividualInterpretationProgress(100);
         setIndividualInterpretationDetail("");
@@ -2148,6 +2258,9 @@ function App() {
 
       if (job.status === "complete") {
         setPreparationProgress(100);
+        if (job.artifactsReady?.aiTriage || job.result?.aiTriage) {
+          setAiTriageProgress(100);
+        }
         if (job.result?.metadata?.downstream_supported !== false && (job.artifactsReady?.enrichment || job.result?.variantEnrichment)) {
           setEnrichmentProgress(100);
         }
@@ -2176,6 +2289,8 @@ function App() {
                 ? t.globalInterpretationFailed
               : job.stage === "final_report"
                 ? t.finalReportFailed
+              : job.stage === "triaging"
+                ? t.aiTriageFailed
               : job.stage === "individual_interpretation"
               ? t.individualInterpretationFailed
               : job.stage === "enriching"
@@ -2217,6 +2332,7 @@ function App() {
           setValidationProgress(0);
           setMatchProgress(0);
           setPreparationProgress(0);
+          setAiTriageProgress(0);
           setEnrichmentProgress(0);
           setIndividualInterpretationProgress(0);
           setInterpretationNormalizationProgress(0);
@@ -2227,6 +2343,7 @@ function App() {
             matches: false,
             debug: false,
             preparation: false,
+            aiTriage: false,
             enrichment: false,
             enrichmentInterpretive: false,
             enrichmentPlus: false,
@@ -2286,6 +2403,7 @@ function App() {
     setMessageKey("matchStarting");
     setMatchProgress(5);
     setPreparationProgress(0);
+    setAiTriageProgress(0);
     setEnrichmentProgress(0);
     setIndividualInterpretationProgress(0);
     setInterpretationNormalizationProgress(0);
@@ -2303,10 +2421,13 @@ function App() {
     setMatchResult(nextMatchResult);
     setPhase("done");
     const downstreamSupported = nextMatchResult?.metadata?.downstream_supported !== false;
-    setMessageKey(downstreamSupported ? "enrichmentComplete" : "preparationComplete");
+    setMessageKey(downstreamSupported ? "enrichmentComplete" : "aiTriageComplete");
     setCustomMessage("");
     setMatchProgress(100);
     setPreparationProgress(100);
+    if (nextMatchResult?.artifactsReady?.aiTriage || nextMatchResult?.aiTriage) {
+      setAiTriageProgress(100);
+    }
     if (downstreamSupported && (nextMatchResult?.artifactsReady?.enrichment || nextMatchResult?.variantEnrichment)) {
       setEnrichmentProgress(100);
     }
@@ -2643,6 +2764,7 @@ function App() {
       matches: false,
       debug: false,
       preparation: false,
+      aiTriage: false,
       enrichment: false,
       enrichmentInterpretive: false,
       enrichmentPlus: false,
@@ -2658,6 +2780,7 @@ function App() {
     setValidationProgress(0);
     setMatchProgress(0);
     setPreparationProgress(0);
+    setAiTriageProgress(0);
     setEnrichmentProgress(0);
     setIndividualInterpretationProgress(0);
     setInterpretationNormalizationProgress(0);
@@ -2889,6 +3012,14 @@ function App() {
           onPlay={analysisMode === "qa" ? runQaMatch : null}
           playLabel={`${t.playStage}: ${t.preparationProgress}`}
           playDisabled={!uploadRecord || !result || result.status === "invalid" || isBusyPhase(phase)}
+        />
+        <ProgressBar
+          label={t.aiTriageProgress}
+          value={aiTriageProgress}
+          tone="blue"
+          downloadLabel={t.aiTriageDownload}
+          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("aiTriage") : null}
+          downloadReady={matchArtifactsReady.aiTriage}
         />
         <ProgressBar
           label={t.enrichmentProgress}
