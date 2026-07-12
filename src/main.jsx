@@ -268,6 +268,7 @@ const COPY = {
     groupedInterpretationReviewGroups: "Grupos con review",
     groupedInterpretationErrors: "Grupos con error",
     groupedInterpretationModel: "Modelo LLM1 agrupado",
+    groupedInterpretationCountLabel: "interpretaciones",
     individualInterpretationTitle: "Interpretacion individual",
     individualInterpretationRows: "Filas interpretadas",
     individualInterpretationSourceRows: "Filas fuente LLM1",
@@ -532,6 +533,7 @@ const COPY = {
     groupedInterpretationReviewGroups: "Review groups",
     groupedInterpretationErrors: "Groups with errors",
     groupedInterpretationModel: "Grouped LLM1 model",
+    groupedInterpretationCountLabel: "interpretations",
     individualInterpretationTitle: "Individual interpretation",
     individualInterpretationRows: "Interpreted rows",
     individualInterpretationSourceRows: "LLM1 source rows",
@@ -653,6 +655,13 @@ function clampVariantCount(value) {
   const parsed = Number.parseInt(String(value || ""), 10);
   if (!Number.isFinite(parsed)) return 20;
   return Math.min(100, Math.max(1, parsed));
+}
+
+function groupedInterpretationDetailFromMessage(message, t) {
+  const text = String(message || "");
+  const match = text.match(/\((\d+)\/(\d+)\)/);
+  if (!match) return "";
+  return `(${match[1]}/${match[2]} ${t.groupedInterpretationCountLabel})`;
 }
 
 function ProgressBar({
@@ -1965,6 +1974,7 @@ function App() {
   const [phase, setPhase] = useState("idle");
   const [messageKey, setMessageKey] = useState("initialMessage");
   const [customMessage, setCustomMessage] = useState("");
+  const [groupedInterpretationDetail, setGroupedInterpretationDetail] = useState("");
   const [individualInterpretationDetail, setIndividualInterpretationDetail] = useState("");
   const [result, setResult] = useState(null);
   const [matchResult, setMatchResult] = useState(null);
@@ -2061,6 +2071,7 @@ function App() {
     activeAccessTokenRef.current = "";
     setPhase("idle");
     setCustomMessage("");
+    setGroupedInterpretationDetail("");
     setIndividualInterpretationDetail("");
     setTurnstileToken("");
     setTurnstileResetKey((current) => current + 1);
@@ -2416,6 +2427,7 @@ function App() {
         setEnrichmentProgress(100);
         setGroupingPreparationProgress(100);
         setGroupedInterpretationProgress(job.stageProgress ?? job.progress ?? 0);
+        setGroupedInterpretationDetail(groupedInterpretationDetailFromMessage(job.message, t));
         setCustomMessage(job.message || t.groupedInterpreting);
       } else if (job.stage === "individual_interpretation") {
         setPhase("individual_interpretation");
@@ -2425,6 +2437,7 @@ function App() {
         setEnrichmentProgress(100);
         setGroupingPreparationProgress(100);
         setGroupedInterpretationProgress(100);
+        setGroupedInterpretationDetail("");
         setIndividualInterpretationProgress(job.stageProgress ?? job.progress ?? 0);
         setIndividualInterpretationDetail(job.message || "");
         setCustomMessage(t.individualInterpreting);
@@ -2436,6 +2449,7 @@ function App() {
         setEnrichmentProgress(100);
         setGroupingPreparationProgress(100);
         setGroupedInterpretationProgress(100);
+        setGroupedInterpretationDetail("");
         setIndividualInterpretationProgress(100);
         setIndividualInterpretationDetail("");
         setInterpretationNormalizationProgress(job.stageProgress ?? job.progress ?? 0);
@@ -2448,6 +2462,7 @@ function App() {
         setEnrichmentProgress(100);
         setGroupingPreparationProgress(100);
         setGroupedInterpretationProgress(100);
+        setGroupedInterpretationDetail("");
         setIndividualInterpretationProgress(100);
         setIndividualInterpretationDetail("");
         setInterpretationNormalizationProgress(100);
@@ -2461,6 +2476,7 @@ function App() {
         setEnrichmentProgress(100);
         setGroupingPreparationProgress(100);
         setGroupedInterpretationProgress(100);
+        setGroupedInterpretationDetail("");
         setIndividualInterpretationProgress(100);
         setIndividualInterpretationDetail("");
         setInterpretationNormalizationProgress(100);
@@ -2468,6 +2484,7 @@ function App() {
         setFinalReportProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.finalReportRendering);
       } else {
+        setGroupedInterpretationDetail("");
         setIndividualInterpretationDetail("");
         setMatchProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.matching);
@@ -3026,6 +3043,7 @@ function App() {
       finalReportEs: false,
       finalReportEn: false,
     });
+    setGroupedInterpretationDetail("");
     setIndividualInterpretationDetail("");
     setUploadProgress(0);
     setValidationProgress(0);
@@ -3301,6 +3319,7 @@ function App() {
         <ProgressBar
           label={t.groupedInterpretationProgress}
           value={groupedInterpretationProgress}
+          detail={groupedInterpretationDetail}
           tone="blue"
           downloadLabel={t.groupedInterpretationDownload}
           onDownload={matchResult?.jobId ? () => downloadMatchArtifact("groupedInterpretation") : null}

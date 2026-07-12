@@ -613,6 +613,10 @@ function normalizeAssembly(value) {
   return assembly === "GRCH37" ? "GRCh37" : "GRCh38";
 }
 
+function metadataCount(summary, key) {
+  return Number(summary?.metadata?.[key] || 0);
+}
+
 function resolveLlm2Model({ analysisMode, requestedModel }) {
   const mode = normalizeAnalysisMode(analysisMode);
   if (mode === "complete") return LLM2_FULL_MODEL;
@@ -1048,10 +1052,15 @@ async function processAiTriage(payload) {
 }
 
 async function processVariantEnrichment(payload) {
-  return (
-    (await postWorkflowForSummary(N8N_VARIANT_ENRICHMENT_WEBHOOK_URL, payload, "n8n variant enrichment")) ||
-    (await runBase64JsonScript(path.join(VARIANT_ENRICHMENT_ROOT, "enrich_observed_variants.py"), payload))
+  const webhookResult = await postWorkflowForSummary(
+    N8N_VARIANT_ENRICHMENT_WEBHOOK_URL,
+    payload,
+    "n8n variant enrichment",
   );
+  if (webhookResult?.outputs?.observedVariantEnrichmentPlusCsv) {
+    return webhookResult;
+  }
+  return await runBase64JsonScript(path.join(VARIANT_ENRICHMENT_ROOT, "enrich_observed_variants.py"), payload);
 }
 
 async function processGroupedInterpretationPrep(payload) {
@@ -2320,6 +2329,9 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           requestedAt: new Date().toISOString(),
         };
         const aiTriageSummary = await processAiTriage(aiTriagePayload);
+        if (metadataCount(aiTriageSummary, "included_for_ai") <= 0) {
+          throw new Error("AI triage produced zero rows eligible for canon schema v2.");
+        }
         job.artifacts.aiTriageCsv = aiTriageSummary.outputs?.aiTriageCsv || "";
         job.artifacts.aiTriageExcludedAuditCsv = aiTriageSummary.outputs?.aiTriageExcludedAuditCsv || "";
         job.artifacts.aiTriageSummaryJson = aiTriageSummary.outputs?.aiTriageSummaryJson || "";
@@ -2356,6 +2368,9 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           requestedAt: new Date().toISOString(),
         };
         const enrichmentSummary = await processVariantEnrichmentWithRetry(enrichmentPayload, job, 3);
+        if (metadataCount(enrichmentSummary, "plus_rows") <= 0) {
+          throw new Error("Variant enrichment produced zero Enrichment Plus rows for canon schema v2.");
+        }
         job.artifacts.observedVariantEnrichmentCsv = enrichmentSummary.outputs?.observedVariantEnrichmentCsv || "";
         job.artifacts.observedVariantInterpretiveCsv = enrichmentSummary.outputs?.observedVariantInterpretiveCsv || "";
         job.artifacts.observedVariantEnrichmentPlusCsv = enrichmentSummary.outputs?.observedVariantEnrichmentPlusCsv || "";
@@ -2387,6 +2402,9 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           requestedAt: new Date().toISOString(),
         };
         const groupedPrepSummary = await processGroupedInterpretationPrep(groupedPrepPayload);
+        if (metadataCount(groupedPrepSummary, "total_groups") <= 0) {
+          throw new Error("Grouped interpretation prep produced zero gene-module groups for canon schema v2.");
+        }
         job.artifacts.groupPayloadsJsonl = groupedPrepSummary.outputs?.groupPayloadsJsonl || "";
         job.artifacts.groupPayloadsCsv = groupedPrepSummary.outputs?.groupPayloadsCsv || "";
         job.artifacts.groupVariantDetailCsv = groupedPrepSummary.outputs?.groupVariantDetailCsv || "";

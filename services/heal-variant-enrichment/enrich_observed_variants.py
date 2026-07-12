@@ -56,6 +56,101 @@ def normalize_rsid(value) -> str:
     return text if text.startswith("rs") and text[2:].isdigit() else ""
 
 
+def is_v2_row(row: dict) -> bool:
+    return "module_id" in row and "approved_symbol" in row and "local_region_class" in row
+
+
+def schema_version_for_rows(rows: list[dict]) -> str:
+    if rows and is_v2_row(rows[0]):
+        return "gene_module_v2"
+    return "legacy_rsid_canon"
+
+
+def row_rsid(row: dict) -> str:
+    return normalize_rsid(first_present(row.get("SNP (rsID)"), row.get("id_vcf")))
+
+
+def row_id_value(row: dict) -> str:
+    return first_present(row.get("row_id"), row.get("variant_gene_module_id"), row.get("canon_row_id"))
+
+
+def row_gene(row: dict) -> str:
+    return first_present(row.get("Gene"), row.get("approved_symbol"), row.get("gene_symbol_original"))
+
+
+def row_category(row: dict) -> str:
+    return first_present(row.get("Category / Module"), row.get("module_name"), row.get("module_id"))
+
+
+def row_canon_effect(row: dict) -> str:
+    return first_present(row.get("Canon Effect"), row.get("effect"), row.get("local_region_class"))
+
+
+def row_ref_alt(row: dict) -> str:
+    ref_alt = clean_str(row.get("Ref/Alt"))
+    if ref_alt:
+        return ref_alt
+    ref = clean_str(row.get("ref_vcf") or row.get("ref"))
+    alt = clean_str(row.get("alt_vcf") or row.get("alt"))
+    if ref or alt:
+        return f"{ref}/{alt}".strip("/")
+    return ""
+
+
+def row_confidence_level(row: dict) -> str:
+    confidence = clean_str(row.get("Confidence Level"))
+    if confidence:
+        return confidence
+    if as_bool(row.get("background_only")):
+        return "Low"
+    annotation_needed = clean_str(row.get("annotation_needed"))
+    if annotation_needed == "true":
+        return "High"
+    if annotation_needed == "optional":
+        return "Moderate"
+    return "Moderate"
+
+
+def row_review_status(row: dict) -> str:
+    review = clean_str(row.get("Review Status"))
+    if review:
+        return review
+    annotation_needed = clean_str(row.get("annotation_needed"))
+    if annotation_needed == "true":
+        return "ready_for_annotation"
+    if annotation_needed == "optional":
+        return "optional_annotation"
+    if as_bool(row.get("background_only")):
+        return "background_only"
+    return ""
+
+
+def row_source_group(row: dict) -> str:
+    return first_present(row.get("source_group"), row.get("module_status"))
+
+
+def row_notes(row: dict) -> str:
+    return first_present(row.get("Notes"), row.get("triage_reason"), row.get("notes"))
+
+
+def row_found_in_vcf_by_chr_pos(row: dict) -> str:
+    value = clean_str(row.get("found_in_vcf_by_chr_pos"))
+    if value:
+        return value
+    return "true" if as_bool(row.get("has_genotype")) else "false"
+
+
+def fieldnames_from_rows(rows: list[dict]) -> list[str]:
+    fieldnames = []
+    seen = set()
+    for row in rows:
+        for key in row.keys():
+            if key not in seen:
+                seen.add(key)
+                fieldnames.append(key)
+    return fieldnames
+
+
 def json_get(url: str, timeout_seconds: int) -> tuple[dict | list | None, str]:
     request = urllib.request.Request(
         url,
@@ -1024,6 +1119,29 @@ def build_output_row(row: dict, enrichment: dict) -> dict:
     }
 
 
+def build_output_row_v2(row: dict, enrichment: dict) -> dict:
+    base = {
+        **row,
+        "row_id": row_id_value(row),
+        "Gene": row_gene(row),
+        "SNP (rsID)": row_rsid(row),
+        "Genotype": clean_str(row.get("Genotype") or row.get("gt_alleles")),
+        "Zygosity": clean_str(row.get("Zygosity") or row.get("zygosity")),
+        "Ref/Alt": row_ref_alt(row),
+        "canon_effect": row_canon_effect(row),
+        "patient_ref": first_present(row.get("ref_vcf"), row.get("ref")),
+        "patient_alt_catalog": first_present(row.get("alt_vcf"), row.get("alt")),
+        "patient_observed_alt_alleles": observed_alt_alleles(row),
+        "Confidence Level": row_confidence_level(row),
+        "Category / Module": row_category(row),
+        "Review Status": row_review_status(row),
+        "source_group": row_source_group(row),
+        "Notes": row_notes(row),
+    }
+    legacy_view = build_output_row(base, enrichment)
+    return {**base, **legacy_view}
+
+
 def build_colab_output_row(row: dict, enrichment: dict) -> dict:
     ensembl_variation = enrichment.get("ensemblVariation") or {}
     ensembl_vep = enrichment.get("ensemblVep") or {}
@@ -1093,6 +1211,39 @@ def build_colab_output_row(row: dict, enrichment: dict) -> dict:
     }
     base["external_support_summary"] = colab_external_support_summary(base)
     return base
+
+
+def build_colab_output_row_v2(row: dict, enrichment: dict) -> dict:
+    base = {
+        **row,
+        "row_id": row_id_value(row),
+        "Gene": row_gene(row),
+        "SNP (rsID)": row_rsid(row),
+        "Category / Module": row_category(row),
+        "Canon Effect": row_canon_effect(row),
+        "Genotype": clean_str(row.get("Genotype") or row.get("gt_alleles")),
+        "gt_alleles": clean_str(row.get("gt_alleles") or row.get("Genotype")),
+        "patient_gt_alleles": clean_str(row.get("gt_alleles") or row.get("Genotype")),
+        "Zygosity": clean_str(row.get("Zygosity") or row.get("zygosity")),
+        "Ref/Alt": row_ref_alt(row),
+        "patient_ref": first_present(row.get("ref_vcf"), row.get("ref")),
+        "patient_alt_catalog": first_present(row.get("alt_vcf"), row.get("alt")),
+        "patient_observed_alt_alleles": observed_alt_alleles(row),
+        "source_group": row_source_group(row),
+        "match_status": clean_str(row.get("match_status") or row.get("local_region_class")),
+        "Confidence Level": row_confidence_level(row),
+        "Review Status": row_review_status(row),
+        "Notes": row_notes(row),
+        "gt_raw": clean_str(row.get("gt_raw")),
+        "ref": clean_str(row.get("ref")),
+        "alt": clean_str(row.get("alt")),
+        "ref_vcf": clean_str(row.get("ref_vcf")),
+        "alt_vcf": clean_str(row.get("alt_vcf")),
+        "has_genotype": clean_str(row.get("has_genotype")),
+        "found_in_vcf_by_chr_pos": row_found_in_vcf_by_chr_pos(row),
+    }
+    legacy_view = build_colab_output_row(base, enrichment)
+    return {**base, **legacy_view}
 
 
 def build_plus_output_row(row: dict, enrichment: dict) -> dict:
@@ -1174,14 +1325,22 @@ def build_plus_output_row(row: dict, enrichment: dict) -> dict:
     return plus
 
 
+def build_plus_output_row_v2(row: dict, enrichment: dict) -> dict:
+    base = build_colab_output_row_v2(row, enrichment)
+    plus = build_plus_output_row(base, enrichment)
+    return {**base, **plus}
+
+
 def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds: int, ttl_days: int) -> dict:
     started_at = utc_now()
     output_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     rows = read_csv(input_path)
-    observed_rows = [row for row in rows if as_bool(row.get("has_genotype")) and normalize_rsid(row.get("SNP (rsID)"))]
-    unique_rsids = sorted({normalize_rsid(row.get("SNP (rsID)")) for row in observed_rows})
+    schema_version = schema_version_for_rows(rows)
+    observed_rows = [row for row in rows if as_bool(row.get("has_genotype"))]
+    rows_with_rsid = [row for row in observed_rows if row_rsid(row)]
+    unique_rsids = sorted({row_rsid(row) for row in rows_with_rsid})
 
     enrichments = {}
     warnings = []
@@ -1196,136 +1355,139 @@ def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds
         if enrichments[rsid].get("errors"):
             warnings.append(f"{rsid}: {','.join(sorted(enrichments[rsid]['errors'].keys()))}")
 
-    output_rows = [build_output_row(row, enrichments[normalize_rsid(row.get("SNP (rsID)"))]) for row in observed_rows]
-    colab_output_rows = [
-        build_colab_output_row(row, enrichments[normalize_rsid(row.get("SNP (rsID)"))]) for row in observed_rows
-    ]
-    plus_output_rows = [
-        build_plus_output_row(row, enrichments[normalize_rsid(row.get("SNP (rsID)"))]) for row in observed_rows
-    ]
-    qa_fieldnames = [
-        "Gene",
-        "SNP (rsID)",
-        "Genotype",
-        "Zygosity",
-        "Ref/Alt",
-        "patient_ref",
-        "patient_alt_catalog",
-        "patient_observed_alt_alleles",
-        "allele_match_summary",
-        "external_support_summary",
-        "Confidence Level",
-        "Category / Module",
-        "canon_effect",
-        "Review Status",
-        "match_status",
-        "source_group",
-        "row_id",
-        "ref_vcf",
-        "alt_vcf",
-        "gt_raw",
-        "ensembl_most_severe_consequence",
-        "ensembl_variant_class",
-        "ensembl_gene_symbols",
-        "ensembl_consequence_terms",
-        "ensembl_impacts",
-        "ensembl_clinical_significance",
-        "ensembl_evidence",
-        "ensembl_phenotypes",
-        "ensembl_populations",
-        "ensembl_minor_allele",
-        "ensembl_maf",
-        "ensembl_mapping_location",
-        "ensembl_mapping_allele_string",
-        "ensembl_mappings_summary",
-        "ensembl_transcript_summary",
-        "ensembl_colocated_variants",
-        "clinvar_count",
-        "clinvar_ids",
-        "clinvar_titles",
-        "clinvar_clinical_significance",
-        "clinvar_review_status",
-        "clinvar_trait_names",
-        "myvariant_hits",
-        "myvariant_best_id",
-        "myvariant_best_score",
-        "myvariant_top_level_fields",
-        "myvariant_clinvar_significance",
-        "myvariant_clinvar_review_status",
-        "myvariant_cadd_phred",
-        "myvariant_dbsnp_gene",
-        "myvariant_dbsnp_alleles",
-        "myvariant_dbnsfp_gene_name",
-        "external_cache_hit",
-        "external_error_sources",
-        "ensembl_variation_raw_json",
-        "ensembl_vep_raw_json",
-        "clinvar_esearch_raw_json",
-        "clinvar_esummary_raw_json",
-        "myvariant_raw_json",
-    ]
-    colab_fieldnames = [
-        "row_id",
-        "Gene",
-        "SNP (rsID)",
-        "Category / Module",
-        "Canon Effect",
-        "Genotype",
-        "gt_alleles",
-        "patient_gt_alleles",
-        "Zygosity",
-        "Ref/Alt",
-        "patient_ref",
-        "patient_alt_catalog",
-        "patient_observed_alt_alleles",
-        "allele_match_summary",
-        "source_group",
-        "match_status",
-        "Confidence Level",
-        "Review Status",
-        "Notes",
-        "ensembl_var_class",
-        "ensembl_minor_allele",
-        "ensembl_minor_allele_freq",
-        "ensembl_clin_sig",
-        "ensembl_evidence",
-        "vep_most_severe_consequence",
-        "vep_variant_class",
-        "clinvar_uid_count",
-        "clinvar_germline_classification",
-        "clinvar_review_status",
-        "clinvar_titles",
-        "myvariant_hit_count",
-        "myvariant_best_id",
-        "myvariant_best_score",
-        "external_support_summary",
-        "Interpretation (1 sentence)",
-        "gt_raw",
-        "ref",
-        "alt",
-        "ref_vcf",
-        "alt_vcf",
-        "has_genotype",
-        "found_in_vcf_by_chr_pos",
-        "ensembl_phenotypes",
-        "ensembl_populations",
-        "ensembl_mappings",
-        "ensembl_raw_json",
-        "vep_transcript_summary",
-        "vep_colocated_variants",
-        "vep_raw_json",
-        "clinvar_uids",
-        "clinvar_accessions",
-        "clinvar_record_types",
-        "clinvar_esearch_json",
-        "clinvar_esummary_json",
-        "myvariant_top_level_fields",
-        "myvariant_raw_json",
-    ]
+    if schema_version == "gene_module_v2":
+        output_rows = [build_output_row_v2(row, enrichments.get(row_rsid(row), {})) for row in observed_rows]
+        colab_output_rows = [build_colab_output_row_v2(row, enrichments.get(row_rsid(row), {})) for row in observed_rows]
+        plus_output_rows = [build_plus_output_row_v2(row, enrichments.get(row_rsid(row), {})) for row in observed_rows]
+        qa_fieldnames = fieldnames_from_rows(output_rows)
+        colab_fieldnames = fieldnames_from_rows(colab_output_rows)
+    else:
+        output_rows = [build_output_row(row, enrichments.get(row_rsid(row), {})) for row in observed_rows]
+        colab_output_rows = [build_colab_output_row(row, enrichments.get(row_rsid(row), {})) for row in observed_rows]
+        plus_output_rows = [build_plus_output_row(row, enrichments.get(row_rsid(row), {})) for row in observed_rows]
+        qa_fieldnames = [
+            "Gene",
+            "SNP (rsID)",
+            "Genotype",
+            "Zygosity",
+            "Ref/Alt",
+            "patient_ref",
+            "patient_alt_catalog",
+            "patient_observed_alt_alleles",
+            "allele_match_summary",
+            "external_support_summary",
+            "Confidence Level",
+            "Category / Module",
+            "canon_effect",
+            "Review Status",
+            "match_status",
+            "source_group",
+            "row_id",
+            "ref_vcf",
+            "alt_vcf",
+            "gt_raw",
+            "ensembl_most_severe_consequence",
+            "ensembl_variant_class",
+            "ensembl_gene_symbols",
+            "ensembl_consequence_terms",
+            "ensembl_impacts",
+            "ensembl_clinical_significance",
+            "ensembl_evidence",
+            "ensembl_phenotypes",
+            "ensembl_populations",
+            "ensembl_minor_allele",
+            "ensembl_maf",
+            "ensembl_mapping_location",
+            "ensembl_mapping_allele_string",
+            "ensembl_mappings_summary",
+            "ensembl_transcript_summary",
+            "ensembl_colocated_variants",
+            "clinvar_count",
+            "clinvar_ids",
+            "clinvar_titles",
+            "clinvar_clinical_significance",
+            "clinvar_review_status",
+            "clinvar_trait_names",
+            "myvariant_hits",
+            "myvariant_best_id",
+            "myvariant_best_score",
+            "myvariant_top_level_fields",
+            "myvariant_clinvar_significance",
+            "myvariant_clinvar_review_status",
+            "myvariant_cadd_phred",
+            "myvariant_dbsnp_gene",
+            "myvariant_dbsnp_alleles",
+            "myvariant_dbnsfp_gene_name",
+            "external_cache_hit",
+            "external_error_sources",
+            "ensembl_variation_raw_json",
+            "ensembl_vep_raw_json",
+            "clinvar_esearch_raw_json",
+            "clinvar_esummary_raw_json",
+            "myvariant_raw_json",
+        ]
+        colab_fieldnames = [
+            "row_id",
+            "Gene",
+            "SNP (rsID)",
+            "Category / Module",
+            "Canon Effect",
+            "Genotype",
+            "gt_alleles",
+            "patient_gt_alleles",
+            "Zygosity",
+            "Ref/Alt",
+            "patient_ref",
+            "patient_alt_catalog",
+            "patient_observed_alt_alleles",
+            "allele_match_summary",
+            "source_group",
+            "match_status",
+            "Confidence Level",
+            "Review Status",
+            "Notes",
+            "ensembl_var_class",
+            "ensembl_minor_allele",
+            "ensembl_minor_allele_freq",
+            "ensembl_clin_sig",
+            "ensembl_evidence",
+            "vep_most_severe_consequence",
+            "vep_variant_class",
+            "clinvar_uid_count",
+            "clinvar_germline_classification",
+            "clinvar_review_status",
+            "clinvar_titles",
+            "myvariant_hit_count",
+            "myvariant_best_id",
+            "myvariant_best_score",
+            "external_support_summary",
+            "Interpretation (1 sentence)",
+            "gt_raw",
+            "ref",
+            "alt",
+            "ref_vcf",
+            "alt_vcf",
+            "has_genotype",
+            "found_in_vcf_by_chr_pos",
+            "ensembl_phenotypes",
+            "ensembl_populations",
+            "ensembl_mappings",
+            "ensembl_raw_json",
+            "vep_transcript_summary",
+            "vep_colocated_variants",
+            "vep_raw_json",
+            "clinvar_uids",
+            "clinvar_accessions",
+            "clinvar_record_types",
+            "clinvar_esearch_json",
+            "clinvar_esummary_json",
+            "myvariant_top_level_fields",
+            "myvariant_raw_json",
+        ]
     output_csv = output_dir / "heal_observed_variant_enrichment.csv"
     colab_output_csv = output_dir / "heal_fon_interpretation_enriched_observed69.csv"
     plus_output_csv = output_dir / "heal_fon_interpretation_enrichment_plus.csv"
-    plus_fieldnames = colab_fieldnames + [
+    plus_fieldnames = fieldnames_from_rows(plus_output_rows) if schema_version == "gene_module_v2" else colab_fieldnames + [
         "clinvar_normalized_classification",
         "clinvar_evidence_strength",
         "clinvar_conflict_flag",
@@ -1400,6 +1562,8 @@ def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds
     if not observed_rows:
         status = "warning"
         warnings.append("No observed genotype rows were available for external enrichment.")
+    elif schema_version == "gene_module_v2" and not rows_with_rsid:
+        warnings.append("Gene-module v2 rows do not include rsIDs; external enrichment fields remain sparse but rows were preserved.")
 
     summary = {
         "status": status,
@@ -1409,8 +1573,10 @@ def process(input_path: Path, output_dir: Path, cache_dir: Path, timeout_seconds
         "outputDir": str(output_dir),
         "cacheDir": str(cache_dir),
         "metadata": {
+            "schema_version": schema_version,
             "source_rows": len(rows),
             "observed_rows": len(observed_rows),
+            "rows_with_rsid": len(rows_with_rsid),
             "unique_rsids": len(unique_rsids),
             "output_rows": len(output_rows),
             "cache_hits": sum(1 for item in enrichments.values() if item.get("cacheHit")),
