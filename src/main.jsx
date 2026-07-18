@@ -31,9 +31,11 @@ const BUSY_PHASES = [
   "uploading",
   "validating",
   "matching",
+  "normalizing",
   "preparing",
   "triaging",
   "enriching",
+  "enrichment_quality_gate",
   "grouping_preparation",
   "grouped_individual_interpretation",
   "individual_interpretation",
@@ -124,6 +126,9 @@ const COPY = {
     parserStreaming: "Streaming estable",
     parserPysam: "pysam experimental",
     parserHelp: "pysam replica mejor el Colab cuando esta disponible; si falla, el backend vuelve a streaming.",
+    vcfAssemblyLabel: "Assembly VCF",
+    vcfAssemblyAuto: "Detectar automaticamente",
+    vcfAssemblyHelp: "Para canon v2 se bloquea el match si el assembly del VCF y del canon no coincide.",
     playStage: "Ejecutar etapa",
     debugDownloads: "Descargas QA",
     qaVcfCandidates: "Candidatos VCF por posicion",
@@ -138,9 +143,11 @@ const COPY = {
     uploadProgress: "Carga del archivo",
     validationProgress: "Validacion del VCF",
     matchProgress: "Match VCF-Canon",
+    normalizationProgress: "Normalizacion VCF",
     preparationProgress: "Preparacion del match",
     aiTriageProgress: "Triage IA",
     enrichmentProgress: "Enriquecimiento externo",
+    enrichmentQualityProgress: "QA de enrichment",
     groupingPreparationProgress: "Agrupacion gene+modulo",
     groupedInterpretationProgress: "Interpretacion individual agrupada",
     individualInterpretationProgress: "Interpretacion individual",
@@ -164,7 +171,9 @@ const COPY = {
     matchStarting: "Iniciando match VCF-Canon...",
     matching: "Matcheando VCF contra canon...",
     preparing: "Preparando CSVs de auditoria...",
+    normalizing: "Normalizando alelos VCF contra la referencia...",
     enriching: "Enriqueciendo variantes observadas...",
+    enrichmentQuality: "Validando cobertura y calidad del enrichment...",
     groupingPreparing: "Preparando payloads agrupados por gen y modulo...",
     groupedInterpretationStarting: "Iniciando interpretacion individual agrupada...",
     groupedInterpreting: "Interpretando grupos gen-modulo...",
@@ -206,6 +215,7 @@ const COPY = {
     preparationComplete: "Preparacion del match finalizada.",
     aiTriageComplete: "Triage IA finalizado.",
     enrichmentComplete: "Enriquecimiento externo finalizado.",
+    enrichmentQualityComplete: "QA de enrichment finalizado.",
     resultValid: "VCF validado",
     resultWarning: "Validado con warnings",
     resultInvalid: "VCF invalido",
@@ -249,6 +259,10 @@ const COPY = {
     aiTriageDraftExcluded: "Excluidas Draft optional",
     aiTriageNoncodingExcluded: "Excluidas no codificantes optional",
     enrichmentObserved: "Filas enriquecidas",
+    enrichmentPhysicalVariants: "Variantes fisicas",
+    enrichmentVepCoverage: "Cobertura VEP",
+    enrichmentExactRsids: "rsIDs exactos resueltos",
+    enrichmentQualityDecision: "Decision QA",
     enrichmentInputRows: "Filas fuente",
     enrichmentPlusRows: "Filas Enrichment Plus",
     enrichmentUniqueRsids: "rsIDs unicos",
@@ -343,6 +357,10 @@ const COPY = {
     enrichmentDownload: "Descargar CSV interpretativo",
     enrichmentPlusDownload: "Descargar CSV Enrichment Plus",
     enrichmentQaDownload: "Descargar CSV tecnico QA",
+    normalizedVariantsDownload: "Descargar variantes normalizadas",
+    normalizationAuditDownload: "Descargar audit de normalizacion",
+    enrichmentQualityDownload: "Descargar resumen QA enrichment",
+    enrichmentEvidenceAuditDownload: "Descargar evidencia enrichment",
     groupingPayloadsDownload: "Descargar payloads agrupados",
     groupingVariantDetailDownload: "Descargar detalle por variante",
     groupingSummaryDownload: "Descargar resumen de grupos",
@@ -389,6 +407,9 @@ const COPY = {
     parserStreaming: "Stable streaming",
     parserPysam: "Experimental pysam",
     parserHelp: "pysam mirrors the Colab parser more closely when available; if it fails, the backend falls back to streaming.",
+    vcfAssemblyLabel: "VCF assembly",
+    vcfAssemblyAuto: "Auto-detect",
+    vcfAssemblyHelp: "For canon v2, matching is blocked when VCF and canon assemblies differ.",
     playStage: "Run stage",
     debugDownloads: "QA downloads",
     qaVcfCandidates: "VCF position candidates",
@@ -403,9 +424,11 @@ const COPY = {
     uploadProgress: "File upload",
     validationProgress: "VCF validation",
     matchProgress: "VCF-Canon match",
+    normalizationProgress: "VCF normalization",
     preparationProgress: "Match preparation",
     aiTriageProgress: "AI triage",
     enrichmentProgress: "External enrichment",
+    enrichmentQualityProgress: "Enrichment QA",
     groupingPreparationProgress: "Gene+module grouping",
     groupedInterpretationProgress: "Grouped individual interpretation",
     individualInterpretationProgress: "Individual interpretation",
@@ -429,7 +452,9 @@ const COPY = {
     matchStarting: "Starting VCF-Canon match...",
     matching: "Matching VCF against canon...",
     preparing: "Preparing audit CSVs...",
+    normalizing: "Normalizing VCF alleles against the managed reference...",
     enriching: "Enriching observed variants...",
+    enrichmentQuality: "Checking enrichment coverage and quality...",
     groupingPreparing: "Preparing grouped gene-module payloads...",
     groupedInterpretationStarting: "Starting grouped individual interpretation...",
     groupedInterpreting: "Interpreting gene-module groups...",
@@ -471,6 +496,7 @@ const COPY = {
     preparationComplete: "Match preparation finished.",
     aiTriageComplete: "AI triage finished.",
     enrichmentComplete: "External enrichment finished.",
+    enrichmentQualityComplete: "Enrichment QA finished.",
     resultValid: "VCF validated",
     resultWarning: "Validated with warnings",
     resultInvalid: "Invalid VCF",
@@ -514,6 +540,10 @@ const COPY = {
     aiTriageDraftExcluded: "Draft optional excluded",
     aiTriageNoncodingExcluded: "Optional noncoding excluded",
     enrichmentObserved: "Enriched rows",
+    enrichmentPhysicalVariants: "Physical variants",
+    enrichmentVepCoverage: "VEP coverage",
+    enrichmentExactRsids: "Exact resolved rsIDs",
+    enrichmentQualityDecision: "QA decision",
     enrichmentInputRows: "Source rows",
     enrichmentPlusRows: "Enrichment Plus rows",
     enrichmentUniqueRsids: "Unique rsIDs",
@@ -608,6 +638,10 @@ const COPY = {
     enrichmentDownload: "Download interpretive CSV",
     enrichmentPlusDownload: "Download Enrichment Plus CSV",
     enrichmentQaDownload: "Download technical QA CSV",
+    normalizedVariantsDownload: "Download normalized variants",
+    normalizationAuditDownload: "Download normalization audit",
+    enrichmentQualityDownload: "Download enrichment QA summary",
+    enrichmentEvidenceAuditDownload: "Download enrichment evidence audit",
     groupingPayloadsDownload: "Download grouped payloads",
     groupingVariantDetailDownload: "Download grouped variant detail",
     groupingSummaryDownload: "Download grouped summary",
@@ -1401,6 +1435,7 @@ function MatchResultPanel({ result, locale, t }) {
   const confidenceCounts = preparation.confidence_level_counts || {};
   const preparationReviewCounts = preparation.review_status_counts || {};
   const enrichment = result.variantEnrichment?.metadata || {};
+  const enrichmentQuality = enrichment.qualityGate || metadata.enrichment_quality_gate || {};
   const groupingPreparation = result.groupPrep?.metadata || {};
   const groupedInterpretation = result.groupedIndividualInterpretation?.metadata || {};
   const individualInterpretation = result.individualInterpretation?.metadata || {};
@@ -1464,7 +1499,16 @@ function MatchResultPanel({ result, locale, t }) {
       ]
     : [];
   const enrichmentCards = result.variantEnrichment
-    ? [
+    ? isGeneModuleV2
+      ? [
+          [t.enrichmentInputRows, formatNumber(enrichmentQuality.moduleRows, locale)],
+          [t.enrichmentPhysicalVariants, formatNumber(enrichmentQuality.physicalVariants, locale)],
+          [t.enrichmentVepCoverage, `${((Number(enrichmentQuality.vepCoverage) || 0) * 100).toFixed(1)}%`],
+          [t.enrichmentExactRsids, formatNumber(enrichmentQuality.exactRsidsResolved, locale)],
+          [t.enrichmentSourceErrors, formatNumber(Object.values(enrichmentQuality.sourceErrors || {}).reduce((sum, value) => sum + Number(value || 0), 0), locale)],
+          [t.enrichmentQualityDecision, enrichmentQuality.status || "-"],
+        ]
+      : [
         [t.enrichmentInputRows, formatNumber(enrichment.source_rows, locale)],
         [t.enrichmentObserved, formatNumber(enrichment.output_rows, locale)],
         [t.enrichmentPlusRows, formatNumber(enrichment.plus_rows, locale)],
@@ -1628,6 +1672,31 @@ function MatchResultPanel({ result, locale, t }) {
     await downloadCsv(
       `/api/vcf-canon-matches/${result.jobId}/enrichment-plus`,
       "heal-fon-interpretation-enrichment-plus.csv",
+    );
+  }
+
+  async function downloadNormalizedVariants() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/normalized-variants`, "normalized_variants.csv");
+  }
+
+  async function downloadNormalizationAudit() {
+    await downloadCsv(
+      `/api/vcf-canon-matches/${result.jobId}/normalization-excluded-audit`,
+      "normalization_excluded_audit.csv",
+    );
+  }
+
+  async function downloadEnrichmentQuality() {
+    await downloadCsv(
+      `/api/vcf-canon-matches/${result.jobId}/enrichment-quality-summary`,
+      "enrichment_quality_summary.json",
+    );
+  }
+
+  async function downloadEnrichmentEvidenceAudit() {
+    await downloadCsv(
+      `/api/vcf-canon-matches/${result.jobId}/enrichment-evidence-audit`,
+      "v2_enrichment_evidence_audit.jsonl",
     );
   }
 
@@ -1856,6 +1925,22 @@ function MatchResultPanel({ result, locale, t }) {
           <Download size={17} />
           {t.enrichmentQaDownload}
         </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.vcfNormalization} onClick={downloadNormalizedVariants}>
+          <Download size={17} />
+          {t.normalizedVariantsDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.vcfNormalization} onClick={downloadNormalizationAudit}>
+          <Download size={17} />
+          {t.normalizationAuditDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.variantEnrichment} onClick={downloadEnrichmentQuality}>
+          <Download size={17} />
+          {t.enrichmentQualityDownload}
+        </button>
+        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.variantEnrichment} onClick={downloadEnrichmentEvidenceAudit}>
+          <Download size={17} />
+          {t.enrichmentEvidenceAuditDownload}
+        </button>
         <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.groupPrep} onClick={downloadGroupedPayloads}>
           <Download size={17} />
           {t.groupingPayloadsDownload}
@@ -1952,15 +2037,18 @@ function App() {
   const [language, setLanguage] = useState("es");
   const [analysisMode, setAnalysisMode] = useState("quick");
   const [vcfParser, setVcfParser] = useState("streaming");
+  const [vcfAssembly, setVcfAssembly] = useState("auto");
   const [file, setFile] = useState(null);
   const [uploadRecord, setUploadRecord] = useState(null);
   const [dragging, setDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [validationProgress, setValidationProgress] = useState(0);
   const [matchProgress, setMatchProgress] = useState(0);
+  const [normalizationProgress, setNormalizationProgress] = useState(0);
   const [preparationProgress, setPreparationProgress] = useState(0);
   const [aiTriageProgress, setAiTriageProgress] = useState(0);
   const [enrichmentProgress, setEnrichmentProgress] = useState(0);
+  const [enrichmentQualityProgress, setEnrichmentQualityProgress] = useState(0);
   const [groupingPreparationProgress, setGroupingPreparationProgress] = useState(0);
   const [groupedInterpretationProgress, setGroupedInterpretationProgress] = useState(0);
   const [individualInterpretationProgress, setIndividualInterpretationProgress] = useState(0);
@@ -1981,11 +2069,14 @@ function App() {
   const [matchArtifactsReady, setMatchArtifactsReady] = useState({
     matches: false,
     debug: false,
+    normalization: false,
+    normalizationAudit: false,
     preparation: false,
     aiTriage: false,
     enrichment: false,
     enrichmentInterpretive: false,
     enrichmentPlus: false,
+    enrichmentQuality: false,
     groupedPayloads: false,
     groupedVariantDetail: false,
     groupedInterpretation: false,
@@ -2034,9 +2125,11 @@ function App() {
     setUploadProgress(0);
     setValidationProgress(0);
     setMatchProgress(0);
+    setNormalizationProgress(0);
     setPreparationProgress(0);
     setAiTriageProgress(0);
     setEnrichmentProgress(0);
+    setEnrichmentQualityProgress(0);
     setGroupingPreparationProgress(0);
     setGroupedInterpretationProgress(0);
     setIndividualInterpretationProgress(0);
@@ -2048,11 +2141,14 @@ function App() {
     setMatchArtifactsReady({
       matches: false,
       debug: false,
+      normalization: false,
+      normalizationAudit: false,
       preparation: false,
       aiTriage: false,
       enrichment: false,
       enrichmentInterpretive: false,
       enrichmentPlus: false,
+      enrichmentQuality: false,
       groupedPayloads: false,
       groupedVariantDetail: false,
       groupedInterpretation: false,
@@ -2142,6 +2238,13 @@ function App() {
     try {
       if (kind === "matches") {
         await downloadCsv(`/api/vcf-canon-matches/${matchResult.jobId}/download`, "heal-vcf-canon-matches.csv");
+      } else if (kind === "normalization") {
+        await downloadCsv(`/api/vcf-canon-matches/${matchResult.jobId}/normalized-variants`, "normalized_variants.csv");
+      } else if (kind === "normalizationAudit") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/normalization-excluded-audit`,
+          "normalization_excluded_audit.csv",
+        );
       } else if (kind === "preparation") {
         await downloadCsv(
           `/api/vcf-canon-matches/${matchResult.jobId}/preparation-audit`,
@@ -2171,6 +2274,16 @@ function App() {
         await downloadCsv(
           `/api/vcf-canon-matches/${matchResult.jobId}/enrichment-plus`,
           "heal-fon-interpretation-enrichment-plus.csv",
+        );
+      } else if (kind === "enrichmentQuality") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/enrichment-quality-summary`,
+          "enrichment_quality_summary.json",
+        );
+      } else if (kind === "enrichmentEvidenceAudit") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/enrichment-evidence-audit`,
+          "v2_enrichment_evidence_audit.jsonl",
         );
       } else if (kind === "groupedPayloads") {
         await downloadCsv(
@@ -2325,11 +2438,14 @@ function App() {
     setMatchArtifactsReady((current) => ({
       matches: Boolean(ready.matches),
       debug: Boolean(ready.debug),
+      normalization: Boolean(ready.normalization),
+      normalizationAudit: Boolean(ready.normalizationAudit),
       preparation: Boolean(ready.preparation),
       aiTriage: Boolean(ready.aiTriage),
       enrichment: Boolean(ready.enrichment),
       enrichmentInterpretive: Boolean(ready.enrichmentInterpretive),
       enrichmentPlus: Boolean(ready.enrichmentPlus),
+      enrichmentQuality: Boolean(ready.enrichmentQuality),
       groupedPayloads: Boolean(ready.groupedPayloads),
       groupedVariantDetail: Boolean(ready.groupedVariantDetail),
       groupedInterpretation: Boolean(ready.groupedInterpretation),
@@ -2345,11 +2461,13 @@ function App() {
     if (
       job.result ||
       ready.matches ||
+      ready.normalization ||
       ready.preparation ||
       ready.aiTriage ||
       ready.enrichment ||
       ready.enrichmentInterpretive ||
       ready.enrichmentPlus ||
+      ready.enrichmentQuality ||
       ready.groupedPayloads ||
       ready.groupedVariantDetail ||
       ready.groupedInterpretation ||
@@ -2393,38 +2511,58 @@ function App() {
       const job = await response.json();
       updateMatchSnapshot(job);
       setMatchProgress(job.progress || 0);
-      if (job.stage === "preparing") {
+      if (job.stage === "normalizing") {
+        setPhase("normalizing");
+        setNormalizationProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.normalizing);
+      } else if (job.stage === "preparing") {
         setPhase("preparing");
         setMatchProgress(100);
+        setNormalizationProgress(100);
         setPreparationProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.preparing);
       } else if (job.stage === "triaging") {
         setPhase("triaging");
         setMatchProgress(100);
+        setNormalizationProgress(100);
         setPreparationProgress(100);
         setAiTriageProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.aiTriageProgress);
       } else if (job.stage === "enriching") {
         setPhase("enriching");
         setMatchProgress(100);
+        setNormalizationProgress(100);
         setPreparationProgress(100);
         setAiTriageProgress(100);
         setEnrichmentProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.enriching);
-      } else if (job.stage === "grouping_preparation") {
-        setPhase("grouping_preparation");
+      } else if (job.stage === "enrichment_quality_gate") {
+        setPhase("enrichment_quality_gate");
         setMatchProgress(100);
+        setNormalizationProgress(100);
         setPreparationProgress(100);
         setAiTriageProgress(100);
         setEnrichmentProgress(100);
+        setEnrichmentQualityProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.enrichmentQuality);
+      } else if (job.stage === "grouping_preparation") {
+        setPhase("grouping_preparation");
+        setMatchProgress(100);
+        setNormalizationProgress(100);
+        setPreparationProgress(100);
+        setAiTriageProgress(100);
+        setEnrichmentProgress(100);
+        setEnrichmentQualityProgress(100);
         setGroupingPreparationProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.groupingPreparing);
       } else if (job.stage === "grouped_individual_interpretation") {
         setPhase("grouped_individual_interpretation");
         setMatchProgress(100);
+        setNormalizationProgress(100);
         setPreparationProgress(100);
         setAiTriageProgress(100);
         setEnrichmentProgress(100);
+        setEnrichmentQualityProgress(100);
         setGroupingPreparationProgress(100);
         setGroupedInterpretationProgress(job.stageProgress ?? job.progress ?? 0);
         setGroupedInterpretationDetail(groupedInterpretationDetailFromMessage(job.message, t));
@@ -2432,9 +2570,11 @@ function App() {
       } else if (job.stage === "individual_interpretation") {
         setPhase("individual_interpretation");
         setMatchProgress(100);
+        setNormalizationProgress(100);
         setPreparationProgress(100);
         setAiTriageProgress(100);
         setEnrichmentProgress(100);
+        setEnrichmentQualityProgress(100);
         setGroupingPreparationProgress(100);
         setGroupedInterpretationProgress(100);
         setGroupedInterpretationDetail("");
@@ -2444,9 +2584,11 @@ function App() {
       } else if (job.stage === "interpretation_normalization") {
         setPhase("interpretation_normalization");
         setMatchProgress(100);
+        setNormalizationProgress(100);
         setPreparationProgress(100);
         setAiTriageProgress(100);
         setEnrichmentProgress(100);
+        setEnrichmentQualityProgress(100);
         setGroupingPreparationProgress(100);
         setGroupedInterpretationProgress(100);
         setGroupedInterpretationDetail("");
@@ -2457,9 +2599,11 @@ function App() {
       } else if (job.stage === "global_interpretation") {
         setPhase("global_interpretation");
         setMatchProgress(100);
+        setNormalizationProgress(100);
         setPreparationProgress(100);
         setAiTriageProgress(100);
         setEnrichmentProgress(100);
+        setEnrichmentQualityProgress(100);
         setGroupingPreparationProgress(100);
         setGroupedInterpretationProgress(100);
         setGroupedInterpretationDetail("");
@@ -2471,9 +2615,11 @@ function App() {
       } else if (job.stage === "final_report") {
         setPhase("final_report");
         setMatchProgress(100);
+        setNormalizationProgress(100);
         setPreparationProgress(100);
         setAiTriageProgress(100);
         setEnrichmentProgress(100);
+        setEnrichmentQualityProgress(100);
         setGroupingPreparationProgress(100);
         setGroupedInterpretationProgress(100);
         setGroupedInterpretationDetail("");
@@ -2491,12 +2637,18 @@ function App() {
       }
 
       if (job.status === "complete") {
+        if (job.artifactsReady?.normalization || job.result?.vcfNormalization) {
+          setNormalizationProgress(100);
+        }
         setPreparationProgress(100);
         if (job.artifactsReady?.aiTriage || job.result?.aiTriage) {
           setAiTriageProgress(100);
         }
         if (job.artifactsReady?.enrichment || job.result?.variantEnrichment) {
           setEnrichmentProgress(100);
+        }
+        if (job.artifactsReady?.enrichmentQuality || job.result?.metadata?.enrichment_quality_gate) {
+          setEnrichmentQualityProgress(100);
         }
         if (job.artifactsReady?.groupedPayloads || job.result?.groupPrep) {
           setGroupingPreparationProgress(100);
@@ -2539,6 +2691,8 @@ function App() {
               ? t.individualInterpretationFailed
               : job.stage === "enriching"
                 ? t.enrichmentFailed
+                : job.stage === "normalizing" || job.stage === "enrichment_quality_gate"
+                  ? t.enrichmentFailed
                 : t.matchFailed),
         );
         failed.stage = job.stage;
@@ -2575,9 +2729,11 @@ function App() {
           setUploadProgress(0);
           setValidationProgress(0);
           setMatchProgress(0);
+          setNormalizationProgress(0);
           setPreparationProgress(0);
           setAiTriageProgress(0);
           setEnrichmentProgress(0);
+          setEnrichmentQualityProgress(0);
           setGroupingPreparationProgress(0);
           setGroupedInterpretationProgress(0);
           setIndividualInterpretationProgress(0);
@@ -2588,11 +2744,14 @@ function App() {
           setMatchArtifactsReady({
             matches: false,
             debug: false,
+            normalization: false,
+            normalizationAudit: false,
             preparation: false,
             aiTriage: false,
             enrichment: false,
             enrichmentInterpretive: false,
             enrichmentPlus: false,
+            enrichmentQuality: false,
             groupedPayloads: false,
             groupedVariantDetail: false,
             groupedInterpretation: false,
@@ -2651,9 +2810,11 @@ function App() {
     setPhase("matching");
     setMessageKey("matchStarting");
     setMatchProgress(5);
+    setNormalizationProgress(0);
     setPreparationProgress(0);
     setAiTriageProgress(0);
     setEnrichmentProgress(0);
+    setEnrichmentQualityProgress(0);
     setGroupingPreparationProgress(0);
     setGroupedInterpretationProgress(0);
     setIndividualInterpretationProgress(0);
@@ -2664,7 +2825,7 @@ function App() {
     const matchStart = await fetch(`${API_BASE}/api/vcf-canon-matches`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...accessHeaders(upload.accessToken) },
-      body: JSON.stringify({ uploadId: upload.uploadId, accessToken: upload.accessToken, vcfParser, analysisMode }),
+      body: JSON.stringify({ uploadId: upload.uploadId, accessToken: upload.accessToken, vcfParser, vcfAssembly, analysisMode }),
     });
     if (!matchStart.ok) throw new Error(await matchStart.text());
     const matchJob = await matchStart.json();
@@ -2675,18 +2836,26 @@ function App() {
     setMessageKey(
       downstreamSupported
         ? "enrichmentComplete"
+        : nextMatchResult?.variantEnrichment
+          ? "enrichmentQualityComplete"
         : nextMatchResult?.groupedIndividualInterpretation
           ? "groupedInterpretationComplete"
           : "aiTriageComplete",
     );
     setCustomMessage("");
     setMatchProgress(100);
+    if (nextMatchResult?.artifactsReady?.normalization || nextMatchResult?.vcfNormalization) {
+      setNormalizationProgress(100);
+    }
     setPreparationProgress(100);
     if (nextMatchResult?.artifactsReady?.aiTriage || nextMatchResult?.aiTriage) {
       setAiTriageProgress(100);
     }
     if (nextMatchResult?.artifactsReady?.enrichment || nextMatchResult?.variantEnrichment) {
       setEnrichmentProgress(100);
+    }
+    if (nextMatchResult?.artifactsReady?.enrichmentQuality || nextMatchResult?.metadata?.enrichment_quality_gate) {
+      setEnrichmentQualityProgress(100);
     }
     if (nextMatchResult?.artifactsReady?.groupedPayloads || nextMatchResult?.groupPrep) {
       setGroupingPreparationProgress(100);
@@ -3028,11 +3197,14 @@ function App() {
     setMatchArtifactsReady({
       matches: false,
       debug: false,
+      normalization: false,
+      normalizationAudit: false,
       preparation: false,
       aiTriage: false,
       enrichment: false,
       enrichmentInterpretive: false,
       enrichmentPlus: false,
+      enrichmentQuality: false,
       groupedPayloads: false,
       groupedVariantDetail: false,
       groupedInterpretation: false,
@@ -3048,9 +3220,11 @@ function App() {
     setUploadProgress(0);
     setValidationProgress(0);
     setMatchProgress(0);
+    setNormalizationProgress(0);
     setPreparationProgress(0);
     setAiTriageProgress(0);
     setEnrichmentProgress(0);
+    setEnrichmentQualityProgress(0);
     setGroupingPreparationProgress(0);
     setGroupedInterpretationProgress(0);
     setIndividualInterpretationProgress(0);
@@ -3179,6 +3353,15 @@ function App() {
         </div>
 
         <ModeSelector mode={analysisMode} setMode={setAnalysisMode} t={t} />
+        <label className="parser-control">
+          <span>{t.vcfAssemblyLabel}</span>
+          <select value={vcfAssembly} onChange={(event) => setVcfAssembly(event.target.value)}>
+            <option value="auto">{t.vcfAssemblyAuto}</option>
+            <option value="GRCh38">GRCh38</option>
+            <option value="GRCh37">GRCh37</option>
+          </select>
+          <small>{t.vcfAssemblyHelp}</small>
+        </label>
         {analysisMode === "qa" && (
           <>
             <label className="parser-control">
@@ -3285,6 +3468,14 @@ function App() {
           playDisabled={!uploadRecord || !result || result.status === "invalid" || isBusyPhase(phase)}
         />
         <ProgressBar
+          label={t.normalizationProgress}
+          value={normalizationProgress}
+          tone="blue"
+          downloadLabel={t.normalizedVariantsDownload}
+          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("normalization") : null}
+          downloadReady={matchArtifactsReady.normalization}
+        />
+        <ProgressBar
           label={t.aiTriageProgress}
           value={aiTriageProgress}
           tone="blue"
@@ -3307,6 +3498,14 @@ function App() {
             result.status === "invalid" ||
             isBusyPhase(phase)
           }
+        />
+        <ProgressBar
+          label={t.enrichmentQualityProgress}
+          value={enrichmentQualityProgress}
+          tone="blue"
+          downloadLabel={t.enrichmentQualityDownload}
+          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("enrichmentQuality") : null}
+          downloadReady={matchArtifactsReady.enrichmentQuality}
         />
         <ProgressBar
           label={t.groupingPreparationProgress}

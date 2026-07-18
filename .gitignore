@@ -6,3 +6,5 @@ npm-debug.log*
 uploads
 artifacts
 logs
+__pycache__/
+*.pyc

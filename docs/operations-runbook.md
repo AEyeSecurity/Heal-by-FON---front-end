@@ -209,6 +209,22 @@ Output directory: dist
 
 Push to `main` triggers deployment.
 
+## Canon V2 Normalization And Enrichment
+
+`gene_module_v2` runs normalize observed VCF alleles before local matching. The managed GRCh38 reference is intentionally stored outside `C:` because the FASTA and index require several GB:
+
+```text
+D:\ServerCIT\services\heal-reference-data\GRCh38
+```
+
+The manifest records the source URL, retrieval time and SHA-256 hashes. To provision only when the reference is absent:
+
+```powershell
+C:\ServerCIT\services\heal-vcf-normalization\provision_grch38_reference.ps1
+```
+
+V2 uses the local coordinate enrichment service rather than the legacy n8n rsID workflow. `HEAL_V2_LLM1_ENABLED=false` is the safe default: jobs stop at `enrichment_quality_gate`, and LLM1/grouping remains unavailable until normalization and VEP coverage pass review.
+
 ## Manual Functional Test
 
 1. Open `https://healbyfon.aeye.com.ar`.

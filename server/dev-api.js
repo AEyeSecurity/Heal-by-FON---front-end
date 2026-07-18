@@ -25,6 +25,18 @@ const RSID_RESOLUTION_ROOT =
 const VCF_CANON_MATCH_ROOT =
   process.env.HEAL_VCF_CANON_MATCH_ROOT ||
   "C:\\ServerCIT\\services\\heal-vcf-canon-match";
+const VCF_NORMALIZATION_ROOT =
+  process.env.HEAL_VCF_NORMALIZATION_ROOT ||
+  "C:\\ServerCIT\\services\\heal-vcf-normalization";
+const REFERENCE_DATA_ROOT =
+  process.env.HEAL_REFERENCE_DATA_ROOT ||
+  "D:\\ServerCIT\\services\\heal-reference-data";
+const GRCH38_REFERENCE_FASTA =
+  process.env.HEAL_GRCH38_REFERENCE_FASTA || path.join(REFERENCE_DATA_ROOT, "GRCh38", "hg38.fa");
+const GRCH38_REFERENCE_MANIFEST =
+  process.env.HEAL_GRCH38_REFERENCE_MANIFEST || path.join(REFERENCE_DATA_ROOT, "GRCh38", "reference_manifest.json");
+const GRCH37_REFERENCE_FASTA = process.env.HEAL_GRCH37_REFERENCE_FASTA || "";
+const GRCH37_REFERENCE_MANIFEST = process.env.HEAL_GRCH37_REFERENCE_MANIFEST || "";
 const MATCH_PREPARATION_ROOT =
   process.env.HEAL_MATCH_PREPARATION_ROOT ||
   "C:\\ServerCIT\\services\\heal-match-preparation";
@@ -102,6 +114,7 @@ const ALLOWED_LLM2_MODELS = new Set(
     .filter(Boolean),
 );
 const ALLOW_LLM_DRY_RUN = process.env.HEAL_ALLOW_LLM_DRY_RUN === "true";
+const HEAL_V2_LLM1_ENABLED = process.env.HEAL_V2_LLM1_ENABLED === "true";
 const ALLOWED_ORIGINS = (process.env.HEAL_ALLOWED_ORIGINS ||
   "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173")
   .split(",")
@@ -203,6 +216,14 @@ function vcfCanonMatchPaths() {
     jobs: path.join(root, "jobs"),
     current: path.join(root, "current"),
     currentManifest: path.join(root, "current", "current.json"),
+  };
+}
+
+function vcfNormalizationPaths() {
+  const root = path.resolve(VCF_NORMALIZATION_ROOT);
+  return {
+    root,
+    runs: path.join(root, "runs"),
   };
 }
 
@@ -489,6 +510,17 @@ function sanitizeVcfCanonMatchResult(result, upload) {
   return publicResult;
 }
 
+function sanitizeVcfNormalizationResult(result) {
+  const publicResult = JSON.parse(JSON.stringify(result || {}));
+  delete publicResult.inputPath;
+  delete publicResult.normalizedVcfPath;
+  delete publicResult.normalizedVariantsCsv;
+  delete publicResult.normalizationExcludedAuditCsv;
+  delete publicResult.normalizationSummaryJson;
+  if (publicResult.bcftools) delete publicResult.bcftools.command;
+  return publicResult;
+}
+
 function sanitizeMatchPreparationResult(result) {
   const publicResult = JSON.parse(JSON.stringify(result || {}));
   delete publicResult.inputPath;
@@ -566,6 +598,8 @@ function publicArtifactsReady(job) {
   const artifacts = job.artifacts || {};
   return {
     matches: Boolean(artifacts.sheetFinalConsolidatedCsv),
+    normalization: Boolean(artifacts.normalizedVariantsCsv || artifacts.normalizedVcfPath),
+    normalizationAudit: Boolean(artifacts.normalizationExcludedAuditCsv),
     debug: Boolean(
       artifacts.vcfCandidatesCsv ||
         artifacts.sheetFinalMatchStrictCsv ||
@@ -578,6 +612,7 @@ function publicArtifactsReady(job) {
     enrichment: Boolean(artifacts.observedVariantEnrichmentCsv),
     enrichmentInterpretive: Boolean(artifacts.observedVariantInterpretiveCsv),
     enrichmentPlus: Boolean(artifacts.observedVariantEnrichmentPlusCsv),
+    enrichmentQuality: Boolean(artifacts.enrichmentQualitySummaryJson),
     groupedPayloads: Boolean(artifacts.groupPayloadsCsv || artifacts.groupPayloadsJsonl),
     groupedVariantDetail: Boolean(artifacts.groupVariantDetailCsv),
     groupedInterpretation: Boolean(artifacts.groupInterpretationsCsv),
@@ -611,6 +646,24 @@ function normalizeAnalysisMode(value) {
 function normalizeAssembly(value) {
   const assembly = String(value || "GRCh38").trim().toUpperCase();
   return assembly === "GRCH37" ? "GRCh37" : "GRCh38";
+}
+
+function normalizeOptionalAssembly(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text || text === "auto") return "";
+  if (["grch38", "hg38", "b38"].includes(text)) return "GRCh38";
+  if (["grch37", "hg19", "b37"].includes(text)) return "GRCh37";
+  return null;
+}
+
+function managedReferenceForAssembly(assembly) {
+  if (assembly === "GRCh38") {
+    return { fasta: GRCH38_REFERENCE_FASTA, manifest: GRCH38_REFERENCE_MANIFEST };
+  }
+  if (assembly === "GRCh37" && GRCH37_REFERENCE_FASTA) {
+    return { fasta: GRCH37_REFERENCE_FASTA, manifest: GRCH37_REFERENCE_MANIFEST };
+  }
+  return null;
 }
 
 function metadataCount(summary, key) {
@@ -886,6 +939,46 @@ function runBase64JsonScript(scriptPath, payload) {
   });
 }
 
+function runPythonJsonCommand(scriptPath, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(PYTHON_EXE, [scriptPath, ...args], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+      const lastLine = lines[lines.length - 1] || "{}";
+      try {
+        const result = JSON.parse(lastLine);
+        if (code !== 0) {
+          reject(new Error(result.error || stderr || `Processor exited with code ${code}.`));
+          return;
+        }
+        resolve(result);
+      } catch (error) {
+        reject(new Error(`Processor returned invalid JSON. ${stderr || error.message}`));
+      }
+    });
+  });
+}
+
+async function probeVcfAssembly(inputPath) {
+  return await runPythonJsonCommand(path.join(VCF_NORMALIZATION_ROOT, "normalize_vcf_for_v2.py"), [
+    "--probe-assembly",
+    "--input",
+    inputPath,
+  ]);
+}
+
 async function updateIndividualInterpretationJobProgress(payload, job, { final = false } = {}) {
   const progressPath = path.join(payload.outputDir, "individual_variant_interpretation_progress.json");
   const raw = await readFile(progressPath, "utf8").catch(() => null);
@@ -1043,6 +1136,10 @@ async function processVcfCanonMatch(payload) {
   );
 }
 
+async function processVcfNormalization(payload) {
+  return await runBase64JsonScript(path.join(VCF_NORMALIZATION_ROOT, "normalize_vcf_for_v2.py"), payload);
+}
+
 async function processMatchPreparation(payload) {
   return await runBase64JsonScript(path.join(MATCH_PREPARATION_ROOT, "prepare_match_deliverable.py"), payload);
 }
@@ -1052,6 +1149,9 @@ async function processAiTriage(payload) {
 }
 
 async function processVariantEnrichment(payload) {
+  if (payload.schemaVersion === "gene_module_v2") {
+    return await runBase64JsonScript(path.join(VARIANT_ENRICHMENT_ROOT, "enrich_gene_module_v2.py"), payload);
+  }
   const webhookResult = await postWorkflowForSummary(
     N8N_VARIANT_ENRICHMENT_WEBHOOK_URL,
     payload,
@@ -1309,9 +1409,11 @@ function shouldPersistVcfCanonJob(job) {
     job?.artifacts ||
       [
         "matching",
+        "normalizing",
         "preparing",
         "triaging",
         "enriching",
+        "enrichment_quality_gate",
         "grouping_preparation",
         "grouped_individual_interpretation",
         "individual_interpretation",
@@ -1409,6 +1511,8 @@ app.get("/api/health", (_req, res) => {
     canonProcessorConfigured: Boolean(CANON_PROCESSOR_SCRIPT),
     rsidResolutionRoot: RSID_RESOLUTION_ROOT,
     vcfCanonMatchRoot: VCF_CANON_MATCH_ROOT,
+    vcfNormalizationRoot: VCF_NORMALIZATION_ROOT,
+    grch38ReferenceFasta: GRCH38_REFERENCE_FASTA,
     matchPreparationRoot: MATCH_PREPARATION_ROOT,
     aiTriageRoot: AI_TRIAGE_ROOT,
     variantEnrichmentRoot: VARIANT_ENRICHMENT_ROOT,
@@ -1445,6 +1549,7 @@ app.get("/api/health", (_req, res) => {
     n8nRsidResolutionWebhookConfigured: Boolean(N8N_RSID_RESOLUTION_WEBHOOK_URL),
     n8nVcfCanonMatchWebhookConfigured: Boolean(N8N_VCF_CANON_MATCH_WEBHOOK_URL),
     n8nVariantEnrichmentWebhookConfigured: Boolean(N8N_VARIANT_ENRICHMENT_WEBHOOK_URL),
+    v2Llm1Enabled: HEAL_V2_LLM1_ENABLED,
     n8nIndividualInterpretationWebhookConfigured: Boolean(N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL),
     n8nGlobalInterpretationWebhookConfigured: Boolean(N8N_GLOBAL_INTERPRETATION_WEBHOOK_URL),
   });
@@ -2146,7 +2251,7 @@ app.get("/api/validations/:jobId", (req, res) => {
 });
 
 app.post("/api/vcf-canon-matches", async (req, res) => {
-  const { uploadId, vcfParser = "streaming", analysisMode = "quick" } = req.body || {};
+  const { uploadId, vcfParser = "streaming", analysisMode = "quick", vcfAssembly } = req.body || {};
   if (!uploadId) {
     res.status(400).json({ error: "uploadId is required." });
     return;
@@ -2192,6 +2297,69 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
     return;
   }
   const isGeneModuleV2 = canonSummary.schemaVersion === "gene_module_v2";
+  let resolvedVcfAssembly = "";
+  let vcfAssemblySource = "";
+  let vcfAssemblyProbe = null;
+  let normalizationReference = null;
+  if (isGeneModuleV2) {
+    const requestedVcfAssembly = normalizeOptionalAssembly(vcfAssembly);
+    if (requestedVcfAssembly === null) {
+      res.status(400).json({ error: "VCF assembly must be Auto-detect, GRCh38, or GRCh37." });
+      return;
+    }
+    vcfAssemblyProbe = await probeVcfAssembly(resolvedStoredPath).catch((error) => ({ status: "unknown", error: error.message }));
+    const detectedVcfAssembly = vcfAssemblyProbe?.status === "detected" ? vcfAssemblyProbe.assembly : "";
+    if (requestedVcfAssembly && detectedVcfAssembly && requestedVcfAssembly !== detectedVcfAssembly) {
+      res.status(409).json({
+        error: "The selected VCF assembly conflicts with the VCF header.",
+        code: "vcf_assembly_selection_conflict",
+        selectedAssembly: requestedVcfAssembly,
+        detectedAssembly: detectedVcfAssembly,
+      });
+      return;
+    }
+    resolvedVcfAssembly = detectedVcfAssembly || requestedVcfAssembly;
+    vcfAssemblySource = detectedVcfAssembly ? vcfAssemblyProbe?.source || "header" : requestedVcfAssembly ? "user_confirmation" : "";
+    if (!resolvedVcfAssembly) {
+      res.status(409).json({
+        error: "VCF assembly could not be inferred. Select GRCh38 or GRCh37 before matching.",
+        code: "vcf_assembly_confirmation_required",
+        canonAssembly: canonSummary.assembly || "GRCh38",
+        assemblyProbe: vcfAssemblyProbe,
+      });
+      return;
+    }
+    const canonAssembly = normalizeAssembly(canonSummary.assembly || "GRCh38");
+    if (resolvedVcfAssembly !== canonAssembly) {
+      res.status(409).json({
+        error: "The VCF assembly does not match the active canon. Liftover is not available for this run.",
+        code: "vcf_canon_assembly_mismatch",
+        canonAssembly,
+        detectedAssembly: resolvedVcfAssembly,
+        assemblyProbe: vcfAssemblyProbe,
+      });
+      return;
+    }
+    normalizationReference = managedReferenceForAssembly(resolvedVcfAssembly);
+    if (!normalizationReference) {
+      res.status(409).json({
+        error: `No managed ${resolvedVcfAssembly} reference is provisioned for VCF normalization.`,
+        code: "normalization_reference_not_provisioned",
+      });
+      return;
+    }
+    const [referenceStat, referenceIndexStat] = await Promise.all([
+      stat(normalizationReference.fasta).catch(() => null),
+      stat(`${normalizationReference.fasta}.fai`).catch(() => null),
+    ]);
+    if (!referenceStat || !referenceIndexStat) {
+      res.status(409).json({
+        error: `The managed ${resolvedVcfAssembly} reference is not ready for VCF normalization.`,
+        code: "normalization_reference_not_ready",
+      });
+      return;
+    }
+  }
   let resolutionManifest = null;
   let rsidReadyPath = "";
   let geneMasterPath = "";
@@ -2221,6 +2389,8 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
     fileName: upload.fileName,
     sizeBytes: upload.sizeBytes,
     analysisMode: normalizeAnalysisMode(analysisMode),
+    vcfAssembly: resolvedVcfAssembly || null,
+    vcfAssemblySource: vcfAssemblySource || null,
     status: "running",
     progress: 8,
     stage: "matching",
@@ -2240,6 +2410,51 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
       const runId = crypto.randomUUID();
       const outputDir = path.join(paths.runs, runId);
       await mkdir(outputDir, { recursive: true });
+      let vcfPathForMatching = resolvedStoredPath;
+      let normalizationSummary = null;
+      if (isGeneModuleV2) {
+        const normalizationPaths = vcfNormalizationPaths();
+        await mkdir(normalizationPaths.runs, { recursive: true });
+        const normalizationRunId = `vcf-normalization-${runId}`;
+        const normalizationOutputDir = path.join(normalizationPaths.runs, normalizationRunId);
+        await mkdir(normalizationOutputDir, { recursive: true });
+        job.progress = 12;
+        job.stage = "normalizing";
+        job.stageProgress = 10;
+        job.message = "Normalizing VCF alleles against the managed reference";
+        job.updatedAt = new Date().toISOString();
+        normalizationSummary = await processVcfNormalization({
+          event: "heal.vcf_normalization.requested",
+          runId: normalizationRunId,
+          matchRunId: runId,
+          inputPath: resolvedStoredPath,
+          outputDir: normalizationOutputDir,
+          assembly: resolvedVcfAssembly,
+          referenceFasta: normalizationReference.fasta,
+          referenceManifestPath: normalizationReference.manifest,
+          requestedAt: new Date().toISOString(),
+        });
+        const normalizedVcfPath = path.resolve(normalizationSummary.normalizedVcfPath || "");
+        const normalizedVariantsCsv = path.resolve(normalizationSummary.normalizedVariantsCsv || "");
+        const normalizationExcludedAuditCsv = path.resolve(normalizationSummary.normalizationExcludedAuditCsv || "");
+        const normalizationSummaryJson = path.resolve(normalizationSummary.normalizationSummaryJson || "");
+        if (
+          !isPathInside(normalizationPaths.root, normalizedVcfPath) ||
+          !isPathInside(normalizationPaths.root, normalizedVariantsCsv) ||
+          !isPathInside(normalizationPaths.root, normalizationExcludedAuditCsv) ||
+          !isPathInside(normalizationPaths.root, normalizationSummaryJson)
+        ) {
+          throw new Error("VCF normalization produced an artifact outside the allowed normalization root.");
+        }
+        vcfPathForMatching = normalizedVcfPath;
+        job.artifacts = {
+          normalizedVcfPath,
+          normalizedVariantsCsv,
+          normalizationExcludedAuditCsv,
+          normalizationSummaryJson,
+        };
+        job.result = { vcfNormalization: sanitizeVcfNormalizationResult(normalizationSummary) };
+      }
       job.progress = 25;
       job.stage = "matching";
       job.stageProgress = 25;
@@ -2260,13 +2475,16 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         geneMasterPath,
         geneEnvelopeIndexPath,
         mergedFeatureIndexPath,
-        vcfPath: resolvedStoredPath,
+        vcfPath: vcfPathForMatching,
+        normalizedVariantsCsv: job.artifacts?.normalizedVariantsCsv || "",
+        vcfAssembly: resolvedVcfAssembly || null,
         outputDir,
         vcfParser: normalizeVcfParser(vcfParser),
         requestedAt: new Date().toISOString(),
       };
       const summary = await processVcfCanonMatch(payload);
       job.artifacts = {
+        ...(job.artifacts || {}),
         sheetFinalConsolidatedCsv: summary.outputs?.sheetFinalConsolidatedCsv || "",
         vcfCandidatesCsv: summary.outputs?.vcfCandidatesCsv || "",
         vcfJoinedChrPosCsv: summary.outputs?.vcfJoinedChrPosCsv || "",
@@ -2275,7 +2493,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         sheetFinalMatchByPositionNeedsReviewCsv: summary.outputs?.sheetFinalMatchByPositionNeedsReviewCsv || "",
         sheetFinalNoVcfMatchByChrPosCsv: summary.outputs?.sheetFinalNoVcfMatchByChrPosCsv || "",
       };
-      job.result = sanitizeVcfCanonMatchResult(summary, upload);
+      job.result = { ...(job.result || {}), ...sanitizeVcfCanonMatchResult(summary, upload) };
       const matchCsvPath = path.resolve(job.artifacts.sheetFinalConsolidatedCsv);
       if (!isPathInside(paths.root, matchCsvPath)) {
         throw new Error("Match preparation input is outside the allowed match root.");
@@ -2306,6 +2524,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
       job.artifacts.deliverableMinCsv = preparationSummary.outputs?.deliverableMinCsv || "";
       job.artifacts.deliverableAuditCsv = preparationSummary.outputs?.deliverableAuditCsv || "";
       job.result = {
+        ...(job.result || {}),
         ...sanitizeVcfCanonMatchResult(summary, upload),
         matchPreparation: sanitizeMatchPreparationResult(preparationSummary),
       };
@@ -2362,22 +2581,53 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           matchRunId: runId,
           uploadId: upload.uploadId,
           fileName: upload.fileName,
+          schemaVersion: "gene_module_v2",
+          assembly: resolvedVcfAssembly,
           inputPath: aiTriageCsvPath,
           outputDir: enrichmentOutputDir,
           cacheDir: enrichmentPaths.cache,
+          normalizationSummaryPath: job.artifacts.normalizationSummaryJson,
           requestedAt: new Date().toISOString(),
         };
         const enrichmentSummary = await processVariantEnrichmentWithRetry(enrichmentPayload, job, 3);
-        if (metadataCount(enrichmentSummary, "plus_rows") <= 0) {
-          throw new Error("Variant enrichment produced zero Enrichment Plus rows for canon schema v2.");
-        }
         job.artifacts.observedVariantEnrichmentCsv = enrichmentSummary.outputs?.observedVariantEnrichmentCsv || "";
         job.artifacts.observedVariantInterpretiveCsv = enrichmentSummary.outputs?.observedVariantInterpretiveCsv || "";
         job.artifacts.observedVariantEnrichmentPlusCsv = enrichmentSummary.outputs?.observedVariantEnrichmentPlusCsv || "";
+        job.artifacts.v2EnrichmentVariantMasterCsv = enrichmentSummary.outputs?.v2EnrichmentVariantMasterCsv || "";
+        job.artifacts.v2EnrichmentEvidenceAuditJsonl = enrichmentSummary.outputs?.v2EnrichmentEvidenceAuditJsonl || "";
+        job.artifacts.enrichmentQualitySummaryJson = enrichmentSummary.outputs?.enrichmentQualitySummaryJson || "";
+        if (!job.artifacts.observedVariantEnrichmentPlusCsv || !job.artifacts.enrichmentQualitySummaryJson) {
+          throw new Error("Coordinate enrichment did not produce its required v2 artifacts.");
+        }
         job.result = {
           ...job.result,
           variantEnrichment: sanitizeVariantEnrichmentResult(enrichmentSummary),
         };
+
+        const qualityGate = enrichmentSummary.metadata?.qualityGate || {};
+        const qualityPassed = qualityGate.status === "pass";
+        if (!HEAL_V2_LLM1_ENABLED || !qualityPassed) {
+          job.status = "complete";
+          job.progress = 100;
+          job.stage = "enrichment_quality_gate";
+          job.stageProgress = 100;
+          job.message = qualityPassed
+            ? "V2 enrichment quality gate passed; grouped LLM1 remains intentionally disabled"
+            : "V2 enrichment quality gate failed; review remediation artifacts before downstream processing";
+          job.result = {
+            ...job.result,
+            metadata: {
+              ...(job.result?.metadata || {}),
+              downstream_supported: false,
+              downstream_input: "enrichment_quality_gate",
+              enrichment_quality_gate: qualityGate,
+              downstream_message: qualityPassed
+                ? "V2 enrichment passed quality control. Grouped LLM1 is paused until HEAL_V2_LLM1_ENABLED=true is explicitly enabled."
+                : "V2 enrichment quality control failed. Grouped LLM1 is blocked until normalization and VEP coverage pass the gate.",
+            },
+          };
+          return;
+        }
 
         job.progress = 94;
         job.stage = "grouping_preparation";
@@ -2515,7 +2765,9 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
       job.progress = 100;
       job.error = error.message || String(error);
       job.message =
-        job.stage === "enriching"
+        job.stage === "normalizing"
+          ? "VCF normalization failed"
+          : job.stage === "enriching" || job.stage === "enrichment_quality_gate"
           ? "Variant enrichment failed"
           : job.stage === "grouping_preparation"
             ? "Grouped payload preparation failed"
@@ -2550,7 +2802,8 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
     res.status(404).json({ error: "VCF-canon match job not found." });
     return;
   }
-  if (downstreamBlockedForJob(job)) {
+  const isGeneModuleV2 = job?.result?.schemaVersion === "gene_module_v2";
+  if (downstreamBlockedForJob(job) && !isGeneModuleV2) {
     res.status(409).json({ error: downstreamBlockedMessage(job) });
     return;
   }
@@ -2558,8 +2811,12 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
     res.status(409).json({ error: "This job is already running." });
     return;
   }
-  if (!job.artifacts?.deliverableAuditCsv) {
-    res.status(409).json({ error: "Match preparation audit CSV is required before retrying enrichment." });
+  if (isGeneModuleV2 ? !job.artifacts?.aiTriageCsv : !job.artifacts?.deliverableAuditCsv) {
+    res.status(409).json({
+      error: isGeneModuleV2
+        ? "AI triage CSV is required before retrying coordinate enrichment."
+        : "Match preparation audit CSV is required before retrying enrichment.",
+    });
     return;
   }
 
@@ -2569,15 +2826,17 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
     return;
   }
 
-  const preparationPaths = matchPreparationPaths();
-  const auditCsvPath = path.resolve(job.artifacts.deliverableAuditCsv || "");
-  if (!isPathInside(preparationPaths.root, auditCsvPath)) {
-    res.status(400).json({ error: "Variant enrichment input is outside the allowed match preparation root." });
+  const enrichmentInputRoot = isGeneModuleV2 ? aiTriagePaths().root : matchPreparationPaths().root;
+  const enrichmentInputPath = path.resolve(
+    isGeneModuleV2 ? job.artifacts.aiTriageCsv || "" : job.artifacts.deliverableAuditCsv || "",
+  );
+  if (!isPathInside(enrichmentInputRoot, enrichmentInputPath)) {
+    res.status(400).json({ error: "Variant enrichment input is outside its allowed root." });
     return;
   }
-  const auditStat = await stat(auditCsvPath).catch(() => null);
-  if (!auditStat || auditStat.size <= 0) {
-    res.status(404).json({ error: "Match preparation audit CSV was not found." });
+  const inputStat = await stat(enrichmentInputPath).catch(() => null);
+  if (!inputStat || inputStat.size <= 0) {
+    res.status(404).json({ error: "Variant enrichment input CSV was not found." });
     return;
   }
 
@@ -2604,24 +2863,45 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
         matchRunId: job.id,
         uploadId: job.uploadId,
         fileName: job.fileName,
-        inputPath: auditCsvPath,
+        schemaVersion: isGeneModuleV2 ? "gene_module_v2" : undefined,
+        assembly: isGeneModuleV2 ? job.vcfAssembly || "GRCh38" : undefined,
+        inputPath: enrichmentInputPath,
         outputDir: enrichmentOutputDir,
         cacheDir: enrichmentPaths.cache,
+        normalizationSummaryPath: isGeneModuleV2 ? job.artifacts.normalizationSummaryJson || "" : undefined,
         requestedAt: new Date().toISOString(),
       };
       const enrichmentSummary = await processVariantEnrichmentWithRetry(enrichmentPayload, job, 3);
       job.artifacts.observedVariantEnrichmentCsv = enrichmentSummary.outputs?.observedVariantEnrichmentCsv || "";
       job.artifacts.observedVariantInterpretiveCsv = enrichmentSummary.outputs?.observedVariantInterpretiveCsv || "";
       job.artifacts.observedVariantEnrichmentPlusCsv = enrichmentSummary.outputs?.observedVariantEnrichmentPlusCsv || "";
+      job.artifacts.v2EnrichmentVariantMasterCsv = enrichmentSummary.outputs?.v2EnrichmentVariantMasterCsv || "";
+      job.artifacts.v2EnrichmentEvidenceAuditJsonl = enrichmentSummary.outputs?.v2EnrichmentEvidenceAuditJsonl || "";
+      job.artifacts.enrichmentQualitySummaryJson = enrichmentSummary.outputs?.enrichmentQualitySummaryJson || "";
       job.result = {
         ...(job.result || {}),
         variantEnrichment: sanitizeVariantEnrichmentResult(enrichmentSummary),
       };
       job.status = "complete";
       job.progress = 100;
-      job.stage = "enriching";
+      job.stage = isGeneModuleV2 ? "enrichment_quality_gate" : "enriching";
       job.stageProgress = 100;
-      job.message = "Variant enrichment completed";
+      const qualityGate = enrichmentSummary.metadata?.qualityGate || {};
+      job.message = isGeneModuleV2
+        ? qualityGate.status === "pass"
+          ? "V2 enrichment quality gate passed; grouped LLM1 remains intentionally disabled"
+          : "V2 enrichment quality gate failed; review remediation artifacts"
+        : "Variant enrichment completed";
+      if (isGeneModuleV2) {
+        job.result.metadata = {
+          ...(job.result.metadata || {}),
+          downstream_supported: false,
+          downstream_input: "enrichment_quality_gate",
+          enrichment_quality_gate: qualityGate,
+          downstream_message:
+            "V2 grouped LLM1 is paused until enrichment quality is approved and HEAL_V2_LLM1_ENABLED=true is explicitly enabled.",
+        };
+      }
     } catch (error) {
       job.status = "failed";
       job.progress = 100;
@@ -3296,6 +3576,42 @@ async function downloadGroupedArtifact(req, res, artifactKey, suffix, { json = f
   res.download(artifactPath, `${baseName}_${suffix}.csv`);
 }
 
+async function downloadRuntimeArtifact(req, res, artifactKey, suffix, pathsForArtifact, { json = false, jsonl = false } = {}) {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (!job.artifacts?.[artifactKey]) {
+    res.status(409).json({ error: "Requested artifact is not ready yet." });
+    return;
+  }
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload && !canAccessUpload(req, upload)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+  const paths = pathsForArtifact();
+  const artifactPath = path.resolve(job.artifacts[artifactKey]);
+  if (!isPathInside(paths.root, artifactPath)) {
+    res.status(400).json({ error: "Artifact is outside the allowed runtime root." });
+    return;
+  }
+  const artifactStat = await stat(artifactPath).catch(() => null);
+  if (!artifactStat || artifactStat.size <= 0) {
+    res.status(404).json({ error: "Artifact was not found." });
+    return;
+  }
+  const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
+  const extension = json ? "json" : jsonl ? "jsonl" : "csv";
+  res.setHeader("Content-Type", json ? "application/json; charset=utf-8" : "text/plain; charset=utf-8");
+  res.download(artifactPath, `${baseName}_${suffix}.${extension}`);
+}
+
 app.get("/api/vcf-canon-matches/:jobId/preparation-audit", async (req, res) => {
   await downloadMatchPreparationArtifact(req, res, "deliverableAuditCsv", "match_preparation_audit");
 });
@@ -3314,6 +3630,57 @@ app.get("/api/vcf-canon-matches/:jobId/ai-triage-excluded", async (req, res) => 
 
 app.get("/api/vcf-canon-matches/:jobId/ai-triage-summary", async (req, res) => {
   await downloadAiTriageArtifact(req, res, "aiTriageSummaryJson", "ai_triage_summary", { json: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/normalized-variants", async (req, res) => {
+  await downloadRuntimeArtifact(req, res, "normalizedVariantsCsv", "normalized_variants", vcfNormalizationPaths);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/normalization-excluded-audit", async (req, res) => {
+  await downloadRuntimeArtifact(
+    req,
+    res,
+    "normalizationExcludedAuditCsv",
+    "normalization_excluded_audit",
+    vcfNormalizationPaths,
+  );
+});
+
+app.get("/api/vcf-canon-matches/:jobId/normalization-summary", async (req, res) => {
+  await downloadRuntimeArtifact(
+    req,
+    res,
+    "normalizationSummaryJson",
+    "normalization_summary",
+    vcfNormalizationPaths,
+    { json: true },
+  );
+});
+
+app.get("/api/vcf-canon-matches/:jobId/enrichment-variant-master", async (req, res) => {
+  await downloadRuntimeArtifact(req, res, "v2EnrichmentVariantMasterCsv", "v2_enrichment_variant_master", variantEnrichmentPaths);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/enrichment-evidence-audit", async (req, res) => {
+  await downloadRuntimeArtifact(
+    req,
+    res,
+    "v2EnrichmentEvidenceAuditJsonl",
+    "v2_enrichment_evidence_audit",
+    variantEnrichmentPaths,
+    { jsonl: true },
+  );
+});
+
+app.get("/api/vcf-canon-matches/:jobId/enrichment-quality-summary", async (req, res) => {
+  await downloadRuntimeArtifact(
+    req,
+    res,
+    "enrichmentQualitySummaryJson",
+    "enrichment_quality_summary",
+    variantEnrichmentPaths,
+    { json: true },
+  );
 });
 
 app.get("/api/vcf-canon-matches/:jobId/grouped-payloads", async (req, res) => {

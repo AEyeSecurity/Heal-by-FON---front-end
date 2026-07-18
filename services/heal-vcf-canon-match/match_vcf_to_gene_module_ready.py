@@ -8,6 +8,7 @@ import base64
 import csv
 import datetime as dt
 import gzip
+import hashlib
 import json
 import re
 from collections import Counter, defaultdict
@@ -78,6 +79,31 @@ def zygosity_from_gt(gt: str) -> str:
     return "homozygous" if parts[0] == parts[1] else "heterozygous"
 
 
+def allele_dosage(gt: str, allele_index: int) -> int:
+    """Return copies of one ALT allele in a possibly multi-allelic genotype."""
+    dosage = 0
+    for token in split_gt(gt):
+        try:
+            if int(token) == allele_index:
+                dosage += 1
+        except ValueError:
+            continue
+    return dosage
+
+
+def zygosity_for_alt(gt: str, dosage: int) -> str:
+    parts = split_gt(gt)
+    if not parts or any(part in {"", "."} for part in parts):
+        return "unknown"
+    if len(parts) != 2:
+        return "non_diploid_or_complex"
+    if dosage == 2:
+        return "homozygous"
+    if dosage == 1:
+        return "heterozygous"
+    return "reference_only"
+
+
 def extract_gt(format_value: str, sample_value: str) -> str:
     format_keys = clean_str(format_value).split(":")
     sample_values = clean_str(sample_value).split(":")
@@ -99,6 +125,11 @@ def normalize_chromosome(value: str) -> str:
     return f"chr{chrom}"
 
 
+def stable_variant_key(assembly: str, chrom: str, start: int, ref: str, alt: str) -> str:
+    source = "|".join([clean_str(assembly), clean_str(chrom), str(start), clean_str(ref).upper(), clean_str(alt).upper()])
+    return f"v2_{hashlib.sha256(source.encode('utf-8')).hexdigest()[:24]}"
+
+
 def parse_info(info_value: str) -> dict[str, str]:
     info = {}
     for part in clean_str(info_value).split(";"):
@@ -110,6 +141,35 @@ def parse_info(info_value: str) -> dict[str, str]:
         else:
             info[part] = "true"
     return info
+
+
+def parse_original_record(info: dict[str, str], chrom: str, pos: str, ref: str, alt: str) -> dict[str, str]:
+    """Read bcftools --old-rec-tag ORIG when normalization changed a record."""
+    original = clean_str(info.get("ORIG"))
+    if not original:
+        return {
+            "source_chrom_vcf": chrom,
+            "source_pos_vcf": pos,
+            "source_ref_vcf": ref,
+            "source_alt_vcf": alt,
+            "source_alt_index": "1",
+        }
+    parts = original.split("|")
+    if len(parts) < 4:
+        return {
+            "source_chrom_vcf": chrom,
+            "source_pos_vcf": pos,
+            "source_ref_vcf": ref,
+            "source_alt_vcf": alt,
+            "source_alt_index": "",
+        }
+    return {
+        "source_chrom_vcf": normalize_chromosome(parts[0]) or chrom,
+        "source_pos_vcf": clean_str(parts[1]) or pos,
+        "source_ref_vcf": clean_str(parts[2]) or ref,
+        "source_alt_vcf": clean_str(parts[3]) or alt,
+        "source_alt_index": clean_str(parts[4]) if len(parts) > 4 else "",
+    }
 
 
 def compute_variant_interval(pos: str, ref: str, alt: str, info: dict[str, str]) -> tuple[int, int, list[str]]:
@@ -164,42 +224,54 @@ def scan_vcf(vcf_path: Path, envelope_index: dict) -> tuple[list[dict], dict, li
             if not envelopes:
                 continue
             info = parse_info(info_value)
-            variant_start, variant_end, interval_warnings = compute_variant_interval(pos, ref, alt, info)
-            warnings.extend(interval_warnings)
             fmt = parts[8] if len(parts) > 8 else ""
             sample = parts[9] if len(parts) > 9 else ""
             gt_raw = extract_gt(fmt, sample)
             gt_alleles = gt_to_alleles(gt_raw, ref, alt)
-            overlapping_envelopes = [
-                envelope
-                for envelope in envelopes
-                if intervals_overlap(variant_start, variant_end, int(envelope["start"]), int(envelope["end"]))
-            ]
-            if not overlapping_envelopes:
-                continue
-            for envelope in overlapping_envelopes:
-                candidates.append(
-                    {
-                        "chrom_vcf": chrom_normalized,
-                        "pos_vcf": clean_str(pos),
-                        "variant_start": variant_start,
-                        "variant_end": variant_end,
-                        "id_vcf": clean_str(id_vcf),
-                        "ref_vcf": clean_str(ref),
-                        "alt_vcf": clean_str(alt),
-                        "qual_vcf": clean_str(qual),
-                        "filter_vcf": clean_str(filter_vcf),
-                        "info_vcf": clean_str(info_value),
-                        "gt_raw": gt_raw,
-                        "gt_alleles": gt_alleles,
-                        "zygosity": zygosity_from_gt(gt_raw),
-                        "gene_id": envelope["gene_id"],
-                        "approved_symbol": envelope["symbol"],
-                        "gene_envelope_start": int(envelope["start"]),
-                        "gene_envelope_end": int(envelope["end"]),
-                        "gene_envelope_match": "true",
-                    }
-                )
+            for allele_index, allele_alt in enumerate([item.strip() for item in clean_str(alt).split(",") if item.strip()], start=1):
+                dosage = allele_dosage(gt_raw, allele_index)
+                if dosage <= 0:
+                    continue
+                variant_start, variant_end, interval_warnings = compute_variant_interval(pos, ref, allele_alt, info)
+                warnings.extend(interval_warnings)
+                overlapping_envelopes = [
+                    envelope
+                    for envelope in envelopes
+                    if intervals_overlap(variant_start, variant_end, int(envelope["start"]), int(envelope["end"]))
+                ]
+                if not overlapping_envelopes:
+                    continue
+                original_record = parse_original_record(info, chrom_normalized, clean_str(pos), clean_str(ref), allele_alt)
+                for envelope in overlapping_envelopes:
+                    candidates.append(
+                        {
+                            "chrom_vcf": chrom_normalized,
+                            "pos_vcf": clean_str(pos),
+                            "variant_start": variant_start,
+                            "variant_end": variant_end,
+                            "id_vcf": clean_str(id_vcf),
+                            "ref_vcf": clean_str(ref),
+                            "alt_vcf": allele_alt,
+                            "allele_index": str(allele_index),
+                            "allele_dosage": str(dosage),
+                            "variant_key": stable_variant_key(
+                                clean_str(envelope_index.get("assembly")), chrom_normalized, variant_start, clean_str(ref), allele_alt
+                            ),
+                            "qual_vcf": clean_str(qual),
+                            "filter_vcf": clean_str(filter_vcf),
+                            "quality_flag": "pass" if clean_str(filter_vcf) in {"", ".", "PASS"} else "filtered",
+                            "info_vcf": clean_str(info_value),
+                            "gt_raw": gt_raw,
+                            "gt_alleles": gt_alleles,
+                            "zygosity": zygosity_for_alt(gt_raw, dosage),
+                            **original_record,
+                            "gene_id": envelope["gene_id"],
+                            "approved_symbol": envelope["symbol"],
+                            "gene_envelope_start": int(envelope["start"]),
+                            "gene_envelope_end": int(envelope["end"]),
+                            "gene_envelope_match": "true",
+                        }
+                    )
     return candidates, {"sample_name": sample_name, "scanned_variant_rows": scanned_rows, "vcf_parser_used": "streaming"}, warnings
 
 
@@ -288,7 +360,16 @@ def build_gene_indexes(clean_rows: list[dict], gene_master_rows: list[dict]) -> 
     return modules_by_gene_id, gene_master_by_id
 
 
-def process(canon_clean_path: Path, gene_master_path: Path, envelope_index_path: Path, merged_index_path: Path, vcf_path: Path, output_dir: Path) -> dict:
+def normalization_source_index(path_value: str | None) -> dict[str, dict]:
+    if not path_value:
+        return {}
+    path = Path(path_value)
+    if not path.is_file():
+        raise FileNotFoundError(f"Normalized variant CSV does not exist: {path}")
+    return {clean_str(row.get("variant_key")): row for row in read_csv(path) if clean_str(row.get("variant_key"))}
+
+
+def process(canon_clean_path: Path, gene_master_path: Path, envelope_index_path: Path, merged_index_path: Path, vcf_path: Path, output_dir: Path, normalized_variants_csv: str | None = None) -> dict:
     started_at = utc_now()
     output_dir.mkdir(parents=True, exist_ok=True)
     clean_rows = read_csv(canon_clean_path)
@@ -296,8 +377,34 @@ def process(canon_clean_path: Path, gene_master_path: Path, envelope_index_path:
     envelope_index = read_json(envelope_index_path)
     merged_index = read_json(merged_index_path)
     modules_by_gene_id, gene_master_by_id = build_gene_indexes(clean_rows, gene_master_rows)
+    normalized_sources = normalization_source_index(normalized_variants_csv)
 
     vcf_candidates, scan_meta, warnings = scan_vcf(vcf_path, envelope_index)
+    for candidate in vcf_candidates:
+        source = normalized_sources.get(clean_str(candidate.get("variant_key")))
+        if source:
+            candidate.update(
+                {
+                    "source_chrom_vcf": clean_str(source.get("source_chrom_vcf")) or clean_str(candidate.get("source_chrom_vcf")),
+                    "source_pos_vcf": clean_str(source.get("source_pos_vcf")) or clean_str(candidate.get("source_pos_vcf")),
+                    "source_ref_vcf": clean_str(source.get("source_ref_vcf")) or clean_str(candidate.get("source_ref_vcf")),
+                    "source_alt_vcf": clean_str(source.get("source_alt_vcf")) or clean_str(candidate.get("source_alt_vcf")),
+                    "source_alt_index": clean_str(source.get("source_alt_index")) or clean_str(candidate.get("source_alt_index")),
+                    "source_gt_raw": clean_str(source.get("source_gt_raw")),
+                    "source_allele_dosage": clean_str(source.get("source_allele_dosage")),
+                    "source_zygosity": clean_str(source.get("source_zygosity")),
+                    "source_filter_vcf": clean_str(source.get("source_filter_vcf")),
+                }
+            )
+        else:
+            candidate.update(
+                {
+                    "source_gt_raw": clean_str(candidate.get("gt_raw")),
+                    "source_allele_dosage": clean_str(candidate.get("allele_dosage")),
+                    "source_zygosity": clean_str(candidate.get("zygosity")),
+                    "source_filter_vcf": clean_str(candidate.get("filter_vcf")),
+                }
+            )
     variant_gene_rows = []
     consolidated_rows = []
     grouped_features = merged_index.get("features_by_gene") or {}
@@ -350,12 +457,25 @@ def process(canon_clean_path: Path, gene_master_path: Path, envelope_index_path:
                     "id_vcf": clean_str(variant_gene_row.get("id_vcf")),
                     "ref_vcf": clean_str(variant_gene_row.get("ref_vcf")),
                     "alt_vcf": clean_str(variant_gene_row.get("alt_vcf")),
+                    "allele_index": clean_str(variant_gene_row.get("allele_index")),
+                    "allele_dosage": clean_str(variant_gene_row.get("allele_dosage")),
+                    "variant_key": clean_str(variant_gene_row.get("variant_key")),
                     "qual_vcf": clean_str(variant_gene_row.get("qual_vcf")),
                     "filter_vcf": clean_str(variant_gene_row.get("filter_vcf")),
+                    "quality_flag": clean_str(variant_gene_row.get("quality_flag")),
+                    "source_chrom_vcf": clean_str(variant_gene_row.get("source_chrom_vcf")),
+                    "source_pos_vcf": clean_str(variant_gene_row.get("source_pos_vcf")),
+                    "source_ref_vcf": clean_str(variant_gene_row.get("source_ref_vcf")),
+                    "source_alt_vcf": clean_str(variant_gene_row.get("source_alt_vcf")),
+                    "source_alt_index": clean_str(variant_gene_row.get("source_alt_index")),
+                    "source_gt_raw": clean_str(variant_gene_row.get("source_gt_raw")),
+                    "source_allele_dosage": clean_str(variant_gene_row.get("source_allele_dosage")),
+                    "source_zygosity": clean_str(variant_gene_row.get("source_zygosity")),
+                    "source_filter_vcf": clean_str(variant_gene_row.get("source_filter_vcf")),
                     "gt_raw": clean_str(variant_gene_row.get("gt_raw")),
                     "gt_alleles": clean_str(variant_gene_row.get("gt_alleles")),
                     "zygosity": clean_str(variant_gene_row.get("zygosity")),
-                    "has_genotype": "true" if clean_str(variant_gene_row.get("gt_alleles")) else "false",
+                    "has_genotype": "true" if int(variant_gene_row.get("allele_dosage") or 0) > 0 else "false",
                     "gene_envelope_match": "true",
                     "gene_envelope_start": variant_gene_row["gene_envelope_start"],
                     "gene_envelope_end": variant_gene_row["gene_envelope_end"],
@@ -384,8 +504,21 @@ def process(canon_clean_path: Path, gene_master_path: Path, envelope_index_path:
         "id_vcf",
         "ref_vcf",
         "alt_vcf",
+        "allele_index",
+        "allele_dosage",
+        "variant_key",
         "qual_vcf",
         "filter_vcf",
+        "quality_flag",
+        "source_chrom_vcf",
+        "source_pos_vcf",
+        "source_ref_vcf",
+        "source_alt_vcf",
+        "source_alt_index",
+        "source_gt_raw",
+        "source_allele_dosage",
+        "source_zygosity",
+        "source_filter_vcf",
         "gt_raw",
         "gt_alleles",
         "zygosity",
@@ -438,8 +571,21 @@ def process(canon_clean_path: Path, gene_master_path: Path, envelope_index_path:
         "id_vcf",
         "ref_vcf",
         "alt_vcf",
+        "allele_index",
+        "allele_dosage",
+        "variant_key",
         "qual_vcf",
         "filter_vcf",
+        "quality_flag",
+        "source_chrom_vcf",
+        "source_pos_vcf",
+        "source_ref_vcf",
+        "source_alt_vcf",
+        "source_alt_index",
+        "source_gt_raw",
+        "source_allele_dosage",
+        "source_zygosity",
+        "source_filter_vcf",
         "gt_raw",
         "gt_alleles",
         "zygosity",
@@ -523,6 +669,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--merged-feature-index")
     parser.add_argument("--vcf")
     parser.add_argument("--output-dir")
+    parser.add_argument("--normalized-variants-csv")
     parser.add_argument("--input-json-base64", default="")
     args = parser.parse_args()
     if args.input_json_base64:
@@ -533,6 +680,7 @@ def parse_args() -> argparse.Namespace:
         args.merged_feature_index = payload.get("mergedFeatureIndexPath")
         args.vcf = payload.get("vcfPath")
         args.output_dir = payload.get("outputDir")
+        args.normalized_variants_csv = payload.get("normalizedVariantsCsv")
     if not all([args.canon_clean, args.gene_master, args.gene_envelope_index, args.merged_feature_index, args.vcf, args.output_dir]):
         parser.error("--canon-clean, --gene-master, --gene-envelope-index, --merged-feature-index, --vcf, and --output-dir are required.")
     return args
@@ -547,6 +695,7 @@ def main() -> int:
         Path(args.merged_feature_index),
         Path(args.vcf),
         Path(args.output_dir),
+        args.normalized_variants_csv,
     )
     return 0
 
