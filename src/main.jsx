@@ -2827,8 +2827,8 @@ function App() {
       headers: { "Content-Type": "application/json", ...accessHeaders(upload.accessToken) },
       body: JSON.stringify({ uploadId: upload.uploadId, accessToken: upload.accessToken, vcfParser, vcfAssembly, analysisMode }),
     });
-    if (!matchStart.ok) throw new Error(await matchStart.text());
-    const matchJob = await matchStart.json();
+    const matchJob = await readJsonResponse(matchStart);
+    if (!matchStart.ok) throw new Error(matchJob.error || t.matchFailed);
     const nextMatchResult = await pollMatch(matchJob.id);
     setMatchResult(nextMatchResult);
     setPhase("done");
