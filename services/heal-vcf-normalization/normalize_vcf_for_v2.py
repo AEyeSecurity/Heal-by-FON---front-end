@@ -23,6 +23,7 @@ from pathlib import Path
 
 
 DEFAULT_IMAGE = "heal-vcf-normalizer:1.0.0"
+SUPPORTED_CHROMOSOMES = {f"chr{index}" for index in range(1, 23)} | {"chrX", "chrY", "chrM"}
 
 
 def utc_now() -> str:
@@ -113,6 +114,10 @@ def is_symbolic(alt: str) -> bool:
     return not alt or alt in {"*", "."} or (alt.startswith("<") and alt.endswith(">")) or "[" in alt or "]" in alt
 
 
+def is_supported_chromosome(chrom: str) -> bool:
+    return normalize_chromosome(chrom) in SUPPORTED_CHROMOSOMES
+
+
 def detect_assembly_from_header(path: Path) -> dict:
     references: list[str] = []
     contig_lengths: dict[str, int] = {}
@@ -167,6 +172,7 @@ def source_alleles(path: Path) -> tuple[dict[tuple[str, str, str, str, str], dic
                 stats["malformed_records"] += 1
                 continue
             chrom, pos, record_id, ref, alt, qual, filter_value, info = parts[:8]
+            normalized_chrom = normalize_chromosome(chrom)
             gt = extract_gt(parts[8] if len(parts) > 8 else "", parts[9] if len(parts) > 9 else "")
             alts = [item.strip() for item in alt.split(",") if item.strip()]
             stats["input_records"] += 1
@@ -177,7 +183,7 @@ def source_alleles(path: Path) -> tuple[dict[tuple[str, str, str, str, str], dic
                 if dosage <= 0:
                     continue
                 base = {
-                    "source_chrom_vcf": normalize_chromosome(chrom),
+                    "source_chrom_vcf": normalized_chrom,
                     "source_pos_vcf": pos,
                     "source_id_vcf": record_id,
                     "source_ref_vcf": ref,
@@ -191,6 +197,10 @@ def source_alleles(path: Path) -> tuple[dict[tuple[str, str, str, str, str], dic
                     "source_qual_vcf": qual,
                     "source_info_vcf": info,
                 }
+                if not is_supported_chromosome(chrom):
+                    excluded.append({**base, "exclusion_reason": "unsupported_contig"})
+                    stats["unsupported_contig"] += 1
+                    continue
                 if is_symbolic(allele_alt):
                     excluded.append({**base, "exclusion_reason": "symbolic_or_unsupported_alt"})
                     stats["symbolic_or_unsupported"] += 1
@@ -199,6 +209,22 @@ def source_alleles(path: Path) -> tuple[dict[tuple[str, str, str, str, str], dic
                 indexed[key] = base
                 stats["observed_source_alleles"] += 1
     return indexed, excluded, stats
+
+
+def prepare_bcftools_input(input_path: Path, output_dir: Path, stats: Counter) -> Path:
+    """Remove non-reference contigs before faidx so HLA/custom contigs cannot abort GRCh normalization."""
+    filtered_path = output_dir / "normalization_input.vcf"
+    with open_text(input_path) as source, filtered_path.open("w", encoding="utf-8") as target:
+        for line in source:
+            if line.startswith("#"):
+                target.write(line)
+                continue
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 8 or not is_supported_chromosome(parts[0]):
+                stats["records_excluded_before_bcftools"] += 1
+                continue
+            target.write(line)
+    return filtered_path
 
 
 def parse_orig(info: dict[str, str], current: dict) -> tuple[str, str, str, str, str]:
@@ -337,8 +363,9 @@ def process(payload: dict) -> dict:
     started_at = utc_now()
     output_dir.mkdir(parents=True, exist_ok=True)
     source_index, excluded_rows, stats = source_alleles(input_path)
+    normalization_input = prepare_bcftools_input(input_path, output_dir, stats)
     normalized_vcf = output_dir / "normalized.vcf.gz"
-    bcftools = run_bcftools(input_path, normalized_vcf, reference_path, clean(payload.get("dockerImage")) or DEFAULT_IMAGE)
+    bcftools = run_bcftools(normalization_input, normalized_vcf, reference_path, clean(payload.get("dockerImage")) or DEFAULT_IMAGE)
     normalized_rows = normalized_alleles(normalized_vcf, assembly, source_index, excluded_rows, stats)
 
     fields = [

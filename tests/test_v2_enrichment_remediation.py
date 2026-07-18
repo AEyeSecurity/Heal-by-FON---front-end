@@ -53,6 +53,21 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
         self.assertEqual({row["source_allele_dosage"] for row in rows}, {"1"})
         self.assertEqual({row["source_zygosity"] for row in rows}, {"heterozygous"})
 
+    def test_nonstandard_hla_contig_is_audited_before_reference_lookup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            vcf_path = Path(temporary) / "hla.vcf"
+            vcf_path.write_text(
+                "##fileformat=VCFv4.2\n"
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+                "HLA-DRB1*03:01:01:01\t7566\t.\tA\tG\t.\tPASS\t.\tGT\t0/1\n",
+                encoding="utf-8",
+            )
+            sources, excluded, stats = normalizer.source_alleles(vcf_path)
+
+        self.assertEqual(sources, {})
+        self.assertEqual(stats["unsupported_contig"], 1)
+        self.assertEqual(excluded[0]["exclusion_reason"], "unsupported_contig")
+
     def test_resolves_only_exact_vep_colocated_allele_rsid(self):
         variant = {"id_vcf": "rs999", "ref_vcf": "A", "alt_vcf": "G"}
         item = {
