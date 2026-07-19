@@ -33,6 +33,42 @@ function Copy-HealTree([string]$Source, [string]$Destination, [string]$Label) {
     return [pscustomobject]@{ label = $Label; source = $Source; destination = $Destination; status = "copied" }
 }
 
+function Copy-NormalizationRuns([string]$Source, [string]$Destination) {
+    if (!(Test-Path -LiteralPath $Source)) {
+        return [pscustomobject]@{ label = "normalization_artifacts"; source = $Source; destination = $Destination; status = "source_missing" }
+    }
+    $results = foreach ($run in Get-ChildItem -LiteralPath $Source -Directory -Force) {
+        $summary = Join-Path $run.FullName "normalization_summary.json"
+        if (!(Test-Path -LiteralPath $summary)) {
+            [pscustomobject]@{ label = "normalization_artifacts"; source = $run.FullName; destination = (Join-Path $Destination $run.Name); status = "skipped_incomplete_run" }
+            continue
+        }
+        # The normalized VCF is a temporary bridge into matching, never a retained migration artifact.
+        $target = Join-Path $Destination $run.Name
+        if ($Apply) {
+            New-Item -ItemType Directory -Force -Path $target | Out-Null
+            & robocopy.exe $run.FullName $target /E /COPY:DAT /DCOPY:T /R:2 /W:2 /XF normalization_input.vcf normalized.vcf.gz /NFL /NDL /NJH /NJS /NP | Out-Null
+            if ($LASTEXITCODE -gt 7) { throw "Copy failed for completed normalization run $($run.Name)." }
+            [pscustomobject]@{ label = "normalization_artifacts"; source = $run.FullName; destination = $target; status = "copied_without_temporary_vcf" }
+        } else {
+            [pscustomobject]@{ label = "normalization_artifacts"; source = $run.FullName; destination = $target; status = "planned_without_temporary_vcf" }
+        }
+    }
+    return @($results)
+}
+
+function Copy-HealFile([string]$Source, [string]$Destination, [string]$Label) {
+    if (!(Test-Path -LiteralPath $Source)) {
+        return [pscustomobject]@{ label = $Label; source = $Source; destination = $Destination; status = "source_missing" }
+    }
+    if (!$Apply) {
+        return [pscustomobject]@{ label = $Label; source = $Source; destination = $Destination; status = "planned" }
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force
+    return [pscustomobject]@{ label = $Label; source = $Source; destination = $Destination; status = "copied" }
+}
+
 Assert-TargetHome $TargetHome
 $targetData = Join-Path $TargetHome "data"
 $targetApp = Join-Path $TargetHome "app"
@@ -51,7 +87,11 @@ $mappings = @(
     [pscustomobject]@{ source = Join-Path $SourceServicesRoot "heal-variant-enrichment\cache"; destination = Join-Path $targetData "enrichment-cache\legacy-rsid"; label = "legacy_enrichment_cache" },
     [pscustomobject]@{ source = $SourceReferenceRoot; destination = Join-Path $targetData "references"; label = "managed_references" },
     [pscustomobject]@{ source = (Join-Path $SourceAppRoot "logs"); destination = Join-Path $TargetHome "logs\historical-app"; label = "historical_app_logs" },
-    [pscustomobject]@{ source = (Join-Path $SourceConfigRoot ""); destination = $targetConfig; label = "configuration" }
+    [pscustomobject]@{ source = (Join-Path $SourceAppRoot "backups"); destination = Join-Path $TargetHome "backups"; label = "historical_backups" },
+    [pscustomobject]@{ source = "C:\ServerCIT\logs\heal-vcf-api"; destination = Join-Path $TargetHome "logs\historical-api"; label = "historical_api_logs" },
+    [pscustomobject]@{ source = (Join-Path $SourceConfigRoot ""); destination = $targetConfig; label = "configuration" },
+    [pscustomobject]@{ source = "C:\ProgramData\Cloudflared-HealApi\token.txt"; destination = Join-Path $targetConfig "cloudflared-token.txt"; label = "cloudflared_token"; mode = "file" },
+    [pscustomobject]@{ source = "C:\ServerCIT\logs\cloudflared\HealApi.log"; destination = Join-Path $TargetHome "logs\historical-cloudflared\HealApi.log"; label = "historical_cloudflared_log"; mode = "file" }
 )
 
 if ($Apply) {
@@ -74,7 +114,13 @@ $results = if ($CodeOnly) {
     @([pscustomobject]@{ label = "data_copy"; source = "not_requested"; destination = $targetData; status = "skipped_code_only" })
 } else {
     foreach ($mapping in $mappings) {
-        Copy-HealTree $mapping.source $mapping.destination $mapping.label
+        if ($mapping.label -eq "normalization_artifacts") {
+            Copy-NormalizationRuns $mapping.source $mapping.destination
+        } elseif (($mapping.PSObject.Properties.Name -contains "mode") -and $mapping.mode -eq "file") {
+            Copy-HealFile $mapping.source $mapping.destination $mapping.label
+        } else {
+            Copy-HealTree $mapping.source $mapping.destination $mapping.label
+        }
     }
 }
 $results = @($results)
@@ -87,6 +133,7 @@ if ($Apply) {
         # Only F:\Heal by FON\config receives these ACLs; shared ProgramData remains untouched.
         & icacls.exe $targetConfig /inheritance:r /grant:r "$env:USERNAME`:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C | Out-Null
         if ($LASTEXITCODE -gt 0) { throw "Could not restrict ACLs on $targetConfig." }
+        & (Join-Path $targetOps "Rebase-HealState.ps1") -HealHome $TargetHome | Out-Null
     }
 
     $archiveRoot = Join-Path $TargetHome "archive"
