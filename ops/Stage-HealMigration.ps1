@@ -168,10 +168,25 @@ if ($Apply) {
         stagedAt = [DateTime]::UtcNow.ToString("o")
         sourceFrozenUntilApproval = $true
         sourceRemovalNotBefore = [DateTime]::UtcNow.AddDays(7).ToString("o")
-        sourceRoots = @($SourceAppRoot, $SourceServicesRoot, $SourceConfigRoot, $SourceReferenceRoot)
+        sourceRoots = @(
+            $SourceAppRoot,
+            "$SourceServicesRoot\heal-vcf-integrity",
+            "$SourceServicesRoot\heal-canon-intake",
+            "$SourceServicesRoot\heal-rsid-resolution",
+            "$SourceServicesRoot\heal-vcf-canon-match",
+            "$SourceServicesRoot\heal-vcf-normalization",
+            "$SourceServicesRoot\heal-match-preparation",
+            "$SourceServicesRoot\heal-ai-triage",
+            "$SourceServicesRoot\heal-variant-enrichment",
+            $SourceConfigRoot,
+            "C:\ProgramData\Cloudflared-HealApi\token.txt",
+            "C:\ServerCIT\logs\heal-vcf-api",
+            "C:\ServerCIT\logs\cloudflared\HealApi.log",
+            $SourceReferenceRoot
+        )
         targetHome = $TargetHome
         copyResults = @($results)
-        note = if ($CodeOnly) { "Only the committed app checkout and ops scripts were staged. No data or configuration was copied." } else { "No source path was deleted. Cutover remains a separate action limited to the two HEAL scheduled tasks." }
+        note = if ($CodeOnly) { "Only the committed app checkout and ops scripts were staged. No data or configuration was copied." } else { "No source path was deleted. Cutover is limited to the two HEAL scheduled tasks. Historical n8n HEAL webhooks remain bypassed until their exact definitions are updated through authenticated UI." }
     }
     $ledger | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $archiveRoot "migration-ledger.json") -Encoding utf8
 }

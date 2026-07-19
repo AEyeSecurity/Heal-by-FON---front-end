@@ -190,23 +190,25 @@ These commands intentionally target only HEAL API resources.
 
 ## Persistence
 
-Persistence scripts were created but require elevated PowerShell:
+The active persistence is isolated under `F:` and consists of exactly two HEAL tasks:
 
 ```powershell
-C:\ServerCIT\scripts\install_cloudflared_heal_api_task.ps1
-C:\ServerCIT\services\heal-vcf-api\install_heal_vcf_api_task.ps1
+F:\Heal by FON\ops\Set-HealScheduledTasks.ps1
 ```
 
-Run them from PowerShell as Administrator.
+The historical Startup `.cmd` entries were archived under `F:\Heal by FON\archive\legacy-startup` and disabled during cutover. Do not restore them unless performing the documented rollback inside the freeze period.
 
-Current fallback persistence has also been added to the current user's Startup folder:
+After the seven-day freeze and explicit approval, first preview the exact legacy paths:
 
-```text
-C:\Users\Usuario\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\heal_vcf_api_start.cmd
-C:\Users\Usuario\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\cloudflared_heal_api_start.cmd
+```powershell
+F:\Heal by FON\ops\Finalize-HealMigration.ps1
 ```
 
-This matches the current operational pattern used by n8n on this server: it restores availability after user login, not before login. For production-grade unattended recovery, replace this fallback with the elevated scheduled tasks above.
+The approved command requires healthy F: tasks/API and completed authenticated n8n workflow updates before it can remove anything:
+
+```powershell
+F:\Heal by FON\ops\Finalize-HealMigration.ps1 -ApproveSourceRemoval
+```
 
 ## Deployment
 
@@ -223,19 +225,21 @@ Push to `main` triggers deployment.
 
 ## Canon V2 Normalization And Enrichment
 
-`gene_module_v2` runs normalize observed VCF alleles before local matching. The managed GRCh38 reference is intentionally stored outside `C:` because the FASTA and index require several GB:
+`gene_module_v2` runs normalize observed VCF alleles before local matching. The managed GRCh38 reference is stored with the HEAL runtime:
 
 ```text
-D:\ServerCIT\services\heal-reference-data\GRCh38
+F:\Heal by FON\data\references\GRCh38
 ```
 
 The manifest records the source URL, retrieval time and SHA-256 hashes. To provision only when the reference is absent:
 
 ```powershell
-C:\ServerCIT\services\heal-vcf-normalization\provision_grch38_reference.ps1
+F:\Heal by FON\app\services\heal-vcf-normalization\provision_grch38_reference.ps1
 ```
 
 V2 uses the local coordinate enrichment service rather than the legacy n8n rsID workflow. `HEAL_V2_LLM1_ENABLED=false` is the safe default: jobs stop at `enrichment_quality_gate`, and LLM1/grouping remains unavailable until normalization and VEP coverage pass review.
+
+During the migration freeze, legacy n8n workflow URLs are intentionally disabled in the F: API launcher. Their two versioned definitions have F: paths and an F: backup, but they must be edited through authenticated n8n UI before the C: fallback is removed. Do not use the n8n CLI import command because it deactivates active workflows.
 
 ## Manual Functional Test
 

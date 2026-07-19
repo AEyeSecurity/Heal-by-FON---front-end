@@ -60,6 +60,22 @@ $env:HEAL_MATCH_PREPARATION_SCRIPT = Join-Path $appRoot "services\heal-match-pre
 $env:HEAL_VARIANT_ENRICHMENT_SCRIPT = Join-Path $appRoot "services\heal-variant-enrichment\enrich_observed_variants.py"
 $env:HEAL_V2_LLM1_ENABLED = "false"
 
+# The shared n8n definitions remain frozen during the migration window. Do not
+# send HEAL requests to their historical C: paths; the API uses its local F:
+# fallbacks until the two definitions are updated through authenticated n8n UI.
+foreach ($name in @(
+    "HEAL_N8N_UPLOAD_WEBHOOK_URL",
+    "HEAL_N8N_VALIDATION_WEBHOOK_URL",
+    "HEAL_N8N_CANON_WEBHOOK_URL",
+    "HEAL_N8N_RSID_RESOLUTION_WEBHOOK_URL",
+    "HEAL_N8N_VCF_CANON_MATCH_WEBHOOK_URL",
+    "HEAL_N8N_VARIANT_ENRICHMENT_WEBHOOK_URL",
+    "HEAL_N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL",
+    "HEAL_N8N_GLOBAL_INTERPRETATION_WEBHOOK_URL"
+)) {
+    [Environment]::SetEnvironmentVariable($name, "", "Process")
+}
+
 foreach ($directory in @($dataRoot, $logRoot, $env:HEAL_UPLOAD_ROOT, $env:HEAL_CANON_ROOT, $env:HEAL_RSID_RESOLUTION_ROOT, $env:HEAL_RUN_ROOT, $env:HEAL_JOB_ROOT, $env:HEAL_ENRICHMENT_CACHE_ROOT, $env:HEAL_REFERENCE_DATA_ROOT)) {
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
 }
