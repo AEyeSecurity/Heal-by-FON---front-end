@@ -25,7 +25,7 @@ if ($dockerProbe.WaitForExit(5000)) {
     $checks["dockerError"] = "Docker image probe timed out; Docker was not restarted."
 }
 try {
-    $health = Invoke-RestMethod -Uri "http://127.0.0.1:8787/api/health" -TimeoutSec 5
+    $health = Invoke-RestMethod -Uri "http://127.0.0.1:8787/api/health" -TimeoutSec 15
     $checks.api = [bool]$health.ok
     $checks["apiHealth"] = $health
 }
