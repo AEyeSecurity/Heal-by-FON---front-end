@@ -222,6 +222,12 @@ def scan_vcf(vcf_path: Path, envelope_index: dict) -> tuple[list[dict], dict, li
             chrom, pos, id_vcf, ref, alt, qual, filter_vcf, info_value = parts[:8]
             chrom_normalized = normalize_chromosome(chrom)
             envelopes = chromosome_index.get(chrom_normalized) or []
+            # Accept compact single-envelope records emitted by older v2 canon
+            # runs, while ignoring malformed index values safely.
+            if isinstance(envelopes, dict):
+                envelopes = [envelopes]
+            if not isinstance(envelopes, list):
+                continue
             if not envelopes:
                 continue
             info = parse_info(info_value)
@@ -238,7 +244,8 @@ def scan_vcf(vcf_path: Path, envelope_index: dict) -> tuple[list[dict], dict, li
                 overlapping_envelopes = [
                     envelope
                     for envelope in envelopes
-                    if intervals_overlap(variant_start, variant_end, int(envelope["start"]), int(envelope["end"]))
+                    if isinstance(envelope, dict)
+                    and intervals_overlap(variant_start, variant_end, int(envelope["start"]), int(envelope["end"]))
                 ]
                 if not overlapping_envelopes:
                     continue

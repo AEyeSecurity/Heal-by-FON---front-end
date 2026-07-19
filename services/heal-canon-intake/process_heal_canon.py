@@ -1463,7 +1463,10 @@ def export_gene_envelope_index(canon_version_id: str, assembly: str, gene_master
         )
     for chrom in chromosomes:
         chromosomes[chrom].sort(key=lambda item: (item["start"], item["end"], item["symbol"]))
-    payload = {"canon_version_id": canon_version_id, "assembly": assembly, "chromosomes": chromosomes}
+    # Serialize a plain mapping of lists. This avoids compact singleton values
+    # and gives the normalizer/matcher one stable envelope-index contract.
+    serialized_chromosomes = {chrom: list(envelopes) for chrom, envelopes in chromosomes.items()}
+    payload = {"canon_version_id": canon_version_id, "assembly": assembly, "chromosomes": serialized_chromosomes}
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

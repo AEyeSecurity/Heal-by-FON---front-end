@@ -12,6 +12,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 NORMALIZER_PATH = ROOT / "services" / "heal-vcf-normalization" / "normalize_vcf_for_v2.py"
+MATCHER_PATH = ROOT / "services" / "heal-vcf-canon-match" / "match_vcf_to_gene_module_ready.py"
+CANON_INTAKE_PATH = ROOT / "services" / "heal-canon-intake" / "process_heal_canon.py"
 ENRICHMENT_DIR = ROOT / "services" / "heal-variant-enrichment"
 ENRICHMENT_PATH = ENRICHMENT_DIR / "enrich_gene_module_v2.py"
 sys.path.insert(0, str(ENRICHMENT_DIR))
@@ -27,6 +29,8 @@ def load_module(name: str, path: Path):
 
 
 normalizer = load_module("heal_vcf_normalizer_test", NORMALIZER_PATH)
+matcher = load_module("heal_vcf_matcher_test", MATCHER_PATH)
+canon_intake = load_module("heal_canon_intake_test", CANON_INTAKE_PATH)
 enrichment = load_module("heal_v2_enrichment_test", ENRICHMENT_PATH)
 
 
@@ -92,6 +96,57 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
         self.assertEqual(next(iter(sources.values()))["source_id_vcf"], "rs-in")
         self.assertEqual(excluded, [])
         self.assertEqual(stats["outside_canon_envelope_prefilter"], 1)
+
+    def test_singleton_envelope_object_is_accepted_by_normalizer_and_matcher(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index_path = root / "envelopes.json"
+            vcf_path = root / "sample.vcf"
+            index = {
+                "assembly": "GRCh38",
+                "chromosomes": {
+                    "chr14": {"gene_id": "GENE_MTHFD1_GRCH38", "symbol": "MTHFD1", "start": 1000, "end": 1100}
+                },
+            }
+            index_path.write_text(json.dumps(index), encoding="utf-8")
+            vcf_path.write_text(
+                "##fileformat=VCFv4.2\n"
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+                "chr14\t1050\trs-in\tA\tG\t.\tPASS\t.\tGT\t0/1\n",
+                encoding="utf-8",
+            )
+
+            regions = normalizer.load_target_regions(index_path, flank_bases=0)
+            candidates, _, warnings = matcher.scan_vcf(vcf_path, index)
+
+        self.assertEqual(regions, {"chr14": [(1000, 1100)]})
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["approved_symbol"], "MTHFD1")
+
+    def test_canon_export_preserves_singleton_chromosome_as_list(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            index_path = Path(temporary) / "envelopes.json"
+            canon_intake.export_gene_envelope_index(
+                "test-canon",
+                "GRCh38",
+                [{
+                    "gene_id": "GENE_MTHFD1_GRCH38",
+                    "approved_symbol": "MTHFD1",
+                    "start": 1000,
+                    "end": 1100,
+                    "strand": 1,
+                    "module_ids": "T1.1",
+                    "module_names": "Foundational Systems Resilience",
+                    "biotype": "protein_coding",
+                    "chrom": "chr14",
+                }],
+                index_path,
+            )
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+
+        self.assertIsInstance(payload["chromosomes"]["chr14"], list)
+        self.assertEqual(payload["chromosomes"]["chr14"][0]["symbol"], "MTHFD1")
 
     def test_target_files_normalize_raw_contig_aliases(self):
         with tempfile.TemporaryDirectory() as temporary:

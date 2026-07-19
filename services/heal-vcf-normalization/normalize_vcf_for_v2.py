@@ -170,8 +170,16 @@ def load_target_regions(index_path: Path, flank_bases: int = 500) -> dict[str, l
         normalized = normalize_chromosome(chrom)
         if normalized not in SUPPORTED_CHROMOSOMES:
             continue
+        # Older v2 artifacts compacted a chromosome with one gene into an
+        # object. Accept both shapes while new canon exports keep lists.
+        if isinstance(envelopes, dict):
+            envelopes = [envelopes]
+        if not isinstance(envelopes, list):
+            continue
         spans = []
         for envelope in envelopes or []:
+            if not isinstance(envelope, dict):
+                continue
             try:
                 start = max(1, int(envelope.get("start")) - flank_bases)
                 end = int(envelope.get("end")) + flank_bases
