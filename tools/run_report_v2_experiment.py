@@ -737,7 +737,9 @@ def main() -> int:
     parser.add_argument("--timeout-seconds", type=int, default=360)
     args = parser.parse_args()
 
-    load_env_file(Path(r"C:\ProgramData\HealByFonApi\heal-vcf-api.env"))
+    config_root_raw = os.environ.get("HEAL_CONFIG_ROOT", "").strip()
+    if config_root_raw:
+        load_env_file(Path(config_root_raw).expanduser() / "heal-vcf-api.env")
     global_mod = load_global_module()
     rows = read_csv(Path(args.input_csv))
     requested_language_mode = args.language_mode

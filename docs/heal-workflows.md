@@ -1,5 +1,7 @@
 # HEAL Workflow Map
 
+> **Runtime notice:** workflow descriptions below include historical deployment paths. The active runtime map is [runtime-map.md](runtime-map.md). V2 normalizes, matches and enriches directly from the API; only the legacy rsID workflows remain in shared n8n, with HEAL-owned paths under `F:\Heal by FON`.
+
 ## Current Client Path
 
 ```text

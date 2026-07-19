@@ -12,7 +12,7 @@ if ([string]::IsNullOrWhiteSpace($python)) {
 
 $script = $env:HEAL_MATCH_PREPARATION_SCRIPT
 if ([string]::IsNullOrWhiteSpace($script)) {
-  $script = "C:\ServerCIT\services\heal-match-preparation\prepare_match_deliverable.py"
+  $script = Join-Path $PSScriptRoot "prepare_match_deliverable.py"
 }
 
 & $python $script --input-json-base64 $InputJsonBase64

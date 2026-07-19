@@ -8,6 +8,7 @@ import base64
 import csv
 import datetime as dt
 import json
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -1623,7 +1624,11 @@ def parse_args() -> argparse.Namespace:
     if not args.input or not args.output_dir:
         parser.error("--input and --output-dir are required.")
     if not args.cache_dir:
-        args.cache_dir = r"C:\ServerCIT\services\heal-variant-enrichment\cache"
+        args.cache_dir = (
+            os.environ.get("HEAL_LEGACY_ENRICHMENT_CACHE_ROOT")
+            or os.environ.get("HEAL_ENRICHMENT_CACHE_ROOT")
+            or str(Path(__file__).resolve().parent / "cache")
+        )
     return args
 
 

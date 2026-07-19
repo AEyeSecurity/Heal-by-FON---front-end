@@ -1,5 +1,7 @@
 # HEAL by FON VCF Intake - Technical Architecture
 
+> **Runtime notice:** this document retains design history. The active path map, data retention, task ownership and shared-dependency boundary are in [runtime-map.md](runtime-map.md). After migration, all active HEAL code and data run from `F:\Heal by FON`.
+
 ## Scope
 
 This repository contains the first production-facing slice of HEAL by FON: a web interface and backend API for receiving large VCF files, validating their integrity, maintaining the current interpretation canon, matching VCF rows against the canon, preparing match outputs for audit, and enriching observed variants with public external sources.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -67,6 +68,44 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
         self.assertEqual(sources, {})
         self.assertEqual(stats["unsupported_contig"], 1)
         self.assertEqual(excluded[0]["exclusion_reason"], "unsupported_contig")
+
+    def test_envelope_prefilter_keeps_only_possible_canon_candidates(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index_path = root / "envelopes.json"
+            vcf_path = root / "sample.vcf"
+            index_path.write_text(
+                json.dumps({"chromosomes": {"chr1": [{"start": 1000, "end": 1100}]}}),
+                encoding="utf-8",
+            )
+            vcf_path.write_text(
+                "##fileformat=VCFv4.2\n"
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+                "chr1\t1050\trs-in\tA\tG\t.\tPASS\t.\tGT\t0/1\n"
+                "chr1\t5000\trs-out\tA\tG\t.\tPASS\t.\tGT\t0/1\n",
+                encoding="utf-8",
+            )
+            regions = normalizer.load_target_regions(index_path, flank_bases=0)
+            sources, excluded, stats = normalizer.source_alleles(vcf_path, regions)
+
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(next(iter(sources.values()))["source_id_vcf"], "rs-in")
+        self.assertEqual(excluded, [])
+        self.assertEqual(stats["outside_canon_envelope_prefilter"], 1)
+
+    def test_target_files_normalize_raw_contig_aliases(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            regions_path, rename_path, count = normalizer.write_target_files(
+                Path(temporary),
+                {"chr1": [(100, 200)]},
+                {"chr1": "1"},
+            )
+            regions = regions_path.read_text(encoding="utf-8")
+            renames = rename_path.read_text(encoding="utf-8")
+
+        self.assertEqual(count, 1)
+        self.assertIn("1\t100\t200", regions)
+        self.assertIn("1\tchr1", renames)
 
     def test_resolves_only_exact_vep_colocated_allele_rsid(self):
         variant = {"id_vcf": "rs999", "ref_vcf": "A", "alt_vcf": "G"}

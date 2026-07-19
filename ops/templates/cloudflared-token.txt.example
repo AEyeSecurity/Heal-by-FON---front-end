@@ -1,0 +1,2 @@
+# Place the actual tunnel token in F:\Heal by FON\config\cloudflared-token.txt.
+# Never commit the real token.

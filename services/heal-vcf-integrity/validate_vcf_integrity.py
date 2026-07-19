@@ -23,11 +23,20 @@ from typing import Any, BinaryIO, Iterable
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_ALLOWED_ROOTS = [
-    SCRIPT_DIR / "incoming",
-    SCRIPT_DIR / "samples",
-    Path(r"C:\ServerCIT\n8n\tmp\heal-vcf-integrity"),
-]
+
+
+def default_allowed_roots() -> list[Path]:
+    """Keep validation input confined to HEAL-owned storage, not shared n8n temp."""
+    configured = os.environ.get("HEAL_VALIDATOR_ALLOWED_ROOTS", "")
+    if configured:
+        return [Path(item) for item in configured.split(os.pathsep) if item.strip()]
+    upload_root = os.environ.get("HEAL_UPLOAD_ROOT")
+    roots = [Path(upload_root)] if upload_root else [SCRIPT_DIR / "incoming"]
+    roots.append(SCRIPT_DIR / "samples")
+    return roots
+
+
+DEFAULT_ALLOWED_ROOTS = default_allowed_roots()
 VCF_BASE_COLUMNS = ["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO"]
 
 

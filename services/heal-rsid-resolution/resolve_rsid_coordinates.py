@@ -8,6 +8,7 @@ import base64
 import csv
 import datetime as dt
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -244,7 +245,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Resolve rsID master coordinates.")
     parser.add_argument("--input", help="Input rsid_master.csv.")
     parser.add_argument("--output-dir", help="Output directory.")
-    parser.add_argument("--cache-dir", default="C:\\ServerCIT\\services\\heal-rsid-resolution\\cache")
+    data_root = os.environ.get("HEAL_DATA_ROOT", "").strip()
+    default_cache_dir = (
+        Path(data_root) / "legacy-rsid" / "cache"
+        if data_root
+        else Path(__file__).resolve().parent / "cache"
+    )
+    parser.add_argument("--cache-dir", default=str(default_cache_dir))
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--input-json-base64", default="")
     args = parser.parse_args()

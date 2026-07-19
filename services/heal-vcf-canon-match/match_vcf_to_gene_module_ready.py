@@ -20,7 +20,8 @@ def utc_now() -> str:
 
 
 def read_csv(path: Path) -> list[dict]:
-    with path.open("r", newline="", encoding="utf-8-sig") as handle:
+    opener = gzip.open if path.name.lower().endswith(".gz") else Path.open
+    with opener(path, "rt" if opener is gzip.open else "r", newline="", encoding="utf-8-sig") as handle:
         return list(csv.DictReader(handle))
 
 

@@ -1,69 +1,45 @@
 import express from "express";
 import { createWriteStream } from "node:fs";
-import { mkdir, open, readFile, readdir, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rm, stat, statfs, unlink, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
+import {
+  APP_ROOT,
+  BACKUP_ROOT,
+  CONFIG_ROOT,
+  DATA_ROOT,
+  HEAL_HOME,
+  LOG_ROOT,
+  RUNTIME_PATHS,
+  SERVICE_SCRIPTS,
+} from "./heal-runtime.js";
 
 const app = express();
 const PORT = Number(process.env.HEAL_API_PORT || 8787);
-const UPLOAD_ROOT =
-  process.env.HEAL_UPLOAD_ROOT ||
-  "C:\\ServerCIT\\services\\heal-vcf-integrity\\incoming";
-const VALIDATOR_SCRIPT =
-  process.env.HEAL_VALIDATOR_SCRIPT ||
-  "C:\\ServerCIT\\services\\heal-vcf-integrity\\validate_vcf_integrity.py";
-const CANON_ROOT =
-  process.env.HEAL_CANON_ROOT ||
-  "C:\\ServerCIT\\services\\heal-canon-intake";
-const CANON_PROCESSOR_SCRIPT =
-  process.env.HEAL_CANON_PROCESSOR_SCRIPT ||
-  "C:\\ServerCIT\\services\\heal-canon-intake\\process_heal_canon.py";
-const RSID_RESOLUTION_ROOT =
-  process.env.HEAL_RSID_RESOLUTION_ROOT ||
-  "C:\\ServerCIT\\services\\heal-rsid-resolution";
-const VCF_CANON_MATCH_ROOT =
-  process.env.HEAL_VCF_CANON_MATCH_ROOT ||
-  "C:\\ServerCIT\\services\\heal-vcf-canon-match";
-const VCF_NORMALIZATION_ROOT =
-  process.env.HEAL_VCF_NORMALIZATION_ROOT ||
-  "C:\\ServerCIT\\services\\heal-vcf-normalization";
-const REFERENCE_DATA_ROOT =
-  process.env.HEAL_REFERENCE_DATA_ROOT ||
-  "D:\\ServerCIT\\services\\heal-reference-data";
+const UPLOAD_ROOT = RUNTIME_PATHS.uploads;
+const VALIDATOR_SCRIPT = SERVICE_SCRIPTS.validator;
+const CANON_ROOT = RUNTIME_PATHS.canon;
+const CANON_PROCESSOR_SCRIPT = SERVICE_SCRIPTS.canonProcessor;
+const RSID_RESOLUTION_ROOT = RUNTIME_PATHS.legacyRsid;
+const VCF_CANON_MATCH_ROOT = RUNTIME_PATHS.match;
+const VCF_NORMALIZATION_ROOT = RUNTIME_PATHS.normalization;
+const REFERENCE_DATA_ROOT = RUNTIME_PATHS.references;
 const GRCH38_REFERENCE_FASTA =
   process.env.HEAL_GRCH38_REFERENCE_FASTA || path.join(REFERENCE_DATA_ROOT, "GRCh38", "hg38.fa");
 const GRCH38_REFERENCE_MANIFEST =
   process.env.HEAL_GRCH38_REFERENCE_MANIFEST || path.join(REFERENCE_DATA_ROOT, "GRCh38", "reference_manifest.json");
 const GRCH37_REFERENCE_FASTA = process.env.HEAL_GRCH37_REFERENCE_FASTA || "";
 const GRCH37_REFERENCE_MANIFEST = process.env.HEAL_GRCH37_REFERENCE_MANIFEST || "";
-const MATCH_PREPARATION_ROOT =
-  process.env.HEAL_MATCH_PREPARATION_ROOT ||
-  "C:\\ServerCIT\\services\\heal-match-preparation";
-const AI_TRIAGE_ROOT =
-  process.env.HEAL_AI_TRIAGE_ROOT ||
-  "C:\\ServerCIT\\services\\heal-ai-triage";
-const VARIANT_ENRICHMENT_ROOT =
-  process.env.HEAL_VARIANT_ENRICHMENT_ROOT ||
-  "C:\\ServerCIT\\services\\heal-variant-enrichment";
-const GROUPED_INTERPRETATION_PREP_ROOT =
-  process.env.HEAL_GROUPED_INTERPRETATION_PREP_ROOT ||
-  "C:\\ServerCIT\\services\\heal-grouped-interpretation-prep";
-const GROUPED_INDIVIDUAL_INTERPRETATION_ROOT =
-  process.env.HEAL_GROUPED_INDIVIDUAL_INTERPRETATION_ROOT ||
-  "C:\\ServerCIT\\services\\heal-grouped-individual-interpretation";
-const INDIVIDUAL_INTERPRETATION_ROOT =
-  process.env.HEAL_INDIVIDUAL_INTERPRETATION_ROOT ||
-  "C:\\ServerCIT\\services\\heal-individual-interpretation";
-const INTERPRETATION_NORMALIZATION_ROOT =
-  process.env.HEAL_INTERPRETATION_NORMALIZATION_ROOT ||
-  "C:\\ServerCIT\\services\\heal-interpretation-normalization";
-const GLOBAL_INTERPRETATION_ROOT =
-  process.env.HEAL_GLOBAL_INTERPRETATION_ROOT ||
-  "C:\\ServerCIT\\services\\heal-global-interpretation";
-const FINAL_REPORT_ROOT =
-  process.env.HEAL_FINAL_REPORT_ROOT ||
-  "C:\\ServerCIT\\services\\heal-final-report";
+const MATCH_PREPARATION_ROOT = RUNTIME_PATHS.preparation;
+const AI_TRIAGE_ROOT = RUNTIME_PATHS.triage;
+const VARIANT_ENRICHMENT_ROOT = RUNTIME_PATHS.enrichment;
+const GROUPED_INTERPRETATION_PREP_ROOT = RUNTIME_PATHS.groupedPrep;
+const GROUPED_INDIVIDUAL_INTERPRETATION_ROOT = RUNTIME_PATHS.groupedInterpretation;
+const INDIVIDUAL_INTERPRETATION_ROOT = RUNTIME_PATHS.individualInterpretation;
+const INTERPRETATION_NORMALIZATION_ROOT = RUNTIME_PATHS.interpretationNormalization;
+const GLOBAL_INTERPRETATION_ROOT = RUNTIME_PATHS.globalInterpretation;
+const FINAL_REPORT_ROOT = RUNTIME_PATHS.finalReport;
 const PYTHON_EXE = process.env.HEAL_PYTHON_EXE || "python";
 const MAX_UPLOADS = Math.max(1, Number.parseInt(process.env.HEAL_MAX_UPLOADS || "12", 10) || 12);
 const UPLOAD_TTL_MS =
@@ -115,6 +91,9 @@ const ALLOWED_LLM2_MODELS = new Set(
 );
 const ALLOW_LLM_DRY_RUN = process.env.HEAL_ALLOW_LLM_DRY_RUN === "true";
 const HEAL_V2_LLM1_ENABLED = process.env.HEAL_V2_LLM1_ENABLED === "true";
+const MAINTENANCE_MODE = process.env.HEAL_MAINTENANCE_MODE === "true";
+const DEPLOYMENT_SHA = process.env.HEAL_DEPLOYMENT_SHA || "unknown";
+const NORMALIZER_IMAGE = process.env.HEAL_VCF_NORMALIZER_IMAGE || "heal-vcf-normalizer:1.0.0";
 const ALLOWED_ORIGINS = (process.env.HEAL_ALLOWED_ORIGINS ||
   "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173")
   .split(",")
@@ -167,6 +146,10 @@ app.use((req, res, next) => {
     res.status(204).send();
     return;
   }
+  if (MAINTENANCE_MODE && !["GET", "OPTIONS"].includes(req.method)) {
+    res.status(503).json({ error: "HEAL is temporarily in maintenance mode. Please retry shortly." });
+    return;
+  }
   next();
 });
 
@@ -212,10 +195,8 @@ function vcfCanonMatchPaths() {
   const root = path.resolve(VCF_CANON_MATCH_ROOT);
   return {
     root,
-    runs: path.join(root, "runs"),
-    jobs: path.join(root, "jobs"),
-    current: path.join(root, "current"),
-    currentManifest: path.join(root, "current", "current.json"),
+    runs: root,
+    jobs: path.resolve(RUNTIME_PATHS.jobs),
   };
 }
 
@@ -223,7 +204,7 @@ function vcfNormalizationPaths() {
   const root = path.resolve(VCF_NORMALIZATION_ROOT);
   return {
     root,
-    runs: path.join(root, "runs"),
+    runs: root,
   };
 }
 
@@ -231,7 +212,7 @@ function matchPreparationPaths() {
   const root = path.resolve(MATCH_PREPARATION_ROOT);
   return {
     root,
-    runs: path.join(root, "runs"),
+    runs: root,
   };
 }
 
@@ -239,8 +220,8 @@ function variantEnrichmentPaths() {
   const root = path.resolve(VARIANT_ENRICHMENT_ROOT);
   return {
     root,
-    runs: path.join(root, "runs"),
-    cache: path.join(root, "cache"),
+    runs: root,
+    cache: path.resolve(RUNTIME_PATHS.enrichmentCache),
   };
 }
 
@@ -248,7 +229,7 @@ function aiTriagePaths() {
   const root = path.resolve(AI_TRIAGE_ROOT);
   return {
     root,
-    runs: path.join(root, "runs"),
+    runs: root,
   };
 }
 
@@ -256,7 +237,7 @@ function groupedInterpretationPrepPaths() {
   const root = path.resolve(GROUPED_INTERPRETATION_PREP_ROOT);
   return {
     root,
-    runs: path.join(root, "runs"),
+    runs: root,
   };
 }
 
@@ -264,7 +245,7 @@ function groupedIndividualInterpretationPaths() {
   const root = path.resolve(GROUPED_INDIVIDUAL_INTERPRETATION_ROOT);
   return {
     root,
-    runs: path.join(root, "runs"),
+    runs: root,
   };
 }
 
@@ -272,7 +253,7 @@ function individualInterpretationPaths() {
   const root = path.resolve(INDIVIDUAL_INTERPRETATION_ROOT);
   return {
     root,
-    runs: path.join(root, "runs"),
+    runs: root,
   };
 }
 
@@ -280,7 +261,7 @@ function interpretationNormalizationPaths() {
   const root = path.resolve(INTERPRETATION_NORMALIZATION_ROOT);
   return {
     root,
-    runs: path.join(root, "runs"),
+    runs: root,
   };
 }
 
@@ -288,7 +269,7 @@ function globalInterpretationPaths() {
   const root = path.resolve(GLOBAL_INTERPRETATION_ROOT);
   return {
     root,
-    runs: path.join(root, "runs"),
+    runs: root,
   };
 }
 
@@ -296,7 +277,7 @@ function finalReportPaths() {
   const root = path.resolve(FINAL_REPORT_ROOT);
   return {
     root,
-    runs: path.join(root, "runs"),
+    runs: root,
   };
 }
 
@@ -360,6 +341,42 @@ function activeUploadsForClient(fingerprint) {
 function isPathInside(parent, target) {
   const relative = path.relative(path.resolve(parent), path.resolve(target));
   return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function resolveStoredPath(root, storedPath) {
+  if (!storedPath) return "";
+  return path.resolve(path.isAbsolute(storedPath) ? storedPath : path.join(root, storedPath));
+}
+
+function jobStageDirectory(jobId, stage) {
+  return path.join(path.resolve(RUNTIME_PATHS.runs), safeFileName(jobId), safeFileName(stage));
+}
+
+function storeRelativePath(root, candidatePath) {
+  if (!candidatePath) return "";
+  const resolved = path.resolve(candidatePath);
+  return isPathInside(root, resolved) ? path.relative(root, resolved) : resolved;
+}
+
+function hydrateJobArtifacts(job) {
+  if (!job?.artifacts || typeof job.artifacts !== "object") return job;
+  for (const [key, value] of Object.entries(job.artifacts)) {
+    if (typeof value === "string" && value) {
+      job.artifacts[key] = resolveStoredPath(DATA_ROOT, value);
+    }
+  }
+  return job;
+}
+
+function serializeJobForStorage(job) {
+  const stored = JSON.parse(JSON.stringify(job));
+  if (!stored?.artifacts || typeof stored.artifacts !== "object") return stored;
+  for (const [key, value] of Object.entries(stored.artifacts)) {
+    if (typeof value === "string" && value) {
+      stored.artifacts[key] = storeRelativePath(DATA_ROOT, value);
+    }
+  }
+  return stored;
 }
 
 function manifestPath(uploadDir) {
@@ -972,7 +989,7 @@ function runPythonJsonCommand(scriptPath, args) {
 }
 
 async function probeVcfAssembly(inputPath) {
-  return await runPythonJsonCommand(path.join(VCF_NORMALIZATION_ROOT, "normalize_vcf_for_v2.py"), [
+  return await runPythonJsonCommand(SERVICE_SCRIPTS.vcfNormalization, [
     "--probe-assembly",
     "--input",
     inputPath,
@@ -1017,7 +1034,7 @@ async function updateGroupedIndividualInterpretationJobProgress(payload, job, { 
 
 function runIndividualInterpretationScript(payload, job) {
   return new Promise((resolve, reject) => {
-    const scriptPath = path.join(INDIVIDUAL_INTERPRETATION_ROOT, "interpret_observed_variants.py");
+    const scriptPath = SERVICE_SCRIPTS.individualInterpretation;
     const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
     const child = spawn(PYTHON_EXE, [scriptPath, "--input-json-base64", encoded], {
       windowsHide: true,
@@ -1069,7 +1086,7 @@ function runIndividualInterpretationScript(payload, job) {
 
 function runGroupedIndividualInterpretationScript(payload, job) {
   return new Promise((resolve, reject) => {
-    const scriptPath = path.join(GROUPED_INDIVIDUAL_INTERPRETATION_ROOT, "interpret_gene_module_groups.py");
+    const scriptPath = SERVICE_SCRIPTS.groupedInterpretation;
     const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
     const child = spawn(PYTHON_EXE, [scriptPath, "--input-json-base64", encoded], {
       windowsHide: true,
@@ -1122,35 +1139,35 @@ function runGroupedIndividualInterpretationScript(payload, job) {
 async function processRsidResolution(payload) {
   return (
     (await postWorkflowForSummary(N8N_RSID_RESOLUTION_WEBHOOK_URL, payload, "n8n rsID resolution")) ||
-    (await runBase64JsonScript(path.join(RSID_RESOLUTION_ROOT, "resolve_rsid_coordinates.py"), payload))
+    (await runBase64JsonScript(SERVICE_SCRIPTS.rsidResolution, payload))
   );
 }
 
 async function processVcfCanonMatch(payload) {
   if (payload.adapter === "gene_module_canon_adapter") {
-    return await runBase64JsonScript(path.join(VCF_CANON_MATCH_ROOT, "match_vcf_to_gene_module_ready.py"), payload);
+    return await runBase64JsonScript(SERVICE_SCRIPTS.geneModuleMatcher, payload);
   }
   return (
     (await postWorkflowForSummary(N8N_VCF_CANON_MATCH_WEBHOOK_URL, payload, "n8n VCF-canon match")) ||
-    (await runBase64JsonScript(path.join(VCF_CANON_MATCH_ROOT, "match_vcf_to_rsid_ready.py"), payload))
+    (await runBase64JsonScript(SERVICE_SCRIPTS.legacyMatcher, payload))
   );
 }
 
 async function processVcfNormalization(payload) {
-  return await runBase64JsonScript(path.join(VCF_NORMALIZATION_ROOT, "normalize_vcf_for_v2.py"), payload);
+  return await runBase64JsonScript(SERVICE_SCRIPTS.vcfNormalization, payload);
 }
 
 async function processMatchPreparation(payload) {
-  return await runBase64JsonScript(path.join(MATCH_PREPARATION_ROOT, "prepare_match_deliverable.py"), payload);
+  return await runBase64JsonScript(SERVICE_SCRIPTS.matchPreparation, payload);
 }
 
 async function processAiTriage(payload) {
-  return await runBase64JsonScript(path.join(AI_TRIAGE_ROOT, "triage_for_ai.py"), payload);
+  return await runBase64JsonScript(SERVICE_SCRIPTS.aiTriage, payload);
 }
 
 async function processVariantEnrichment(payload) {
   if (payload.schemaVersion === "gene_module_v2") {
-    return await runBase64JsonScript(path.join(VARIANT_ENRICHMENT_ROOT, "enrich_gene_module_v2.py"), payload);
+    return await runBase64JsonScript(SERVICE_SCRIPTS.geneModuleEnrichment, payload);
   }
   const webhookResult = await postWorkflowForSummary(
     N8N_VARIANT_ENRICHMENT_WEBHOOK_URL,
@@ -1160,12 +1177,12 @@ async function processVariantEnrichment(payload) {
   if (webhookResult?.outputs?.observedVariantEnrichmentPlusCsv) {
     return webhookResult;
   }
-  return await runBase64JsonScript(path.join(VARIANT_ENRICHMENT_ROOT, "enrich_observed_variants.py"), payload);
+  return await runBase64JsonScript(SERVICE_SCRIPTS.legacyEnrichment, payload);
 }
 
 async function processGroupedInterpretationPrep(payload) {
   return await runBase64JsonScript(
-    path.join(GROUPED_INTERPRETATION_PREP_ROOT, "prepare_gene_module_group_payloads.py"),
+    SERVICE_SCRIPTS.groupedPrep,
     payload,
   );
 }
@@ -1187,7 +1204,7 @@ async function processIndividualInterpretation(payload, job) {
 
 async function processInterpretationNormalization(payload) {
   return await runBase64JsonScript(
-    path.join(INTERPRETATION_NORMALIZATION_ROOT, "normalize_individual_interpretations.py"),
+    SERVICE_SCRIPTS.interpretationNormalization,
     payload,
   );
 }
@@ -1195,12 +1212,12 @@ async function processInterpretationNormalization(payload) {
 async function processGlobalInterpretation(payload) {
   return (
     (await postWorkflowForSummary(N8N_GLOBAL_INTERPRETATION_WEBHOOK_URL, payload, "n8n global interpretation")) ||
-    (await runBase64JsonScript(path.join(GLOBAL_INTERPRETATION_ROOT, "interpret_global_profile.py"), payload))
+    (await runBase64JsonScript(SERVICE_SCRIPTS.globalInterpretation, payload))
   );
 }
 
 async function processFinalReport(payload) {
-  return await runBase64JsonScript(path.join(FINAL_REPORT_ROOT, "render_final_report.py"), payload);
+  return await runBase64JsonScript(SERVICE_SCRIPTS.finalReport, payload);
 }
 
 async function processVariantEnrichmentWithRetry(payload, job, attempts = 3) {
@@ -1270,8 +1287,8 @@ async function loadCurrentCanon() {
   const manifest = await loadCurrentCanonManifest();
   if (!manifest) return publicCanon(null, null, null);
   const paths = canonPaths();
-  const summaryPath = path.resolve(manifest.summaryPath || "");
-  const previewPath = path.resolve(manifest.previewPath || "");
+  const summaryPath = resolveStoredPath(paths.root, manifest.summaryPath);
+  const previewPath = resolveStoredPath(paths.root, manifest.previewPath);
   if (!isPathInside(paths.root, summaryPath) || !isPathInside(paths.root, previewPath)) {
     return publicCanon(null, null, null);
   }
@@ -1284,14 +1301,24 @@ async function loadCurrentCanonManifest() {
   const paths = canonPaths();
   const raw = await readFile(paths.currentManifest, "utf8").catch(() => null);
   if (!raw) return null;
-  return JSON.parse(raw);
+  const manifest = JSON.parse(raw);
+  return {
+    ...manifest,
+    summaryPath: resolveStoredPath(paths.root, manifest.summaryPath),
+    previewPath: resolveStoredPath(paths.root, manifest.previewPath),
+  };
 }
 
 async function loadCurrentRsidResolutionManifest() {
   const paths = rsidResolutionPaths();
   const raw = await readFile(paths.currentManifest, "utf8").catch(() => null);
   if (!raw) return null;
-  return JSON.parse(raw);
+  const manifest = JSON.parse(raw);
+  return {
+    ...manifest,
+    summaryPath: resolveStoredPath(paths.root, manifest.summaryPath),
+    rsidMatchReadyCsv: resolveStoredPath(paths.root, manifest.rsidMatchReadyCsv),
+  };
 }
 
 async function saveCurrentRsidResolution(runId, summary) {
@@ -1303,7 +1330,19 @@ async function saveCurrentRsidResolution(runId, summary) {
     rsidMatchReadyCsv: summary.outputs?.rsidMatchReadyCsv || path.join(paths.runs, runId, "rsid_match_ready.csv"),
     createdAt: new Date().toISOString(),
   };
-  await writeFile(paths.currentManifest, JSON.stringify(manifest, null, 2), "utf8");
+  await writeFile(
+    paths.currentManifest,
+    JSON.stringify(
+      {
+        ...manifest,
+        summaryPath: storeRelativePath(paths.root, manifest.summaryPath),
+        rsidMatchReadyCsv: storeRelativePath(paths.root, manifest.rsidMatchReadyCsv),
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
   return manifest;
 }
 
@@ -1345,7 +1384,19 @@ async function saveCurrentCanon(runId, sourceFileName, summary) {
     previewPath: path.join(paths.runs, runId, "canon_preview.json"),
     createdAt: new Date().toISOString(),
   };
-  await writeFile(paths.currentManifest, JSON.stringify(manifest, null, 2), "utf8");
+  await writeFile(
+    paths.currentManifest,
+    JSON.stringify(
+      {
+        ...manifest,
+        summaryPath: storeRelativePath(paths.root, manifest.summaryPath),
+        previewPath: storeRelativePath(paths.root, manifest.previewPath),
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
   return publicCanon(summary, JSON.parse(await readFile(manifest.previewPath, "utf8")), manifest);
 }
 
@@ -1432,7 +1483,7 @@ async function persistVcfCanonJob(job) {
   if (!shouldPersistVcfCanonJob(job)) return;
   const paths = vcfCanonMatchPaths();
   await mkdir(paths.jobs, { recursive: true });
-  await writeFile(vcfCanonJobPath(job.id), JSON.stringify(job, null, 2), "utf8");
+  await writeFile(vcfCanonJobPath(job.id), JSON.stringify(serializeJobForStorage(job), null, 2), "utf8");
 }
 
 async function loadPersistedVcfCanonJobs() {
@@ -1442,7 +1493,7 @@ async function loadPersistedVcfCanonJobs() {
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     try {
-      const job = JSON.parse(await readFile(path.join(paths.jobs, entry.name), "utf8"));
+      const job = hydrateJobArtifacts(JSON.parse(await readFile(path.join(paths.jobs, entry.name), "utf8")));
       if (job?.id && shouldPersistVcfCanonJob(job)) {
         if (job.status === "running") {
           job.status = "failed";
@@ -1502,26 +1553,87 @@ async function notifyN8nValidation(job, upload) {
   await postWebhook(N8N_VALIDATION_WEBHOOK_URL, payload, job);
 }
 
-app.get("/api/health", (_req, res) => {
+function runCommand(command, args) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (error) => resolve({ ok: false, error: error.message, stdout, stderr }));
+    child.on("close", (code) => resolve({ ok: code === 0, code, stdout, stderr }));
+  });
+}
+
+async function runtimeHealth() {
+  const [storage, reference, referenceIndex, docker, canonManifest] = await Promise.all([
+    statfs(DATA_ROOT).catch(() => null),
+    stat(GRCH38_REFERENCE_FASTA).catch(() => null),
+    stat(`${GRCH38_REFERENCE_FASTA}.fai`).catch(() => null),
+    runCommand("docker", ["image", "inspect", NORMALIZER_IMAGE]).catch(() => ({ ok: false })),
+    loadCurrentCanonManifest().catch(() => null),
+  ]);
+  const canonSummaryPath = canonManifest ? resolveStoredPath(canonPaths().root, canonManifest.summaryPath) : "";
+  const canonSummary =
+    canonSummaryPath && isPathInside(canonPaths().root, canonSummaryPath)
+      ? await stat(canonSummaryPath).catch(() => null)
+      : null;
+  const bytesFree = storage ? Number(storage.bsize) * Number(storage.bavail) : null;
+  return {
+    deployment: { sha: DEPLOYMENT_SHA, homeConfigured: Boolean(process.env.HEAL_HOME), maintenanceMode: MAINTENANCE_MODE },
+    storage: { configured: Boolean(DATA_ROOT), available: Boolean(storage), bytesFree },
+    runtime: {
+      appConfigured: Boolean(APP_ROOT),
+      configConfigured: Boolean(CONFIG_ROOT),
+      logsConfigured: Boolean(LOG_ROOT),
+      backupsConfigured: Boolean(BACKUP_ROOT),
+    },
+    canon: { active: Boolean(canonManifest), artifactsReady: Boolean(canonSummary) },
+    reference: { grch38Ready: Boolean(reference && referenceIndex) },
+    docker: { normalizerImage: NORMALIZER_IMAGE, ready: Boolean(docker.ok) },
+  };
+}
+
+async function v2NormalizationPreflight(uploadSizeBytes) {
+  const requiredBytes = Math.max(20 * 1024 * 1024 * 1024, Number(uploadSizeBytes || 0) * 10);
+  const [workspace, docker] = await Promise.all([
+    statfs(VCF_NORMALIZATION_ROOT).catch(() => null),
+    runCommand("docker", ["image", "inspect", NORMALIZER_IMAGE]).catch(() => ({ ok: false })),
+  ]);
+  const availableBytes = workspace ? Number(workspace.bsize) * Number(workspace.bavail) : 0;
+  if (!workspace || availableBytes < requiredBytes) {
+    return {
+      ok: false,
+      code: "normalization_workspace_insufficient",
+      error: "Insufficient HEAL workspace capacity for VCF normalization.",
+      requiredBytes,
+      availableBytes,
+    };
+  }
+  if (!docker.ok) {
+    return {
+      ok: false,
+      code: "normalizer_image_unavailable",
+      error: "The HEAL VCF normalizer image is unavailable. Deploy health must rebuild it before matching.",
+      requiredBytes,
+      availableBytes,
+    };
+  }
+  return { ok: true, requiredBytes, availableBytes };
+}
+
+app.get("/api/health", async (_req, res) => {
+  const runtime = await runtimeHealth();
   res.json({
     ok: true,
-    storageConfigured: Boolean(UPLOAD_ROOT),
+    storageConfigured: runtime.storage.available,
     validatorConfigured: Boolean(VALIDATOR_SCRIPT),
-    canonRoot: CANON_ROOT,
     canonProcessorConfigured: Boolean(CANON_PROCESSOR_SCRIPT),
-    rsidResolutionRoot: RSID_RESOLUTION_ROOT,
-    vcfCanonMatchRoot: VCF_CANON_MATCH_ROOT,
-    vcfNormalizationRoot: VCF_NORMALIZATION_ROOT,
-    grch38ReferenceFasta: GRCH38_REFERENCE_FASTA,
-    matchPreparationRoot: MATCH_PREPARATION_ROOT,
-    aiTriageRoot: AI_TRIAGE_ROOT,
-    variantEnrichmentRoot: VARIANT_ENRICHMENT_ROOT,
-    groupedInterpretationPrepRoot: GROUPED_INTERPRETATION_PREP_ROOT,
-    groupedIndividualInterpretationRoot: GROUPED_INDIVIDUAL_INTERPRETATION_ROOT,
-    individualInterpretationRoot: INDIVIDUAL_INTERPRETATION_ROOT,
-    interpretationNormalizationRoot: INTERPRETATION_NORMALIZATION_ROOT,
-    globalInterpretationRoot: GLOBAL_INTERPRETATION_ROOT,
-    finalReportRoot: FINAL_REPORT_ROOT,
+    runtime,
     individualInterpretationConfigured: Boolean(process.env.HEAL_OPENAI_API_KEY || process.env.OPENAI_API_KEY),
     individualInterpretationModel: LLM1_MODEL,
     globalInterpretationConfigured: Boolean(process.env.HEAL_OPENAI_API_KEY || process.env.OPENAI_API_KEY),
@@ -2359,6 +2471,11 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
       });
       return;
     }
+    const preflight = await v2NormalizationPreflight(upload.sizeBytes);
+    if (!preflight.ok) {
+      res.status(409).json(preflight);
+      return;
+    }
   }
   let resolutionManifest = null;
   let rsidReadyPath = "";
@@ -2407,16 +2524,18 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
     try {
       const paths = vcfCanonMatchPaths();
       await mkdir(paths.runs, { recursive: true });
-      const runId = crypto.randomUUID();
-      const outputDir = path.join(paths.runs, runId);
+      const runId = isGeneModuleV2 ? job.id : crypto.randomUUID();
+      const outputDir = isGeneModuleV2
+        ? jobStageDirectory(job.id, "matching")
+        : path.join(paths.runs, runId);
       await mkdir(outputDir, { recursive: true });
       let vcfPathForMatching = resolvedStoredPath;
       let normalizationSummary = null;
+      const normalizationPaths = isGeneModuleV2 ? vcfNormalizationPaths() : null;
       if (isGeneModuleV2) {
-        const normalizationPaths = vcfNormalizationPaths();
         await mkdir(normalizationPaths.runs, { recursive: true });
         const normalizationRunId = `vcf-normalization-${runId}`;
-        const normalizationOutputDir = path.join(normalizationPaths.runs, normalizationRunId);
+        const normalizationOutputDir = jobStageDirectory(job.id, "normalization");
         await mkdir(normalizationOutputDir, { recursive: true });
         job.progress = 12;
         job.stage = "normalizing";
@@ -2432,6 +2551,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           assembly: resolvedVcfAssembly,
           referenceFasta: normalizationReference.fasta,
           referenceManifestPath: normalizationReference.manifest,
+          geneEnvelopeIndexPath,
           requestedAt: new Date().toISOString(),
         });
         const normalizedVcfPath = path.resolve(normalizationSummary.normalizedVcfPath || "");
@@ -2482,8 +2602,8 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         vcfParser: normalizeVcfParser(vcfParser),
         requestedAt: new Date().toISOString(),
       };
-      const summary = await processVcfCanonMatch(payload);
-      job.artifacts = {
+        const summary = await processVcfCanonMatch(payload);
+        job.artifacts = {
         ...(job.artifacts || {}),
         sheetFinalConsolidatedCsv: summary.outputs?.sheetFinalConsolidatedCsv || "",
         vcfCandidatesCsv: summary.outputs?.vcfCandidatesCsv || "",
@@ -2491,10 +2611,33 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         sheetFinalMatchStrictCsv: summary.outputs?.sheetFinalMatchStrictCsv || "",
         sheetFinalMatchLikelyNeedsAltReviewCsv: summary.outputs?.sheetFinalMatchLikelyNeedsAltReviewCsv || "",
         sheetFinalMatchByPositionNeedsReviewCsv: summary.outputs?.sheetFinalMatchByPositionNeedsReviewCsv || "",
-        sheetFinalNoVcfMatchByChrPosCsv: summary.outputs?.sheetFinalNoVcfMatchByChrPosCsv || "",
-      };
-      job.result = { ...(job.result || {}), ...sanitizeVcfCanonMatchResult(summary, upload) };
-      const matchCsvPath = path.resolve(job.artifacts.sheetFinalConsolidatedCsv);
+          sheetFinalNoVcfMatchByChrPosCsv: summary.outputs?.sheetFinalNoVcfMatchByChrPosCsv || "",
+        };
+        job.result = { ...(job.result || {}), ...sanitizeVcfCanonMatchResult(summary, upload) };
+        if (isGeneModuleV2 && job.artifacts.normalizedVcfPath) {
+          const temporaryVcfPath = path.resolve(job.artifacts.normalizedVcfPath);
+          const normalizationSummaryPath = path.resolve(job.artifacts.normalizationSummaryJson || "");
+          if (isPathInside(normalizationPaths.root, temporaryVcfPath)) {
+            try {
+              await unlink(temporaryVcfPath);
+              delete job.artifacts.normalizedVcfPath;
+              normalizationSummary.normalizedVcfPath = "";
+              normalizationSummary.temporaryNormalizedVcf = {
+                status: "removed_after_match",
+                removedAt: new Date().toISOString(),
+              };
+              if (isPathInside(normalizationPaths.root, normalizationSummaryPath)) {
+                await writeFile(normalizationSummaryPath, JSON.stringify(normalizationSummary, null, 2), "utf8");
+              }
+            } catch (error) {
+              job.result.vcfNormalization = {
+                ...(job.result.vcfNormalization || {}),
+                temporaryVcfCleanupWarning: error.message || String(error),
+              };
+            }
+          }
+        }
+        const matchCsvPath = path.resolve(job.artifacts.sheetFinalConsolidatedCsv);
       if (!isPathInside(paths.root, matchCsvPath)) {
         throw new Error("Match preparation input is outside the allowed match root.");
       }
@@ -2509,7 +2652,9 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         const preparationPaths = matchPreparationPaths();
         await mkdir(preparationPaths.runs, { recursive: true });
         const preparationRunId = `match-prep-${runId}`;
-        const preparationOutputDir = path.join(preparationPaths.runs, preparationRunId);
+        const preparationOutputDir = isGeneModuleV2
+          ? jobStageDirectory(job.id, "preparation")
+          : path.join(preparationPaths.runs, preparationRunId);
         await mkdir(preparationOutputDir, { recursive: true });
         const preparationPayload = {
           event: "heal.match_preparation.requested",
@@ -2532,7 +2677,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         const aiTriagePathsRoot = aiTriagePaths();
         await mkdir(aiTriagePathsRoot.runs, { recursive: true });
         const aiTriageRunId = `ai-triage-${runId}`;
-        const aiTriageOutputDir = path.join(aiTriagePathsRoot.runs, aiTriageRunId);
+        const aiTriageOutputDir = jobStageDirectory(job.id, "ai-triage");
         await mkdir(aiTriageOutputDir, { recursive: true });
         job.progress = 86;
         job.stage = "triaging";
@@ -2569,7 +2714,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         await mkdir(enrichmentPaths.runs, { recursive: true });
         await mkdir(enrichmentPaths.cache, { recursive: true });
         const enrichmentRunId = `variant-enrichment-${runId}`;
-        const enrichmentOutputDir = path.join(enrichmentPaths.runs, enrichmentRunId);
+        const enrichmentOutputDir = jobStageDirectory(job.id, "enrichment");
         await mkdir(enrichmentOutputDir, { recursive: true });
         const aiTriageCsvPath = path.resolve(job.artifacts.aiTriageCsv || "");
         if (!isPathInside(aiTriagePathsRoot.root, aiTriageCsvPath)) {
@@ -2637,7 +2782,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         const groupedPrepPathsRoot = groupedInterpretationPrepPaths();
         await mkdir(groupedPrepPathsRoot.runs, { recursive: true });
         const groupedPrepRunId = `group-prep-${runId}`;
-        const groupedPrepOutputDir = path.join(groupedPrepPathsRoot.runs, groupedPrepRunId);
+        const groupedPrepOutputDir = jobStageDirectory(job.id, "group-prep");
         await mkdir(groupedPrepOutputDir, { recursive: true });
         const enrichmentPlusPath = path.resolve(job.artifacts.observedVariantEnrichmentPlusCsv || "");
         if (!isPathInside(enrichmentPaths.root, enrichmentPlusPath)) {
@@ -2672,7 +2817,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         const groupedInterpretationPathsRoot = groupedIndividualInterpretationPaths();
         await mkdir(groupedInterpretationPathsRoot.runs, { recursive: true });
         const groupedInterpretationRunId = `grouped-interpretation-${runId}`;
-        const groupedInterpretationOutputDir = path.join(groupedInterpretationPathsRoot.runs, groupedInterpretationRunId);
+        const groupedInterpretationOutputDir = jobStageDirectory(job.id, "grouped-interpretation");
         await mkdir(groupedInterpretationOutputDir, { recursive: true });
         const groupPayloadsJsonlPath = path.resolve(job.artifacts.groupPayloadsJsonl || "");
         if (!isPathInside(groupedPrepPathsRoot.root, groupPayloadsJsonlPath)) {
@@ -2855,7 +3000,9 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
       await mkdir(enrichmentPaths.runs, { recursive: true });
       await mkdir(enrichmentPaths.cache, { recursive: true });
       const enrichmentRunId = `variant-enrichment-retry-${crypto.randomUUID()}`;
-      const enrichmentOutputDir = path.join(enrichmentPaths.runs, enrichmentRunId);
+      const enrichmentOutputDir = isGeneModuleV2
+        ? jobStageDirectory(job.id, "enrichment-retry")
+        : path.join(enrichmentPaths.runs, enrichmentRunId);
       await mkdir(enrichmentOutputDir, { recursive: true });
       const enrichmentPayload = {
         event: "heal.variant_enrichment.retry_requested",
@@ -3608,8 +3755,12 @@ async function downloadRuntimeArtifact(req, res, artifactKey, suffix, pathsForAr
   }
   const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
   const extension = json ? "json" : jsonl ? "jsonl" : "csv";
-  res.setHeader("Content-Type", json ? "application/json; charset=utf-8" : "text/plain; charset=utf-8");
-  res.download(artifactPath, `${baseName}_${suffix}.${extension}`);
+  const gzipEncoded = artifactPath.toLowerCase().endsWith(".gz");
+  res.setHeader(
+    "Content-Type",
+    gzipEncoded ? "application/gzip" : json ? "application/json; charset=utf-8" : "text/plain; charset=utf-8",
+  );
+  res.download(artifactPath, `${baseName}_${suffix}.${extension}${gzipEncoded ? ".gz" : ""}`);
 }
 
 app.get("/api/vcf-canon-matches/:jobId/preparation-audit", async (req, res) => {

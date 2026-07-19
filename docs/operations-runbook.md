@@ -1,5 +1,17 @@
 # HEAL VCF API Operations Runbook
 
+> **Current runtime:** follow [runtime-map.md](runtime-map.md). The detailed commands below document the pre-migration `C:`/`D:` layout and must not be used after the cutover to `F:\Heal by FON`.
+
+## Current Commands
+
+```powershell
+F:\Heal by FON\ops\Test-HealRuntime.ps1 -RequireApi
+F:\Heal by FON\ops\Cleanup-HealData.ps1
+F:\Heal by FON\ops\Deploy-HealApp.ps1
+```
+
+The cleanup command is a dry run unless `-Apply` is explicitly supplied. It never removes canon, references, enrichment cache, archive, or backups.
+
 ## Health Checks
 
 Public API health:

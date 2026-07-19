@@ -5,6 +5,7 @@ Local React prototype for uploading a VCF file, validating it, matching it again
 ## Documentation
 
 - [Technical architecture](docs/technical-architecture.md)
+- [Runtime map](docs/runtime-map.md)
 - [HEAL workflow map](docs/heal-workflows.md)
 - [Operations runbook](docs/operations-runbook.md)
 - [Security notes](docs/security-notes.md)
@@ -32,7 +33,7 @@ http://127.0.0.1:8787
 and writes each upload to an isolated folder under:
 
 ```text
-C:\ServerCIT\services\heal-vcf-integrity\incoming\<uploadId>
+F:\Heal by FON\data\uploads\<uploadId>
 ```
 
 By default the development API keeps up to 12 upload workspaces and removes stale uploads older than 24 hours. Configure this with:
@@ -43,10 +44,10 @@ HEAL_UPLOAD_TTL_HOURS
 HEAL_UPLOAD_CHUNK_SIZE_BYTES
 ```
 
-The API runs:
+The API runs the repository service script:
 
 ```text
-C:\ServerCIT\services\heal-vcf-integrity\validate_vcf_integrity.py
+F:\Heal by FON\app\services\heal-vcf-integrity\validate_vcf_integrity.py
 ```
 
 ## Analysis Modes
@@ -121,7 +122,7 @@ After match preparation, the backend invokes:
 HEAL_N8N_VARIANT_ENRICHMENT_WEBHOOK_URL
 ```
 
-That stage enriches only observed genotype rows with public Ensembl, ClinVar, and MyVariant.info data. It uses a schema-versioned local cache under `C:\ServerCIT\services\heal-variant-enrichment\cache` so repeated audits do not re-query the same rsIDs unless the enrichment schema changes.
+That stage enriches only observed genotype rows with public Ensembl, ClinVar, and MyVariant.info data. Its schema-versioned cache is under `F:\Heal by FON\data\enrichment-cache`, so repeated audits do not re-query the same rsIDs unless the enrichment schema changes.
 
 The original Colab does not generate a final `.docx` or PDF report. Its deterministic final coded output is the Colab-style enriched observed-variant CSV plus deliverable-style CSV tables. The app now generates that Colab-style CSV as `heal_fon_interpretation_enriched_observed69.csv`; the next planned stage is a controlled final interpretation/report workflow; see `docs/final-interpretation-next-step.md`.
 

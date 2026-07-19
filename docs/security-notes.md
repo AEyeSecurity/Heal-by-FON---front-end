@@ -1,5 +1,7 @@
 # Security Notes
 
+> **Runtime notice:** after cutover, HEAL data belongs under `F:\Heal by FON\data`; current access and retention operations are documented in [runtime-map.md](runtime-map.md). Historical `C:` references below are retained only as implementation history.
+
 ## Public vs Private Values
 
 Public frontend values:

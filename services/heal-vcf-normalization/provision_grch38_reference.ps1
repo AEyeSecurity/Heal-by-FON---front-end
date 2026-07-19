@@ -1,6 +1,10 @@
 [CmdletBinding()]
 param(
-    [string]$ReferenceRoot = "D:\ServerCIT\services\heal-reference-data",
+    [string]$ReferenceRoot = $(
+        if ($env:HEAL_REFERENCE_DATA_ROOT) { $env:HEAL_REFERENCE_DATA_ROOT }
+        elseif ($env:HEAL_DATA_ROOT) { Join-Path $env:HEAL_DATA_ROOT "references" }
+        else { Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "data\references" }
+    ),
     [string]$Image = "heal-vcf-normalizer:1.0.0"
 )
 

@@ -16,14 +16,17 @@ import gzip
 import hashlib
 import json
 import re
+import shlex
 import subprocess
 import sys
+import shutil
 from collections import Counter
 from pathlib import Path
 
 
 DEFAULT_IMAGE = "heal-vcf-normalizer:1.0.0"
 SUPPORTED_CHROMOSOMES = {f"chr{index}" for index in range(1, 23)} | {"chrX", "chrY", "chrM"}
+MINIMUM_WORKSPACE_BYTES = 20 * 1024 * 1024 * 1024
 
 
 def utc_now() -> str:
@@ -42,7 +45,8 @@ def open_text(path: Path):
 
 def write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
+    opener = gzip.open if path.name.lower().endswith(".gz") else Path.open
+    with opener(path, "wt" if opener is gzip.open else "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
@@ -158,7 +162,48 @@ def detect_assembly_from_header(path: Path) -> dict:
     }
 
 
-def source_alleles(path: Path) -> tuple[dict[tuple[str, str, str, str, str], dict], list[dict], Counter]:
+def load_target_regions(index_path: Path, flank_bases: int = 500) -> dict[str, list[tuple[int, int]]]:
+    """Load and merge canon envelopes for an early, non-clinical VCF prefilter."""
+    payload = json.loads(index_path.read_text(encoding="utf-8"))
+    regions: dict[str, list[tuple[int, int]]] = {}
+    for chrom, envelopes in (payload.get("chromosomes") or {}).items():
+        normalized = normalize_chromosome(chrom)
+        if normalized not in SUPPORTED_CHROMOSOMES:
+            continue
+        spans = []
+        for envelope in envelopes or []:
+            try:
+                start = max(1, int(envelope.get("start")) - flank_bases)
+                end = int(envelope.get("end")) + flank_bases
+            except (TypeError, ValueError):
+                continue
+            if end >= start:
+                spans.append((start, end))
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(spans):
+            if merged and start <= merged[-1][1] + 1:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        if merged:
+            regions[normalized] = merged
+    if not regions:
+        raise ValueError("Canon gene envelope index has no usable GRCh target regions.")
+    return regions
+
+
+def is_inside_target_regions(chrom: str, pos: str, regions: dict[str, list[tuple[int, int]]]) -> bool:
+    try:
+        position = int(pos)
+    except ValueError:
+        return False
+    return any(start <= position <= end for start, end in regions.get(normalize_chromosome(chrom), []))
+
+
+def source_alleles(
+    path: Path,
+    target_regions: dict[str, list[tuple[int, int]]] | None = None,
+) -> tuple[dict[tuple[str, str, str, str, str], dict], list[dict], Counter]:
     """Index observed source ALT alleles to preserve original genotype/audit fields."""
     indexed: dict[tuple[str, str, str, str, str], dict] = {}
     excluded: list[dict] = []
@@ -205,26 +250,55 @@ def source_alleles(path: Path) -> tuple[dict[tuple[str, str, str, str, str], dic
                     excluded.append({**base, "exclusion_reason": "symbolic_or_unsupported_alt"})
                     stats["symbolic_or_unsupported"] += 1
                     continue
+                if target_regions is not None and not is_inside_target_regions(chrom, pos, target_regions):
+                    # This is a deterministic candidate prefilter, not a clinical exclusion.
+                    # The canonical envelope remains the source of truth for final matching.
+                    stats["outside_canon_envelope_prefilter"] += 1
+                    continue
                 key = (base["source_chrom_vcf"], pos, ref, alt, str(allele_index))
                 indexed[key] = base
                 stats["observed_source_alleles"] += 1
     return indexed, excluded, stats
 
 
-def prepare_bcftools_input(input_path: Path, output_dir: Path, stats: Counter) -> Path:
-    """Remove non-reference contigs before faidx so HLA/custom contigs cannot abort GRCh normalization."""
-    filtered_path = output_dir / "normalization_input.vcf"
-    with open_text(input_path) as source, filtered_path.open("w", encoding="utf-8") as target:
-        for line in source:
+def supported_vcf_contigs(path: Path) -> dict[str, str]:
+    """Map canonical chromosome names to raw VCF labels safe for bcftools rename."""
+    contigs: dict[str, str] = {}
+    with open_text(path) as handle:
+        for line in handle:
             if line.startswith("#"):
-                target.write(line)
                 continue
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) < 8 or not is_supported_chromosome(parts[0]):
-                stats["records_excluded_before_bcftools"] += 1
-                continue
-            target.write(line)
-    return filtered_path
+            chrom = line.split("\t", 1)[0].strip()
+            if is_supported_chromosome(chrom) and re.fullmatch(r"[A-Za-z0-9_.-]+", chrom):
+                contigs.setdefault(normalize_chromosome(chrom), chrom)
+    return contigs
+
+
+def write_target_files(
+    output_dir: Path,
+    target_regions: dict[str, list[tuple[int, int]]],
+    raw_contigs: dict[str, str],
+) -> tuple[Path, Path, int]:
+    region_path = output_dir / "normalization_target_regions.tsv"
+    rename_path = output_dir / "normalization_contig_rename.tsv"
+    rows: list[tuple[str, int, int]] = []
+    rename_rows: list[tuple[str, str]] = []
+    for canonical, raw in sorted(raw_contigs.items()):
+        if canonical not in target_regions:
+            continue
+        for start, end in target_regions[canonical]:
+            rows.append((raw, start, end))
+        if raw != canonical:
+            rename_rows.append((raw, canonical))
+    if not rows:
+        raise RuntimeError("No VCF contigs overlap the canon gene-envelope index.")
+    with region_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t")
+        writer.writerows(rows)
+    with rename_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t")
+        writer.writerows(rename_rows)
+    return region_path, rename_path, len(rows)
 
 
 def parse_orig(info: dict[str, str], current: dict) -> tuple[str, str, str, str, str]:
@@ -316,16 +390,52 @@ def normalized_alleles(path: Path, assembly: str, source_index: dict, excluded: 
     return rows
 
 
-def run_bcftools(input_path: Path, output_path: Path, reference_path: Path, image: str) -> dict:
+def run_bcftools(
+    input_path: Path,
+    output_path: Path,
+    reference_path: Path,
+    image: str,
+    target_regions_path: Path,
+    contig_rename_path: Path,
+) -> dict:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    input_name = shlex.quote(input_path.name)
+    output_name = shlex.quote(output_path.name)
+    reference_name = shlex.quote(reference_path.name)
+    region_name = shlex.quote(target_regions_path.name)
+    rename_name = shlex.quote(contig_rename_path.name)
+    # Keep the VCF filter inside the container. Creating an uncompressed host copy
+    # was the main source of avoidable disk pressure for multi-gigabyte VCFs.
+    command_parts = [
+        "set -o pipefail;",
+        f"bcftools view -Ov /input/{input_name}",
+        "|",
+        "awk -F '\\t'",
+        "-v",
+        f"regions=/output/{region_name}",
+        shlex.quote(
+            "BEGIN { while ((getline < regions) > 0) { count[$1]++; start[$1, count[$1]] = $2; stop[$1, count[$1]] = $3 } } /^#/ { print; next } { for (i = 1; i <= count[$1]; i++) if ($2 >= start[$1, i] && $2 <= stop[$1, i]) { print; next } }"
+        ),
+        "|",
+    ]
+    if contig_rename_path.stat().st_size > 0:
+        command_parts.extend(["bcftools annotate --rename-chrs", f"/output/{rename_name}", "-Ou", "|"])
+    command_parts.extend([
+        "bcftools norm -f",
+        f"/reference/{reference_name}",
+        "-m -any --check-ref x --old-rec-tag ORIG -Oz -o",
+        f"/output/{output_name}",
+        "-",
+    ])
+    command_inside_container = " ".join(command_parts)
     command = [
         "docker", "run", "--rm",
         "-v", f"{input_path.parent.resolve()}:/input:ro",
         "-v", f"{output_path.parent.resolve()}:/output",
         "-v", f"{reference_path.parent.resolve()}:/reference:ro",
+        "--entrypoint", "/bin/bash",
         image,
-        "norm", "-f", f"/reference/{reference_path.name}", "-m", "-any", "--check-ref", "x",
-        "--old-rec-tag", "ORIG", "-Oz", "-o", f"/output/{output_path.name}", f"/input/{input_path.name}",
+        "-o", "pipefail", "-c", command_inside_container,
     ]
     completed = subprocess.run(command, text=True, capture_output=True, check=False)
     result = {
@@ -348,6 +458,23 @@ def load_reference_manifest(value: str | None) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def required_workspace_bytes(input_path: Path) -> int:
+    """Reserve enough room for normalization outputs before starting a large VCF."""
+    return max(MINIMUM_WORKSPACE_BYTES, input_path.stat().st_size * 10)
+
+
+def assert_workspace_capacity(output_dir: Path, input_path: Path) -> dict:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    required = required_workspace_bytes(input_path)
+    available = shutil.disk_usage(output_dir).free
+    if available < required:
+        raise RuntimeError(
+            "Insufficient workspace capacity for VCF normalization: "
+            f"required={required} available={available}. Choose a HEAL data root with more free space."
+        )
+    return {"requiredBytes": required, "availableBytes": available}
+
+
 def process(payload: dict) -> dict:
     input_path = Path(payload["inputPath"]).resolve()
     output_dir = Path(payload["outputDir"]).resolve()
@@ -359,13 +486,29 @@ def process(payload: dict) -> dict:
         raise FileNotFoundError(f"VCF input does not exist: {input_path}")
     if not reference_path.is_file() or not Path(f"{reference_path}.fai").is_file():
         raise FileNotFoundError("The managed reference FASTA and .fai index are required before normalization.")
+    target_index_path = Path(payload.get("geneEnvelopeIndexPath") or "").resolve()
+    if not target_index_path.is_file():
+        raise FileNotFoundError("The canon gene envelope index is required before v2 normalization.")
 
     started_at = utc_now()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    source_index, excluded_rows, stats = source_alleles(input_path)
-    normalization_input = prepare_bcftools_input(input_path, output_dir, stats)
+    workspace = assert_workspace_capacity(output_dir, input_path)
+    target_regions = load_target_regions(target_index_path)
+    source_index, excluded_rows, stats = source_alleles(input_path, target_regions)
+    raw_contigs = supported_vcf_contigs(input_path)
+    target_regions_path, contig_rename_path, target_region_count = write_target_files(
+        output_dir,
+        target_regions,
+        raw_contigs,
+    )
     normalized_vcf = output_dir / "normalized.vcf.gz"
-    bcftools = run_bcftools(normalization_input, normalized_vcf, reference_path, clean(payload.get("dockerImage")) or DEFAULT_IMAGE)
+    bcftools = run_bcftools(
+        input_path,
+        normalized_vcf,
+        reference_path,
+        clean(payload.get("dockerImage")) or DEFAULT_IMAGE,
+        target_regions_path,
+        contig_rename_path,
+    )
     normalized_rows = normalized_alleles(normalized_vcf, assembly, source_index, excluded_rows, stats)
 
     fields = [
@@ -375,8 +518,8 @@ def process(payload: dict) -> dict:
         "source_alt_index", "source_gt_raw", "source_allele_dosage", "source_zygosity", "source_filter_vcf", "source_qual_vcf", "source_info_vcf",
     ]
     excluded_fields = [*fields, "exclusion_reason"]
-    normalized_csv = output_dir / "normalized_variants.csv"
-    excluded_csv = output_dir / "normalization_excluded_audit.csv"
+    normalized_csv = output_dir / "normalized_variants.csv.gz"
+    excluded_csv = output_dir / "normalization_excluded_audit.csv.gz"
     write_csv(normalized_csv, normalized_rows, fields)
     write_csv(excluded_csv, excluded_rows, excluded_fields)
 
@@ -392,6 +535,13 @@ def process(payload: dict) -> dict:
         "normalizedVariantsCsv": str(normalized_csv),
         "normalizationExcludedAuditCsv": str(excluded_csv),
         "reference": {"path": str(reference_path), **load_reference_manifest(payload.get("referenceManifestPath"))},
+        "candidatePrefilter": {
+            "geneEnvelopeIndexPath": str(target_index_path),
+            "flankBases": 500,
+            "targetChromosomes": len(target_regions),
+            "targetRegions": target_region_count,
+        },
+        "workspace": workspace,
         "bcftools": bcftools,
         "counts": {**dict(stats), "excluded": len(excluded_rows), "normalizationValidRate": valid_rate},
         "qualityGate": {"minimumNormalizationValidRate": 0.99, "passed": valid_rate >= 0.99},
