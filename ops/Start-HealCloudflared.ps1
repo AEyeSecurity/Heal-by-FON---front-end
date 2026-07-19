@@ -9,6 +9,11 @@ Set-StrictMode -Version Latest
 $healHome = Split-Path -Parent $PSScriptRoot
 $configRoot = Join-Path $healHome "config"
 $logRoot = Join-Path $healHome "logs"
+$logDirectory = Join-Path $logRoot "cloudflared"
+New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
+$logPath = Join-Path $logDirectory ("heal-api-tunnel-" + (Get-Date -Format "yyyyMMdd") + ".log")
+
+try {
 $tokenPath = Join-Path $configRoot "cloudflared-token.txt"
 if (!(Test-Path -LiteralPath $tokenPath)) {
     throw "Cloudflared token file was not found at $tokenPath."
@@ -21,9 +26,6 @@ $cloudflared = if ($env:HEAL_CLOUDFLARED_EXE) {
 } else {
     (Get-Command cloudflared.exe -ErrorAction Stop).Source
 }
-$logDirectory = Join-Path $logRoot "cloudflared"
-New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
-$logPath = Join-Path $logDirectory ("heal-api-tunnel-" + (Get-Date -Format "yyyyMMdd") + ".log")
 
 if ($ValidateOnly) {
     [pscustomobject]@{ healHome = $healHome; executable = $cloudflared; logPath = $logPath } | ConvertTo-Json
@@ -32,3 +34,8 @@ if ($ValidateOnly) {
 
 & $cloudflared --no-autoupdate --metrics "127.0.0.1:20243" tunnel run --token $token *>> $logPath
 exit $LASTEXITCODE
+}
+catch {
+    Add-Content -LiteralPath $logPath -Value ("[" + (Get-Date -Format "o") + "] " + $_.Exception.Message)
+    throw
+}
