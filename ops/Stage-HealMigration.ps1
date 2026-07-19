@@ -76,8 +76,12 @@ $targetOps = Join-Path $TargetHome "ops"
 $targetConfig = Join-Path $TargetHome "config"
 $mappings = @(
     [pscustomobject]@{ source = Join-Path $SourceServicesRoot "heal-vcf-integrity\incoming"; destination = Join-Path $targetData "uploads"; label = "uploads" },
-    [pscustomobject]@{ source = Join-Path $SourceServicesRoot "heal-canon-intake"; destination = Join-Path $targetData "canon"; label = "canon" },
-    [pscustomobject]@{ source = Join-Path $SourceServicesRoot "heal-rsid-resolution"; destination = Join-Path $targetData "legacy-rsid"; label = "legacy_rsid" },
+    [pscustomobject]@{ source = Join-Path $SourceServicesRoot "heal-canon-intake\incoming"; destination = Join-Path $targetData "canon\incoming"; label = "canon_incoming" },
+    [pscustomobject]@{ source = Join-Path $SourceServicesRoot "heal-canon-intake\runs"; destination = Join-Path $targetData "canon\runs"; label = "canon_runs" },
+    [pscustomobject]@{ source = Join-Path $SourceServicesRoot "heal-canon-intake\current"; destination = Join-Path $targetData "canon\current"; label = "canon_current" },
+    [pscustomobject]@{ source = Join-Path $SourceServicesRoot "heal-rsid-resolution\runs"; destination = Join-Path $targetData "legacy-rsid\runs"; label = "legacy_rsid_runs" },
+    [pscustomobject]@{ source = Join-Path $SourceServicesRoot "heal-rsid-resolution\current"; destination = Join-Path $targetData "legacy-rsid\current"; label = "legacy_rsid_current" },
+    [pscustomobject]@{ source = Join-Path $SourceServicesRoot "heal-rsid-resolution\cache"; destination = Join-Path $targetData "legacy-rsid\cache"; label = "legacy_rsid_cache" },
     [pscustomobject]@{ source = Join-Path $SourceServicesRoot "heal-vcf-canon-match\jobs"; destination = Join-Path $targetData "jobs"; label = "job_records" },
     [pscustomobject]@{ source = Join-Path $SourceServicesRoot "heal-vcf-canon-match\runs"; destination = Join-Path $targetData "runs\legacy-match"; label = "legacy_match_artifacts" },
     [pscustomobject]@{ source = Join-Path $SourceServicesRoot "heal-vcf-normalization\runs"; destination = Join-Path $targetData "runs\legacy-normalization"; label = "normalization_artifacts" },
