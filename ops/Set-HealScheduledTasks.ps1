@@ -26,7 +26,7 @@ foreach ($task in $tasks) {
     }
     $scheduledAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$($task.script)`""
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $runtimeIdentity
-    $principal = New-ScheduledTaskPrincipal -UserId $runtimeIdentity -LogonType Interactive -RunLevel Highest
+    $principal = New-ScheduledTaskPrincipal -UserId $runtimeIdentity -LogonType Interactive -RunLevel Limited
     Register-ScheduledTask -TaskName $task.name -Action $scheduledAction -Trigger $trigger -Principal $principal -Description "HEAL by FON isolated runtime task" -Force | Out-Null
     $created.Add($task.name)
 }
