@@ -43,6 +43,7 @@ F:\Heal by FON\data\runs\<job-id>\
 | Retention preview | `F:\Heal by FON\ops\Cleanup-HealData.ps1` | F data only, no deletion |
 | Retention execution | `F:\Heal by FON\ops\Cleanup-HealData.ps1 -Apply` | Expired uploads/runs/jobs only |
 | Task cutover | `F:\Heal by FON\ops\Set-HealScheduledTasks.ps1 -Restart` | Exactly two named HEAL tasks |
+| Disable legacy Startup entries | `F:\Heal by FON\ops\Disable-LegacyHealStartup.ps1` | Exactly two HEAL `.cmd` entries, copied to archive first |
 | Rollback within freeze period | `F:\Heal by FON\ops\Rollback-HealScheduledTasks.ps1 -Restart` | Exactly two named HEAL tasks |
 
 ## Migration State
