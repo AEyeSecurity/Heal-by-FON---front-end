@@ -16,19 +16,12 @@ $created = [System.Collections.Generic.List[string]]::new()
 $updated = [System.Collections.Generic.List[string]]::new()
 
 foreach ($task in $tasks) {
-    $action = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$($task.script)`""
     $existing = Get-ScheduledTask -TaskName $task.name -ErrorAction SilentlyContinue
-    if ($existing) {
-        & schtasks.exe /Change /TN $task.name /TR $action | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Could not update scheduled task: $($task.name)" }
-        $updated.Add($task.name)
-        continue
-    }
     $scheduledAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$($task.script)`""
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $runtimeIdentity
     $principal = New-ScheduledTaskPrincipal -UserId $runtimeIdentity -LogonType Interactive -RunLevel Limited
     Register-ScheduledTask -TaskName $task.name -Action $scheduledAction -Trigger $trigger -Principal $principal -Description "HEAL by FON isolated runtime task" -Force | Out-Null
-    $created.Add($task.name)
+    if ($existing) { $updated.Add($task.name) } else { $created.Add($task.name) }
 }
 
 if ($Restart) {
