@@ -1553,19 +1553,30 @@ async function notifyN8nValidation(job, upload) {
   await postWebhook(N8N_VALIDATION_WEBHOOK_URL, payload, job);
 }
 
-function runCommand(command, args) {
+function runCommand(command, args, { timeoutMs = 10_000 } = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(result);
+    };
+    const timeout = setTimeout(() => {
+      child.kill();
+      finish({ ok: false, timedOut: true, error: `${command} timed out after ${timeoutMs}ms.`, stdout, stderr });
+    }, timeoutMs);
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString("utf8");
     });
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString("utf8");
     });
-    child.on("error", (error) => resolve({ ok: false, error: error.message, stdout, stderr }));
-    child.on("close", (code) => resolve({ ok: code === 0, code, stdout, stderr }));
+    child.on("error", (error) => finish({ ok: false, error: error.message, stdout, stderr }));
+    child.on("close", (code) => finish({ ok: code === 0, code, stdout, stderr }));
   });
 }
 
@@ -1574,7 +1585,7 @@ async function runtimeHealth() {
     statfs(DATA_ROOT).catch(() => null),
     stat(GRCH38_REFERENCE_FASTA).catch(() => null),
     stat(`${GRCH38_REFERENCE_FASTA}.fai`).catch(() => null),
-    runCommand("docker", ["image", "inspect", NORMALIZER_IMAGE]).catch(() => ({ ok: false })),
+    runCommand("docker", ["image", "inspect", NORMALIZER_IMAGE], { timeoutMs: 5_000 }).catch(() => ({ ok: false })),
     loadCurrentCanonManifest().catch(() => null),
   ]);
   const canonSummaryPath = canonManifest ? resolveStoredPath(canonPaths().root, canonManifest.summaryPath) : "";
@@ -1602,7 +1613,7 @@ async function v2NormalizationPreflight(uploadSizeBytes) {
   const requiredBytes = Math.max(20 * 1024 * 1024 * 1024, Number(uploadSizeBytes || 0) * 10);
   const [workspace, docker] = await Promise.all([
     statfs(VCF_NORMALIZATION_ROOT).catch(() => null),
-    runCommand("docker", ["image", "inspect", NORMALIZER_IMAGE]).catch(() => ({ ok: false })),
+    runCommand("docker", ["image", "inspect", NORMALIZER_IMAGE], { timeoutMs: 5_000 }).catch(() => ({ ok: false })),
   ]);
   const availableBytes = workspace ? Number(workspace.bsize) * Number(workspace.bavail) : 0;
   if (!workspace || availableBytes < requiredBytes) {
