@@ -12,8 +12,12 @@ if (!(Test-Path -LiteralPath (Join-Path $dockerfileRoot "Dockerfile"))) {
     throw "HEAL normalizer Dockerfile is missing from $dockerfileRoot."
 }
 
-& docker image inspect $Image 2>$null | Out-Null
-if ($LASTEXITCODE -eq 0) {
+$probe = Start-Process -FilePath "docker.exe" -ArgumentList @("image", "inspect", $Image) -PassThru -NoNewWindow
+if (!$probe.WaitForExit(10000)) {
+    Stop-Process -Id $probe.Id -Force
+    throw "Docker did not respond while checking the HEAL normalizer image. Docker was not restarted."
+}
+if ($probe.ExitCode -eq 0) {
     Write-Output "HEAL normalizer image is available: $Image"
     exit 0
 }

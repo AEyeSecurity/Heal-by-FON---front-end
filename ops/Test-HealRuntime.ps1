@@ -17,8 +17,13 @@ $checks = [ordered]@{
     normalizerImage = $false
     api = $false
 }
-& docker image inspect "heal-vcf-normalizer:1.0.0" 2>$null | Out-Null
-$checks.normalizerImage = $LASTEXITCODE -eq 0
+$dockerProbe = Start-Process -FilePath "docker.exe" -ArgumentList @("image", "inspect", "heal-vcf-normalizer:1.0.0") -PassThru -NoNewWindow
+if ($dockerProbe.WaitForExit(5000)) {
+    $checks.normalizerImage = $dockerProbe.ExitCode -eq 0
+} else {
+    Stop-Process -Id $dockerProbe.Id -Force
+    $checks["dockerError"] = "Docker image probe timed out; Docker was not restarted."
+}
 try {
     $health = Invoke-RestMethod -Uri "http://127.0.0.1:8787/api/health" -TimeoutSec 5
     $checks.api = [bool]$health.ok
