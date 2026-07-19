@@ -24,7 +24,8 @@ function Rebase-Value([object]$Value) {
     if ($Value -is [string]) {
         foreach ($source in $pathMappings.Keys) {
             if ($Value.StartsWith($source, [StringComparison]::OrdinalIgnoreCase)) {
-                return (Join-Path $pathMappings[$source] $Value.Substring($source.Length).TrimStart("\\", "/"))
+                $suffix = $Value.Substring($source.Length).TrimStart([char[]]@([char]'\', [char]'/' ))
+                return (Join-Path $pathMappings[$source] $suffix)
             }
         }
         return $Value
