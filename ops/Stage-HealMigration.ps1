@@ -64,9 +64,31 @@ function Copy-HealFile([string]$Source, [string]$Destination, [string]$Label) {
     if (!$Apply) {
         return [pscustomobject]@{ label = $Label; source = $Source; destination = $Destination; status = "planned" }
     }
+    if (Test-Path -LiteralPath $Destination) {
+        $sourceHash = (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash
+        $destinationHash = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
+        if ($sourceHash -ne $destinationHash) {
+            throw "Refusing to overwrite an existing secret file with different content: $Destination"
+        }
+        return [pscustomobject]@{ label = $Label; source = $Source; destination = $Destination; status = "existing_verified" }
+    }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
     Copy-Item -LiteralPath $Source -Destination $Destination -Force
     return [pscustomobject]@{ label = $Label; source = $Source; destination = $Destination; status = "copied" }
+}
+
+function Protect-HealConfig([string]$ConfigRoot) {
+    $runtimeIdentity = "$env:USERDOMAIN\$env:USERNAME"
+    $principals = @($runtimeIdentity, "*S-1-5-18", "*S-1-5-32-544")
+    & icacls.exe $ConfigRoot /inheritance:r /grant:r "$runtimeIdentity`:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /C | Out-Null
+    if ($LASTEXITCODE -gt 0) { throw "Could not secure HEAL config root $ConfigRoot." }
+    foreach ($file in Get-ChildItem -LiteralPath $ConfigRoot -File -Recurse -Force) {
+        $arguments = @($file.FullName, "/inheritance:r", "/grant:r")
+        $arguments += $principals | ForEach-Object { $_ + ":F" }
+        $arguments += "/C"
+        & icacls.exe @arguments | Out-Null
+        if ($LASTEXITCODE -gt 0) { throw "Could not secure HEAL config file $($file.Name)." }
+    }
 }
 
 Assert-TargetHome $TargetHome
@@ -135,8 +157,7 @@ if ($Apply) {
 
     if (!$CodeOnly) {
         # Only F:\Heal by FON\config receives these ACLs; shared ProgramData remains untouched.
-        & icacls.exe $targetConfig /inheritance:r /grant:r "$env:USERNAME`:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C | Out-Null
-        if ($LASTEXITCODE -gt 0) { throw "Could not restrict ACLs on $targetConfig." }
+        Protect-HealConfig $targetConfig
         & (Join-Path $targetOps "Rebase-HealState.ps1") -HealHome $TargetHome | Out-Null
     }
 
