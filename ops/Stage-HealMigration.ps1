@@ -77,10 +77,11 @@ $results = if ($CodeOnly) {
         Copy-HealTree $mapping.source $mapping.destination $mapping.label
     }
 }
+$results = @($results)
 
 if ($Apply) {
     $opsResult = Copy-HealTree (Join-Path $targetApp "ops") $targetOps "operational_scripts"
-    $results += $opsResult
+    $results = @($results) + @($opsResult)
 
     if (!$CodeOnly) {
         # Only F:\Heal by FON\config receives these ACLs; shared ProgramData remains untouched.
