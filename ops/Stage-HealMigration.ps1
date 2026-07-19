@@ -5,7 +5,9 @@ param(
     [string]$SourceConfigRoot = "C:\ProgramData\HealByFonApi",
     [string]$SourceReferenceRoot = "D:\ServerCIT\services\heal-reference-data",
     [string]$TargetHome = "F:\Heal by FON",
-    [switch]$Apply
+    [switch]$Apply,
+    [switch]$UseLocalGitSource,
+    [switch]$CodeOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,9 +57,12 @@ $mappings = @(
 if ($Apply) {
     New-Item -ItemType Directory -Force -Path $TargetHome | Out-Null
     if (!(Test-Path -LiteralPath $targetApp)) {
-        $repositoryUrl = (& git -C $SourceAppRoot remote get-url origin 2>$null).Trim()
-        if ($LASTEXITCODE -ne 0 -or !$repositoryUrl) { throw "Could not determine the HEAL Git origin from $SourceAppRoot." }
-        & git clone --branch main $repositoryUrl $targetApp
+        $cloneSource = $SourceAppRoot
+        if (!$UseLocalGitSource) {
+            $cloneSource = (& git -C $SourceAppRoot remote get-url origin 2>$null).Trim()
+            if ($LASTEXITCODE -ne 0 -or !$cloneSource) { throw "Could not determine the HEAL Git origin from $SourceAppRoot." }
+        }
+        & git clone --branch main $cloneSource $targetApp
         if ($LASTEXITCODE -ne 0) { throw "Could not clone HEAL app into $targetApp." }
     }
     elseif (!(Test-Path -LiteralPath (Join-Path $targetApp ".git"))) {
@@ -65,17 +70,23 @@ if ($Apply) {
     }
 }
 
-$results = foreach ($mapping in $mappings) {
-    Copy-HealTree $mapping.source $mapping.destination $mapping.label
+$results = if ($CodeOnly) {
+    @([pscustomobject]@{ label = "data_copy"; source = "not_requested"; destination = $targetData; status = "skipped_code_only" })
+} else {
+    foreach ($mapping in $mappings) {
+        Copy-HealTree $mapping.source $mapping.destination $mapping.label
+    }
 }
 
 if ($Apply) {
     $opsResult = Copy-HealTree (Join-Path $targetApp "ops") $targetOps "operational_scripts"
     $results += $opsResult
 
-    # Only F:\Heal by FON\config receives these ACLs; shared ProgramData remains untouched.
-    & icacls.exe $targetConfig /inheritance:r /grant:r "$env:USERNAME`:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C | Out-Null
-    if ($LASTEXITCODE -gt 0) { throw "Could not restrict ACLs on $targetConfig." }
+    if (!$CodeOnly) {
+        # Only F:\Heal by FON\config receives these ACLs; shared ProgramData remains untouched.
+        & icacls.exe $targetConfig /inheritance:r /grant:r "$env:USERNAME`:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C | Out-Null
+        if ($LASTEXITCODE -gt 0) { throw "Could not restrict ACLs on $targetConfig." }
+    }
 
     $archiveRoot = Join-Path $TargetHome "archive"
     New-Item -ItemType Directory -Force -Path $archiveRoot | Out-Null
@@ -87,7 +98,7 @@ if ($Apply) {
         sourceRoots = @($SourceAppRoot, $SourceServicesRoot, $SourceConfigRoot, $SourceReferenceRoot)
         targetHome = $TargetHome
         copyResults = @($results)
-        note = "No source path was deleted. Cutover remains a separate action limited to the two HEAL scheduled tasks."
+        note = if ($CodeOnly) { "Only the committed app checkout and ops scripts were staged. No data or configuration was copied." } else { "No source path was deleted. Cutover remains a separate action limited to the two HEAL scheduled tasks." }
     }
     $ledger | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $archiveRoot "migration-ledger.json") -Encoding utf8
 }
