@@ -32,7 +32,8 @@ if ($ValidateOnly) {
     exit 0
 }
 
-& $cloudflared --no-autoupdate --metrics "127.0.0.1:20243" tunnel run --token $token *>> $logPath
+$env:TUNNEL_TOKEN = $token
+& $cloudflared tunnel --no-autoupdate --metrics "127.0.0.1:20243" --loglevel info --logfile $logPath run
 exit $LASTEXITCODE
 }
 catch {
