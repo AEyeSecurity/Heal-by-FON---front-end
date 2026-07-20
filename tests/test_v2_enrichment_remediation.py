@@ -124,6 +124,19 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["approved_symbol"], "MTHFD1")
 
+    def test_singleton_merged_feature_object_is_accepted_by_local_classifier(self):
+        local = matcher.classify_local_region(
+            {
+                "transcript_body_union": {"start": 1000, "end": 1100, "strand": 1},
+                "mane_cds_union": [{"start": 1040, "end": 1060}],
+            },
+            1050,
+            1050,
+        )
+
+        self.assertEqual(local["local_region_class"], "mane_cds_overlap")
+        self.assertEqual(local["overlap_feature_types"], "mane_cds_union")
+
     def test_canon_export_preserves_singleton_chromosome_as_list(self):
         with tempfile.TemporaryDirectory() as temporary:
             index_path = Path(temporary) / "envelopes.json"

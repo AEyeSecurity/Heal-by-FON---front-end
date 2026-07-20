@@ -194,6 +194,15 @@ def intervals_overlap(start_a: int, end_a: int, start_b: int, end_b: int) -> boo
     return min(end_a, end_b) >= max(start_a, start_b)
 
 
+def feature_interval_list(value) -> list[dict]:
+    """Accept both current list indexes and older singleton feature objects."""
+    if isinstance(value, dict):
+        value = [value] if "start" in value and "end" in value else []
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict) and "start" in item and "end" in item]
+
+
 def scan_vcf(vcf_path: Path, envelope_index: dict) -> tuple[list[dict], dict, list[str]]:
     candidates = []
     sample_name = ""
@@ -286,7 +295,11 @@ def scan_vcf(vcf_path: Path, envelope_index: dict) -> tuple[list[dict], dict, li
 def classify_local_region(merged_features: dict[str, list[dict]], variant_start: int, variant_end: int) -> dict:
     overlaps = {}
     for feature_type, intervals in merged_features.items():
-        hits = [interval for interval in intervals if intervals_overlap(variant_start, variant_end, int(interval["start"]), int(interval["end"]))]
+        hits = [
+            interval
+            for interval in feature_interval_list(intervals)
+            if intervals_overlap(variant_start, variant_end, int(interval["start"]), int(interval["end"]))
+        ]
         if hits:
             overlaps[feature_type] = hits
 
