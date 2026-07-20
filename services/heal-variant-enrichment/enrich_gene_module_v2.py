@@ -14,6 +14,7 @@ import csv
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import time
@@ -57,7 +58,25 @@ def write_csv(path: Path, rows: list[dict], fields: list[str]) -> None:
 
 
 def write_json(path: Path, payload: dict) -> None:
-    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+def write_progress(output_dir: Path, *, substage: str, processed: int = 0, total: int = 0, unit: str = "variants", message: str = "") -> None:
+    write_json(
+        output_dir / "enrichment_progress.json",
+        {
+            "stage": "enriching",
+            "substage": substage,
+            "processed": max(0, int(processed)),
+            "total": max(0, int(total)),
+            "unit": unit,
+            "message": message,
+            "updatedAt": utc_now(),
+        },
+    )
 
 
 def normalize_chromosome(value: object) -> str:
@@ -512,6 +531,7 @@ def main_process(payload: dict) -> dict:
     rows = [row for row in read_csv(input_path) if clean(row.get("variant_key")) and clean(row.get("has_genotype")).lower() in {"true", "1", "yes"}]
     if not rows:
         raise ValueError("AI triage input contains no observed v2 physical variants.")
+    write_progress(output_dir, substage="deduplicating_physical_variants", total=len(rows), unit="module rows", message="Building unique physical variant set")
 
     variants: dict[str, dict] = {}
     module_counts: dict[str, int] = {}
@@ -525,6 +545,7 @@ def main_process(payload: dict) -> dict:
             }
         module_counts[variant_key] = module_counts.get(variant_key, 0) + 1
     physical_variants = list(variants.values())
+    write_progress(output_dir, substage="vep", processed=0, total=len(physical_variants), unit="physical variants", message="Preparing coordinate-based VEP enrichment")
 
     provenance = {"retrievedAt": utc_now(), "pipelineVersion": PIPELINE_VERSION, "assembly": assembly}
     vep_raw: dict[str, dict] = {}
@@ -537,6 +558,14 @@ def main_process(payload: dict) -> dict:
         vep_cache_hits += cache_hits
         vep_requests += requests
         warnings.extend(batch_warnings)
+        write_progress(
+            output_dir,
+            substage="vep",
+            processed=min(offset + VEP_BATCH_SIZE, len(physical_variants)),
+            total=len(physical_variants),
+            unit="physical variants",
+            message="Enriching normalized variants with Ensembl VEP",
+        )
 
     enrichments_by_variant: dict[str, dict] = {}
     variants_for_secondary: list[dict] = []
@@ -558,6 +587,8 @@ def main_process(payload: dict) -> dict:
         if rsid:
             variants_for_secondary.append(variant)
 
+    secondary_completed = len(physical_variants) - len(variants_for_secondary)
+    write_progress(output_dir, substage="secondary_sources", processed=secondary_completed, total=len(physical_variants), unit="physical variants", message="Resolving exact rsIDs and querying secondary sources")
     # VEP is queried once per physical variant; target-gene transcript selection happens when expanding module rows.
     secondary_workers = max(1, min(int(payload.get("secondaryWorkers") or DEFAULT_SECONDARY_WORKERS), 8))
     with ThreadPoolExecutor(max_workers=secondary_workers) as executor:
@@ -572,6 +603,15 @@ def main_process(payload: dict) -> dict:
             enrichment.update({key: value for key, value in secondary.items() if key not in {"errors", "source_status"}})
             enrichment["errors"].update(secondary.get("errors") or {})
             enrichment["source_status"].update(secondary.get("source_status") or {})
+            secondary_completed += 1
+            write_progress(
+                output_dir,
+                substage="secondary_sources",
+                processed=secondary_completed,
+                total=len(physical_variants),
+                unit="physical variants",
+                message="Querying ClinVar, frequency, GWAS and PGx sources",
+            )
 
     output_rows: list[dict] = []
     evidence_rows: list[dict] = []
@@ -643,6 +683,7 @@ def main_process(payload: dict) -> dict:
         "metadata": {"qualityGate": quality, "downstreamSupported": False},
     }
     write_json(output_dir / "observed_variant_enrichment_summary.json", summary)
+    write_progress(output_dir, substage="complete", processed=len(physical_variants), total=len(physical_variants), unit="physical variants", message="External enrichment completed")
     print(json.dumps(summary, ensure_ascii=True))
     return summary
 

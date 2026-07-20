@@ -8,6 +8,7 @@ import base64
 import csv
 import datetime as dt
 import json
+import os
 from collections import Counter
 from pathlib import Path
 
@@ -27,6 +28,27 @@ def write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def write_progress(output_dir: Path, *, substage: str, processed: int = 0, total: int = 0, unit: str = "rows", message: str = "") -> None:
+    path = output_dir / "preparation_progress.json"
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(
+        json.dumps(
+            {
+                "stage": "preparation",
+                "substage": substage,
+                "processed": max(0, int(processed)),
+                "total": max(0, int(total)),
+                "unit": unit,
+                "message": message,
+                "updatedAt": utc_now(),
+            },
+            ensure_ascii=True,
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def is_missing(value) -> bool:
@@ -259,8 +281,10 @@ def process(input_path: Path, output_dir: Path) -> dict:
     source_rows = read_csv(input_path)
     if not source_rows:
         raise ValueError("sheet_final_consolidated.csv is empty.")
+    write_progress(output_dir, substage="reading_input", total=len(source_rows), unit="rows", message="Reading match rows for audit preparation")
 
     minimal_rows, audit_rows, schema_version = build_rows(source_rows)
+    write_progress(output_dir, substage="building_outputs", processed=len(source_rows), total=len(source_rows), unit="rows", message="Building preparation audit and minimal outputs")
     minimal_path = output_dir / "heal_fon_deliverable_presentation_min.csv"
     audit_path = output_dir / "heal_fon_deliverable_presentation_audit.csv"
 
@@ -359,6 +383,7 @@ def process(input_path: Path, output_dir: Path) -> dict:
         json.dumps(summary, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    write_progress(output_dir, substage="complete", processed=len(source_rows), total=len(source_rows), unit="rows", message="Preparation completed")
     print(json.dumps(summary, ensure_ascii=False))
     return summary
 

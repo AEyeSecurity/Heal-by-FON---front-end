@@ -15,6 +15,7 @@ import datetime as dt
 import gzip
 import hashlib
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -54,7 +55,24 @@ def write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
 
 def write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+def write_progress(output_dir: Path, *, stage: str, substage: str, processed: int = 0, total: int = 0, unit: str = "items", message: str = "") -> None:
+    write_json(
+        output_dir / "normalization_progress.json",
+        {
+            "stage": stage,
+            "substage": substage,
+            "processed": max(0, int(processed)),
+            "total": max(0, int(total)),
+            "unit": unit,
+            "message": message,
+            "updatedAt": utc_now(),
+        },
+    )
 
 
 def normalize_chromosome(value: object) -> str:
@@ -329,7 +347,7 @@ def parse_orig(info: dict[str, str], current: dict) -> tuple[str, str, str, str,
     )
 
 
-def normalized_alleles(path: Path, assembly: str, source_index: dict, excluded: list[dict], stats: Counter) -> list[dict]:
+def normalized_alleles(path: Path, assembly: str, source_index: dict, excluded: list[dict], stats: Counter, target_regions: dict[str, list[tuple[int, int]]], output_dir: Path) -> list[dict]:
     rows: list[dict] = []
     seen: set[str] = set()
     with open_text(path) as handle:
@@ -348,6 +366,28 @@ def normalized_alleles(path: Path, assembly: str, source_index: dict, excluded: 
                 })
                 stats["unsupported_normalized"] += 1
                 continue
+            try:
+                normalized_position = int(pos)
+            except (TypeError, ValueError):
+                excluded.append({
+                    "source_chrom_vcf": normalize_chromosome(chrom),
+                    "source_pos_vcf": pos,
+                    "source_ref_vcf": ref,
+                    "source_alt_vcf": alt,
+                    "exclusion_reason": "invalid_normalized_coordinate",
+                })
+                stats["invalid_normalized_coordinate"] += 1
+                continue
+            if normalized_position < 1 or not clean(ref) or not clean(alt):
+                excluded.append({
+                    "source_chrom_vcf": normalize_chromosome(chrom),
+                    "source_pos_vcf": pos,
+                    "source_ref_vcf": ref,
+                    "source_alt_vcf": alt,
+                    "exclusion_reason": "invalid_normalized_coordinate",
+                })
+                stats["invalid_normalized_coordinate"] += 1
+                continue
             info = parse_info(info_value)
             gt = extract_gt(parts[8] if len(parts) > 8 else "", parts[9] if len(parts) > 9 else "")
             dosage = dosage_for_allele(gt, 1)
@@ -357,6 +397,18 @@ def normalized_alleles(path: Path, assembly: str, source_index: dict, excluded: 
             current = {"chrom_vcf": normalize_chromosome(chrom), "pos_vcf": pos, "ref_vcf": ref, "alt_vcf": alt}
             source_chrom, source_pos, source_ref, source_alt, source_index_value = parse_orig(info, current)
             source = source_index.get((source_chrom, source_pos, source_ref, source_alt, source_index_value))
+            current_in_target = is_inside_target_regions(current["chrom_vcf"], pos, target_regions)
+            source_in_target = is_inside_target_regions(source_chrom, source_pos, target_regions)
+            if not current_in_target and not source_in_target:
+                excluded.append({
+                    "source_chrom_vcf": source_chrom,
+                    "source_pos_vcf": source_pos,
+                    "source_ref_vcf": source_ref,
+                    "source_alt_vcf": source_alt,
+                    "exclusion_reason": "normalized_outside_target_regions",
+                })
+                stats["normalized_outside_target"] += 1
+                continue
             if source is None:
                 # A record without ORIG was already biallelic and is valid on its own.
                 source = {
@@ -369,6 +421,9 @@ def normalized_alleles(path: Path, assembly: str, source_index: dict, excluded: 
                     "source_filter_vcf": filter_value, "source_qual_vcf": qual,
                     "source_info_vcf": info_value,
                 }
+                stats["normalized_fallback"] += 1
+            else:
+                stats["normalized_source_matched"] += 1
             key = stable_variant_key(assembly, current["chrom_vcf"], pos, ref, alt)
             if key in seen:
                 # VCF duplicates are kept in the normalized VCF, but queried only once downstream.
@@ -381,7 +436,7 @@ def normalized_alleles(path: Path, assembly: str, source_index: dict, excluded: 
                 "chrom_vcf": current["chrom_vcf"],
                 "pos_vcf": pos,
                 "variant_start": pos,
-                "variant_end": str(int(pos) + max(len(ref), 1) - 1),
+                "variant_end": str(normalized_position + max(len(ref), 1) - 1),
                 "id_vcf": record_id,
                 "ref_vcf": ref,
                 "alt_vcf": alt,
@@ -392,9 +447,29 @@ def normalized_alleles(path: Path, assembly: str, source_index: dict, excluded: 
                 "qual_vcf": qual,
                 "filter_vcf": filter_value,
                 "quality_flag": "pass" if filter_value in {"", ".", "PASS"} else "filtered",
+                "target_membership_basis": "source" if source_in_target and not current_in_target else "current" if current_in_target and not source_in_target else "source_and_current",
                 **source,
             })
+            if len(rows) % 10000 == 0:
+                write_progress(
+                    output_dir,
+                    stage="normalization",
+                    substage="reading_normalized_vcf",
+                    processed=len(rows),
+                    total=int(stats.get("observed_source_alleles", 0)),
+                    unit="physical variants",
+                    message="Reading normalized target alleles",
+                )
     stats["normalized_physical_variants"] = len(rows)
+    write_progress(
+        output_dir,
+        stage="normalization",
+        substage="reading_normalized_vcf",
+        processed=len(rows),
+        total=int(stats.get("observed_source_alleles", 0)),
+        unit="physical variants",
+        message="Finished reading normalized target alleles",
+    )
     return rows
 
 
@@ -422,7 +497,7 @@ def run_bcftools(
         "-v",
         f"regions=/output/{region_name}",
         shlex.quote(
-            "BEGIN { while ((getline < regions) > 0) { count[$1]++; start[$1, count[$1]] = $2; stop[$1, count[$1]] = $3 } } /^#/ { print; next } { for (i = 1; i <= count[$1]; i++) if ($2 >= start[$1, i] && $2 <= stop[$1, i]) { print; next } }"
+            "BEGIN { while ((getline < regions) > 0) { count[$1]++; start[$1, count[$1]] = $2; stop[$1, count[$1]] = $3 } } /^#/ { print; next } { for (i = 1; i <= count[$1]; i++) if ($2 >= start[$1, i] && $2 <= stop[$1, i]) { print; next } next }"
         ),
         "|",
     ]
@@ -499,9 +574,19 @@ def process(payload: dict) -> dict:
         raise FileNotFoundError("The canon gene envelope index is required before v2 normalization.")
 
     started_at = utc_now()
+    write_progress(output_dir, stage="normalization", substage="validating_input", message="Validating VCF, assembly and target regions")
     workspace = assert_workspace_capacity(output_dir, input_path)
     target_regions = load_target_regions(target_index_path)
     source_index, excluded_rows, stats = source_alleles(input_path, target_regions)
+    write_progress(
+        output_dir,
+        stage="normalization",
+        substage="target_prefilter",
+        processed=int(stats.get("observed_source_alleles", 0)),
+        total=int(stats.get("input_records", 0)),
+        unit="source alleles",
+        message="Indexed observed alleles inside canon envelopes",
+    )
     raw_contigs = supported_vcf_contigs(input_path)
     target_regions_path, contig_rename_path, target_region_count = write_target_files(
         output_dir,
@@ -517,11 +602,12 @@ def process(payload: dict) -> dict:
         target_regions_path,
         contig_rename_path,
     )
-    normalized_rows = normalized_alleles(normalized_vcf, assembly, source_index, excluded_rows, stats)
+    write_progress(output_dir, stage="normalization", substage="bcftools_normalization", processed=0, total=1, unit="command", message="Left-aligning and splitting alleles with bcftools")
+    normalized_rows = normalized_alleles(normalized_vcf, assembly, source_index, excluded_rows, stats, target_regions, output_dir)
 
     fields = [
         "variant_key", "assembly", "chrom_vcf", "pos_vcf", "variant_start", "variant_end", "id_vcf", "ref_vcf", "alt_vcf",
-        "allele_index", "allele_dosage", "gt_raw", "zygosity", "qual_vcf", "filter_vcf", "quality_flag",
+        "allele_index", "allele_dosage", "gt_raw", "zygosity", "qual_vcf", "filter_vcf", "quality_flag", "target_membership_basis",
         "source_chrom_vcf", "source_pos_vcf", "source_id_vcf", "source_ref_vcf", "source_alt_vcf", "source_alt_allele",
         "source_alt_index", "source_gt_raw", "source_allele_dosage", "source_zygosity", "source_filter_vcf", "source_qual_vcf", "source_info_vcf",
     ]
@@ -532,7 +618,8 @@ def process(payload: dict) -> dict:
     write_csv(excluded_csv, excluded_rows, excluded_fields)
 
     expected = int(stats.get("observed_source_alleles", 0))
-    valid_rate = (int(stats.get("normalized_observed_alleles", 0)) / expected) if expected else 0.0
+    matched = int(stats.get("normalized_source_matched", 0))
+    valid_rate = min(1.0, matched / expected) if expected else 0.0
     summary = {
         "status": "valid" if expected else "invalid",
         "startedAt": started_at,
@@ -552,10 +639,14 @@ def process(payload: dict) -> dict:
         "workspace": workspace,
         "bcftools": bcftools,
         "counts": {**dict(stats), "excluded": len(excluded_rows), "normalizationValidRate": valid_rate},
-        "qualityGate": {"minimumNormalizationValidRate": 0.99, "passed": valid_rate >= 0.99},
+        "qualityGate": {
+            "minimumNormalizationValidRate": 0.99,
+            "passed": valid_rate >= 0.99 and int(stats.get("normalized_outside_target", 0)) == 0,
+        },
     }
     summary_path = output_dir / "normalization_summary.json"
     write_json(summary_path, summary)
+    write_progress(output_dir, stage="normalization", substage="complete", processed=len(normalized_rows), total=len(normalized_rows), unit="physical variants", message="Normalization completed")
     summary["normalizationSummaryJson"] = str(summary_path)
     print(json.dumps(summary, ensure_ascii=True))
     return summary

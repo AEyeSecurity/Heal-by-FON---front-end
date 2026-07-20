@@ -10,6 +10,7 @@ import datetime as dt
 import gzip
 import hashlib
 import json
+import os
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -35,6 +36,28 @@ def write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def write_progress(output_dir: Path, *, stage: str, substage: str, processed: int = 0, total: int = 0, unit: str = "items", message: str = "") -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "match_progress.json"
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(
+        json.dumps(
+            {
+                "stage": stage,
+                "substage": substage,
+                "processed": max(0, int(processed)),
+                "total": max(0, int(total)),
+                "unit": unit,
+                "message": message,
+                "updatedAt": utc_now(),
+            },
+            ensure_ascii=True,
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def clean_str(value) -> str:
@@ -203,7 +226,7 @@ def feature_interval_list(value) -> list[dict]:
     return [item for item in value if isinstance(item, dict) and "start" in item and "end" in item]
 
 
-def scan_vcf(vcf_path: Path, envelope_index: dict) -> tuple[list[dict], dict, list[str]]:
+def scan_vcf(vcf_path: Path, envelope_index: dict, output_dir: Path | None = None) -> tuple[list[dict], dict, list[str]]:
     candidates = []
     sample_name = ""
     scanned_rows = 0
@@ -225,6 +248,8 @@ def scan_vcf(vcf_path: Path, envelope_index: dict) -> tuple[list[dict], dict, li
             if not line or line.startswith("#"):
                 continue
             scanned_rows += 1
+            if output_dir and scanned_rows % 100000 == 0:
+                write_progress(output_dir, stage="matching", substage="scanning_vcf", processed=scanned_rows, total=0, unit="VCF records", message="Scanning VCF records against gene envelopes")
             parts = line.rstrip("\n").split("\t")
             if len(parts) < 8:
                 continue
@@ -400,7 +425,17 @@ def process(canon_clean_path: Path, gene_master_path: Path, envelope_index_path:
     modules_by_gene_id, gene_master_by_id = build_gene_indexes(clean_rows, gene_master_rows)
     normalized_sources = normalization_source_index(normalized_variants_csv)
 
-    vcf_candidates, scan_meta, warnings = scan_vcf(vcf_path, envelope_index)
+    write_progress(output_dir, stage="matching", substage="scanning_vcf", message="Scanning VCF records against gene envelopes")
+    vcf_candidates, scan_meta, warnings = scan_vcf(vcf_path, envelope_index, output_dir)
+    write_progress(
+        output_dir,
+        stage="matching",
+        substage="classifying_features",
+        processed=0,
+        total=len(vcf_candidates),
+        unit="variant-gene candidates",
+        message=f"VCF scan completed: {scan_meta.get('scanned_variant_rows', 0)} records; classifying target overlaps",
+    )
     for candidate in vcf_candidates:
         source = normalized_sources.get(clean_str(candidate.get("variant_key")))
         if source:
@@ -432,6 +467,8 @@ def process(canon_clean_path: Path, gene_master_path: Path, envelope_index_path:
     gene_metadata = merged_index.get("gene_metadata") or {}
 
     for candidate_index, candidate in enumerate(vcf_candidates, start=1):
+        if candidate_index % 10000 == 0:
+            write_progress(output_dir, stage="matching", substage="classifying_features", processed=candidate_index, total=len(vcf_candidates), unit="variant-gene candidates", message="Classifying local feature overlaps")
         gene_id = candidate["gene_id"]
         merged_features = grouped_features.get(gene_id) or {}
         local = classify_local_region(merged_features, int(candidate["variant_start"]), int(candidate["variant_end"]))
@@ -678,6 +715,7 @@ def process(canon_clean_path: Path, gene_master_path: Path, envelope_index_path:
         "timestamps": {"startedAt": started_at, "completedAt": utc_now()},
     }
     (output_dir / "vcf_canon_match_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_progress(output_dir, stage="matching", substage="complete", processed=len(consolidated_rows), total=len(consolidated_rows), unit="variant-gene-module rows", message="VCF-canon match completed")
     print(json.dumps(summary, ensure_ascii=False))
     return summary
 

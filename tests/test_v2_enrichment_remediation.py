@@ -175,6 +175,54 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
         self.assertIn("1\t100\t200", regions)
         self.assertIn("1\tchr1", renames)
 
+    def test_normalized_reader_rejects_rows_outside_target_and_writes_atomic_progress(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            normalized_path = root / "normalized.vcf"
+            normalized_path.write_text(
+                "##fileformat=VCFv4.2\n"
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+                "chr1\t1050\t.\tA\tG\t.\tPASS\tORIG=chr1|1050|A|G|1\tGT\t0/1\n"
+                "chr1\t5000\t.\tA\tG\t.\tPASS\t.\tGT\t0/1\n",
+                encoding="utf-8",
+            )
+            source = {
+                ("chr1", "1050", "A", "G", "1"): {
+                    "source_chrom_vcf": "chr1",
+                    "source_pos_vcf": "1050",
+                    "source_id_vcf": ".",
+                    "source_ref_vcf": "A",
+                    "source_alt_vcf": "G",
+                    "source_alt_allele": "G",
+                    "source_alt_index": "1",
+                    "source_gt_raw": "0/1",
+                    "source_allele_dosage": "1",
+                    "source_zygosity": "heterozygous",
+                    "source_filter_vcf": "PASS",
+                    "source_qual_vcf": ".",
+                    "source_info_vcf": ".",
+                }
+            }
+            excluded = []
+            stats = normalizer.Counter()
+            rows = normalizer.normalized_alleles(
+                normalized_path,
+                "GRCh38",
+                source,
+                excluded,
+                stats,
+                {"chr1": [(1000, 1100)]},
+                root,
+            )
+            progress = json.loads((root / "normalization_progress.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["target_membership_basis"], "source_and_current")
+        self.assertEqual(stats["normalized_source_matched"], 1)
+        self.assertEqual(stats["normalized_outside_target"], 1)
+        self.assertEqual(excluded[-1]["exclusion_reason"], "normalized_outside_target_regions")
+        self.assertEqual(progress["substage"], "reading_normalized_vcf")
+
     def test_resolves_only_exact_vep_colocated_allele_rsid(self):
         variant = {"id_vcf": "rs999", "ref_vcf": "A", "alt_vcf": "G"}
         item = {

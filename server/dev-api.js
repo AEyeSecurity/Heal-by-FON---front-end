@@ -1,6 +1,6 @@
 import express from "express";
 import { createWriteStream } from "node:fs";
-import { mkdir, open, readFile, readdir, rm, stat, statfs, unlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, rm, stat, statfs, unlink, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
@@ -826,7 +826,10 @@ function runCanonProcessor(inputPath, outputDir, sourceFileName) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      if (progressTimer) clearInterval(progressTimer);
+      reject(error);
+    });
     child.on("close", (code) => {
       const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
       const lastLine = lines[lines.length - 1] || "{}";
@@ -921,7 +924,37 @@ async function postWorkflowForSummary(url, payload, label) {
   return body.summary || body.result || body;
 }
 
-function runBase64JsonScript(scriptPath, payload) {
+async function updateJobProgressFromFile(job, progressPath, fallbackStage, { final = false } = {}) {
+  if (!job || !progressPath) return;
+  const raw = await readFile(progressPath, "utf8").catch(() => null);
+  if (!raw) return;
+  let progress;
+  try {
+    progress = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  const processed = Number(progress.processed || 0);
+  const total = Number(progress.total || 0);
+  const percent = total > 0 ? Math.round((processed / total) * 100) : null;
+  job.stage = progress.stage || fallbackStage || job.stage;
+  if (percent !== null) {
+    job.stageProgress = final ? Math.min(100, Math.max(0, percent)) : Math.min(98, Math.max(0, percent));
+  }
+  job.stageProgressDetail = {
+    substage: progress.substage || null,
+    processed,
+    total,
+    unit: progress.unit || "items",
+    message: progress.message || null,
+    updatedAt: progress.updatedAt || null,
+  };
+  job.message = progress.message || job.message;
+  job.updatedAt = new Date().toISOString();
+  await persistVcfCanonJob(job);
+}
+
+function runBase64JsonScript(scriptPath, payload, progressOptions = null) {
   return new Promise((resolve, reject) => {
     const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
     const child = spawn(PYTHON_EXE, [scriptPath, "--input-json-base64", encoded], {
@@ -930,14 +963,37 @@ function runBase64JsonScript(scriptPath, payload) {
     });
     let stdout = "";
     let stderr = "";
+    let progressUpdating = false;
+    const progressTimer = progressOptions?.job && progressOptions?.progressPath
+      ? setInterval(() => {
+          if (progressUpdating) return;
+          progressUpdating = true;
+          updateJobProgressFromFile(
+            progressOptions.job,
+            progressOptions.progressPath,
+            progressOptions.stage,
+          )
+            .catch(() => {})
+            .finally(() => {
+              progressUpdating = false;
+            });
+        }, 1000)
+      : null;
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString("utf8");
     });
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString("utf8");
     });
-    child.on("error", reject);
-    child.on("close", (code) => {
+    child.on("error", (error) => {
+      if (progressTimer) clearInterval(progressTimer);
+      reject(error);
+    });
+    child.on("close", async (code) => {
+      if (progressTimer) clearInterval(progressTimer);
+      if (progressOptions?.job && progressOptions?.progressPath) {
+        await updateJobProgressFromFile(progressOptions.job, progressOptions.progressPath, progressOptions.stage, { final: true }).catch(() => {});
+      }
       const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
       const lastLine = lines[lines.length - 1] || "{}";
       let result;
@@ -1143,9 +1199,13 @@ async function processRsidResolution(payload) {
   );
 }
 
-async function processVcfCanonMatch(payload) {
+async function processVcfCanonMatch(payload, job) {
   if (payload.adapter === "gene_module_canon_adapter") {
-    return await runBase64JsonScript(SERVICE_SCRIPTS.geneModuleMatcher, payload);
+    return await runBase64JsonScript(SERVICE_SCRIPTS.geneModuleMatcher, payload, {
+      job,
+      stage: "matching",
+      progressPath: path.join(payload.outputDir, "match_progress.json"),
+    });
   }
   return (
     (await postWorkflowForSummary(N8N_VCF_CANON_MATCH_WEBHOOK_URL, payload, "n8n VCF-canon match")) ||
@@ -1153,21 +1213,37 @@ async function processVcfCanonMatch(payload) {
   );
 }
 
-async function processVcfNormalization(payload) {
-  return await runBase64JsonScript(SERVICE_SCRIPTS.vcfNormalization, payload);
+async function processVcfNormalization(payload, job) {
+  return await runBase64JsonScript(SERVICE_SCRIPTS.vcfNormalization, payload, {
+    job,
+    stage: "normalizing",
+    progressPath: path.join(payload.outputDir, "normalization_progress.json"),
+  });
 }
 
-async function processMatchPreparation(payload) {
-  return await runBase64JsonScript(SERVICE_SCRIPTS.matchPreparation, payload);
+async function processMatchPreparation(payload, job) {
+  return await runBase64JsonScript(SERVICE_SCRIPTS.matchPreparation, payload, {
+    job,
+    stage: "preparing",
+    progressPath: path.join(payload.outputDir, "preparation_progress.json"),
+  });
 }
 
-async function processAiTriage(payload) {
-  return await runBase64JsonScript(SERVICE_SCRIPTS.aiTriage, payload);
+async function processAiTriage(payload, job) {
+  return await runBase64JsonScript(SERVICE_SCRIPTS.aiTriage, payload, {
+    job,
+    stage: "triaging",
+    progressPath: path.join(payload.outputDir, "triage_progress.json"),
+  });
 }
 
-async function processVariantEnrichment(payload) {
+async function processVariantEnrichment(payload, job) {
   if (payload.schemaVersion === "gene_module_v2") {
-    return await runBase64JsonScript(SERVICE_SCRIPTS.geneModuleEnrichment, payload);
+    return await runBase64JsonScript(SERVICE_SCRIPTS.geneModuleEnrichment, payload, {
+      job,
+      stage: "enriching",
+      progressPath: path.join(payload.outputDir, "enrichment_progress.json"),
+    });
   }
   const webhookResult = await postWorkflowForSummary(
     N8N_VARIANT_ENRICHMENT_WEBHOOK_URL,
@@ -1231,7 +1307,7 @@ async function processVariantEnrichmentWithRetry(payload, job, attempts = 3) {
           ? "Enriching observed variants with external sources"
           : `Retrying variant enrichment (${attempt}/${attempts})`;
       job.updatedAt = new Date().toISOString();
-      return await processVariantEnrichment(payload);
+      return await processVariantEnrichment(payload, job);
     } catch (error) {
       errors.push(error.message || String(error));
       if (attempt >= attempts) break;
@@ -1438,6 +1514,7 @@ function publicJob(job) {
     artifactsReady: publicArtifactsReady(job),
     stage: job.stage || null,
     stageProgress: job.stageProgress ?? null,
+    stageProgressDetail: job.stageProgressDetail || null,
     error: job.error,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
@@ -1483,7 +1560,10 @@ async function persistVcfCanonJob(job) {
   if (!shouldPersistVcfCanonJob(job)) return;
   const paths = vcfCanonMatchPaths();
   await mkdir(paths.jobs, { recursive: true });
-  await writeFile(vcfCanonJobPath(job.id), JSON.stringify(serializeJobForStorage(job), null, 2), "utf8");
+  const target = vcfCanonJobPath(job.id);
+  const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  await writeFile(temporary, JSON.stringify(serializeJobForStorage(job), null, 2), "utf8");
+  await rename(temporary, target);
 }
 
 async function loadPersistedVcfCanonJobs() {
@@ -2530,6 +2610,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
     updatedAt: new Date().toISOString(),
   };
   jobs.set(job.id, job);
+  await persistVcfCanonJob(job);
 
   (async () => {
     try {
@@ -2553,6 +2634,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         job.stageProgress = 10;
         job.message = "Normalizing VCF alleles against the managed reference";
         job.updatedAt = new Date().toISOString();
+        await persistVcfCanonJob(job);
         normalizationSummary = await processVcfNormalization({
           event: "heal.vcf_normalization.requested",
           runId: normalizationRunId,
@@ -2564,7 +2646,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           referenceManifestPath: normalizationReference.manifest,
           geneEnvelopeIndexPath,
           requestedAt: new Date().toISOString(),
-        });
+        }, job);
         const normalizedVcfPath = path.resolve(normalizationSummary.normalizedVcfPath || "");
         const normalizedVariantsCsv = path.resolve(normalizationSummary.normalizedVariantsCsv || "");
         const normalizationExcludedAuditCsv = path.resolve(normalizationSummary.normalizationExcludedAuditCsv || "");
@@ -2591,6 +2673,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
       job.stageProgress = 25;
       job.message = "Streaming VCF and matching canon targets";
       job.updatedAt = new Date().toISOString();
+      await persistVcfCanonJob(job);
 
       const payload = {
         event: "heal.vcf_canon_match.requested",
@@ -2613,7 +2696,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         vcfParser: normalizeVcfParser(vcfParser),
         requestedAt: new Date().toISOString(),
       };
-        const summary = await processVcfCanonMatch(payload);
+        const summary = await processVcfCanonMatch(payload, job);
         job.artifacts = {
         ...(job.artifacts || {}),
         sheetFinalConsolidatedCsv: summary.outputs?.sheetFinalConsolidatedCsv || "",
@@ -2657,6 +2740,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
       job.stageProgress = 10;
       job.message = "Preparing audit-ready match CSVs";
       job.updatedAt = new Date().toISOString();
+      await persistVcfCanonJob(job);
 
       let preparationSummary = summary.matchPreparation || summary.preparationSummary || null;
       if (!preparationSummary) {
@@ -2675,7 +2759,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           outputDir: preparationOutputDir,
           requestedAt: new Date().toISOString(),
         };
-        preparationSummary = await processMatchPreparation(preparationPayload);
+        preparationSummary = await processMatchPreparation(preparationPayload, job);
       }
       job.artifacts.deliverableMinCsv = preparationSummary.outputs?.deliverableMinCsv || "";
       job.artifacts.deliverableAuditCsv = preparationSummary.outputs?.deliverableAuditCsv || "";
@@ -2695,6 +2779,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         job.stageProgress = 12;
         job.message = "Applying deterministic AI triage";
         job.updatedAt = new Date().toISOString();
+        await persistVcfCanonJob(job);
         const aiTriagePayload = {
           event: "heal.ai_triage.requested",
           runId: aiTriageRunId,
@@ -2703,7 +2788,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           outputDir: aiTriageOutputDir,
           requestedAt: new Date().toISOString(),
         };
-        const aiTriageSummary = await processAiTriage(aiTriagePayload);
+        const aiTriageSummary = await processAiTriage(aiTriagePayload, job);
         if (metadataCount(aiTriageSummary, "included_for_ai") <= 0) {
           throw new Error("AI triage produced zero rows eligible for canon schema v2.");
         }
@@ -2720,6 +2805,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         job.stageProgress = 12;
         job.message = "Enriching AI-triaged gene-module variants";
         job.updatedAt = new Date().toISOString();
+        await persistVcfCanonJob(job);
 
         const enrichmentPaths = variantEnrichmentPaths();
         await mkdir(enrichmentPaths.runs, { recursive: true });

@@ -698,6 +698,14 @@ function groupedInterpretationDetailFromMessage(message, t) {
   return `(${match[1]}/${match[2]} ${t.groupedInterpretationCountLabel})`;
 }
 
+function stageProgressDetailText(detail) {
+  if (!detail) return "";
+  const processed = Number(detail.processed || 0);
+  const total = Number(detail.total || 0);
+  const count = total > 0 ? processed + "/" + total + " " + (detail.unit || "items") : "";
+  return [count, detail.message].filter(Boolean).join(" - ");
+}
+
 function ProgressBar({
   label,
   value,
@@ -1429,6 +1437,7 @@ function MatchResultPanel({ result, locale, t }) {
   const Icon = isValid ? CheckCircle2 : XCircle;
   const isGeneModuleV2 = result.schemaVersion === "gene_module_v2";
   const metadata = result.metadata || {};
+  const artifactReady = result.artifactsReady || {};
   const statusCounts = metadata.match_status_counts || {};
   const preparation = result.matchPreparation?.metadata || {};
   const aiTriage = result.aiTriage?.metadata || {};
@@ -1885,133 +1894,133 @@ function MatchResultPanel({ result, locale, t }) {
         </>
       )}
       <div className="match-download-actions">
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadFinalReport}>
+        {!isGeneModuleV2 && artifactReady.finalReport && <button className="secondary-button match-download-button" type="button" onClick={downloadFinalReport}>
           <Download size={17} />
           {t.finalReportDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadMatches}>
+        </button>}
+        {artifactReady.matches && <button className="secondary-button match-download-button" type="button" onClick={downloadMatches}>
           <Download size={17} />
           {t.matchDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadPreparedAudit}>
+        </button>}
+        {artifactReady.preparation && <button className="secondary-button match-download-button" type="button" onClick={downloadPreparedAudit}>
           <Download size={17} />
           {t.matchPreparationAuditDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadPreparedMinimal}>
+        </button>}
+        {artifactReady.preparation && <button className="secondary-button match-download-button" type="button" onClick={downloadPreparedMinimal}>
           <Download size={17} />
           {t.matchPreparationMinimalDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.aiTriage} onClick={downloadAiTriage}>
+        </button>}
+        {isGeneModuleV2 && artifactReady.aiTriage && <button className="secondary-button match-download-button" type="button" onClick={downloadAiTriage}>
           <Download size={17} />
           {t.aiTriageDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.aiTriage} onClick={downloadAiTriageExcluded}>
+        </button>}
+        {isGeneModuleV2 && artifactReady.aiTriage && <button className="secondary-button match-download-button" type="button" onClick={downloadAiTriageExcluded}>
           <Download size={17} />
           {t.aiTriageExcludedDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.aiTriage} onClick={downloadAiTriageSummary}>
+        </button>}
+        {isGeneModuleV2 && artifactReady.aiTriage && <button className="secondary-button match-download-button" type="button" onClick={downloadAiTriageSummary}>
           <Download size={17} />
           {t.aiTriageSummaryDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.variantEnrichment} onClick={downloadEnrichment}>
+        </button>}
+        {artifactReady.enrichment && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichment}>
           <Download size={17} />
           {t.enrichmentDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.variantEnrichment} onClick={downloadEnrichmentPlus}>
+        </button>}
+        {artifactReady.enrichmentPlus && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentPlus}>
           <Download size={17} />
           {t.enrichmentPlusDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.variantEnrichment} onClick={downloadEnrichmentQa}>
+        </button>}
+        {artifactReady.enrichmentQuality && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentQa}>
           <Download size={17} />
           {t.enrichmentQaDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.vcfNormalization} onClick={downloadNormalizedVariants}>
+        </button>}
+        {isGeneModuleV2 && artifactReady.normalization && <button className="secondary-button match-download-button" type="button" onClick={downloadNormalizedVariants}>
           <Download size={17} />
           {t.normalizedVariantsDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.vcfNormalization} onClick={downloadNormalizationAudit}>
+        </button>}
+        {isGeneModuleV2 && artifactReady.normalizationAudit && <button className="secondary-button match-download-button" type="button" onClick={downloadNormalizationAudit}>
           <Download size={17} />
           {t.normalizationAuditDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.variantEnrichment} onClick={downloadEnrichmentQuality}>
+        </button>}
+        {isGeneModuleV2 && artifactReady.enrichmentQuality && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentQuality}>
           <Download size={17} />
           {t.enrichmentQualityDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.variantEnrichment} onClick={downloadEnrichmentEvidenceAudit}>
+        </button>}
+        {isGeneModuleV2 && artifactReady.enrichment && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentEvidenceAudit}>
           <Download size={17} />
           {t.enrichmentEvidenceAuditDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.groupPrep} onClick={downloadGroupedPayloads}>
+        </button>}
+        {isGeneModuleV2 && artifactReady.groupedPayloads && <button className="secondary-button match-download-button" type="button" onClick={downloadGroupedPayloads}>
           <Download size={17} />
           {t.groupingPayloadsDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.groupPrep} onClick={downloadGroupedVariantDetail}>
+        </button>}
+        {isGeneModuleV2 && artifactReady.groupedVariantDetail && <button className="secondary-button match-download-button" type="button" onClick={downloadGroupedVariantDetail}>
           <Download size={17} />
           {t.groupingVariantDetailDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.groupPrep} onClick={downloadGroupedSummary}>
+        </button>}
+        {isGeneModuleV2 && artifactReady.groupedPayloads && <button className="secondary-button match-download-button" type="button" onClick={downloadGroupedSummary}>
           <Download size={17} />
           {t.groupingSummaryDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.groupedIndividualInterpretation} onClick={downloadGroupedInterpretations}>
+        </button>}
+        {isGeneModuleV2 && artifactReady.groupedInterpretation && <button className="secondary-button match-download-button" type="button" onClick={downloadGroupedInterpretations}>
           <Download size={17} />
           {t.groupedInterpretationDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || !result.groupedIndividualInterpretation} onClick={downloadGroupedInterpretationSummary}>
+        </button>}
+        {isGeneModuleV2 && artifactReady.groupedInterpretation && <button className="secondary-button match-download-button" type="button" onClick={downloadGroupedInterpretationSummary}>
           <Download size={17} />
           {t.groupedInterpretationSummaryDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadIndividualInterpretations}>
+        </button>}
+        {!isGeneModuleV2 && artifactReady.individualInterpretation && <button className="secondary-button match-download-button" type="button" onClick={downloadIndividualInterpretations}>
           <Download size={17} />
           {t.individualInterpretationDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadNormalizedInterpretations}>
+        </button>}
+        {!isGeneModuleV2 && artifactReady.interpretationNormalization && <button className="secondary-button match-download-button" type="button" onClick={downloadNormalizedInterpretations}>
           <Download size={17} />
           {t.interpretationNormalizationDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId || metadata.downstream_supported === false} onClick={downloadGlobalInterpretationSections}>
+        </button>}
+        {!isGeneModuleV2 && artifactReady.globalInterpretation && <button className="secondary-button match-download-button" type="button" onClick={downloadGlobalInterpretationSections}>
           <Download size={17} />
           {t.globalInterpretationSectionsDownload}
-        </button>
+        </button>}
       </div>
       <h3 className="result-subtitle">{t.debugDownloads}</h3>
       <div className="match-download-actions">
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={() => downloadDebugArtifact("vcf_candidates", "heal-vcf-candidates.csv")}>
+        {artifactReady.debug && <button className="secondary-button match-download-button" type="button" onClick={() => downloadDebugArtifact("vcf_candidates", "heal-vcf-candidates.csv")}>
           <Download size={17} />
           {t.qaVcfCandidates}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={() => downloadDebugArtifact("vcf_joined_chr_pos", "heal-vcf-joined-chr-pos.csv")}>
+        </button>}
+        {artifactReady.debug && <button className="secondary-button match-download-button" type="button" onClick={() => downloadDebugArtifact("vcf_joined_chr_pos", "heal-vcf-joined-chr-pos.csv")}>
           <Download size={17} />
           {t.qaVcfJoined}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={() => downloadDebugArtifact("match_strict", "heal-match-strict.csv")}>
+        </button>}
+        {artifactReady.debug && <button className="secondary-button match-download-button" type="button" onClick={() => downloadDebugArtifact("match_strict", "heal-match-strict.csv")}>
           <Download size={17} />
           {t.qaStrict}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={() => downloadDebugArtifact("alt_review", "heal-match-alt-review.csv")}>
+        </button>}
+        {artifactReady.debug && <button className="secondary-button match-download-button" type="button" onClick={() => downloadDebugArtifact("alt_review", "heal-match-alt-review.csv")}>
           <Download size={17} />
           {t.qaAltReview}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={() => downloadDebugArtifact("position_review", "heal-match-position-review.csv")}>
+        </button>}
+        {artifactReady.debug && <button className="secondary-button match-download-button" type="button" onClick={() => downloadDebugArtifact("position_review", "heal-match-position-review.csv")}>
           <Download size={17} />
           {t.qaPositionReview}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={() => downloadDebugArtifact("no_vcf_match", "heal-match-no-vcf-match.csv")}>
+        </button>}
+        {artifactReady.debug && <button className="secondary-button match-download-button" type="button" onClick={() => downloadDebugArtifact("no_vcf_match", "heal-match-no-vcf-match.csv")}>
           <Download size={17} />
           {t.qaNoVcfMatch}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadGlobalInterpretation}>
+        </button>}
+        {!isGeneModuleV2 && artifactReady.globalInterpretation && <button className="secondary-button match-download-button" type="button" onClick={downloadGlobalInterpretation}>
           <Download size={17} />
           {t.globalInterpretationDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadGlobalInterpretationPayload}>
+        </button>}
+        {!isGeneModuleV2 && artifactReady.globalInterpretation && <button className="secondary-button match-download-button" type="button" onClick={downloadGlobalInterpretationPayload}>
           <Download size={17} />
           {t.globalInterpretationPayloadDownload}
-        </button>
-        <button className="secondary-button match-download-button" type="button" disabled={!result.jobId} onClick={downloadGlobalInterpretationDeterministicSummary}>
+        </button>}
+        {!isGeneModuleV2 && artifactReady.globalInterpretation && <button className="secondary-button match-download-button" type="button" onClick={downloadGlobalInterpretationDeterministicSummary}>
           <Download size={17} />
           {t.globalInterpretationSummaryDownload}
-        </button>
+        </button>}
       </div>
       {downloadError && <p className="error-message">{downloadError}</p>}
       {(result.errors?.length > 0 || result.warnings?.length > 0) && (
@@ -2055,6 +2064,7 @@ function App() {
   const [interpretationNormalizationProgress, setInterpretationNormalizationProgress] = useState(0);
   const [globalInterpretationProgress, setGlobalInterpretationProgress] = useState(0);
   const [finalReportProgress, setFinalReportProgress] = useState(0);
+  const [stageProgressDetails, setStageProgressDetails] = useState({});
   const [qaLlm2Model, setQaLlm2Model] = useState("gpt-5-mini");
   const [qaAudienceMode, setQaAudienceMode] = useState("all");
   const [qaLanguageMode, setQaLanguageMode] = useState("both");
@@ -2102,6 +2112,9 @@ function App() {
 
   const t = COPY[language];
   const locale = language === "es" ? "es-AR" : "en-US";
+  const isGeneModuleV2 = matchResult?.schemaVersion === "gene_module_v2";
+  const v2DownstreamBlocked = isGeneModuleV2 && matchResult?.metadata?.downstream_supported === false;
+  const legacyLabel = (label) => label + " (legacy)";
   const canSend = useMemo(
     () =>
       file &&
@@ -2136,6 +2149,7 @@ function App() {
     setInterpretationNormalizationProgress(0);
     setGlobalInterpretationProgress(0);
     setFinalReportProgress(0);
+    setStageProgressDetails({});
     setResult(null);
     setMatchResult(null);
     setMatchArtifactsReady({
@@ -2510,9 +2524,16 @@ function App() {
       transientFailures = 0;
       const job = await response.json();
       updateMatchSnapshot(job);
+      if (job.stage && job.stageProgressDetail) {
+        setStageProgressDetails((current) => ({
+          ...current,
+          [job.stage]: stageProgressDetailText(job.stageProgressDetail),
+        }));
+      }
       setMatchProgress(job.progress || 0);
       if (job.stage === "normalizing") {
         setPhase("normalizing");
+        setMatchProgress(0);
         setNormalizationProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.normalizing);
       } else if (job.stage === "preparing") {
@@ -3193,6 +3214,7 @@ function App() {
     setRetryEnrichmentJobId(null);
     setResult(null);
     setMatchResult(null);
+    setStageProgressDetails({});
     clearFinalReportDownloads();
     setMatchArtifactsReady({
       matches: false,
@@ -3375,7 +3397,7 @@ function App() {
             <section className="llm2-options" aria-label={t.llm2OptionsTitle}>
               <div className="mode-heading">
                 <BarChart3 size={20} />
-                <span>{t.llm2OptionsTitle}</span>
+                <span>{t.llm2OptionsTitle} (legacy)</span>
               </div>
               <div className="llm2-grid">
                 <label>
@@ -3445,6 +3467,17 @@ function App() {
           playLabel={`${t.playStage}: ${t.validationProgress}`}
           playDisabled={!file || isBusyPhase(phase)}
         />
+        {isGeneModuleV2 && (
+          <ProgressBar
+            label={t.normalizationProgress}
+            value={normalizationProgress}
+            detail={stageProgressDetails.normalizing || ""}
+            tone="blue"
+            downloadLabel={t.normalizedVariantsDownload}
+            onDownload={matchResult?.jobId ? () => downloadMatchArtifact("normalization") : null}
+            downloadReady={matchArtifactsReady.normalization}
+          />
+        )}
         <ProgressBar
           label={t.matchProgress}
           value={matchProgress}
@@ -3459,38 +3492,43 @@ function App() {
         <ProgressBar
           label={t.preparationProgress}
           value={preparationProgress}
+          detail={stageProgressDetails.preparing || ""}
           tone="blue"
           downloadLabel={t.matchPreparationAuditDownload}
           onDownload={matchResult?.jobId ? () => downloadMatchArtifact("preparation") : null}
           downloadReady={matchArtifactsReady.preparation}
-          onPlay={analysisMode === "qa" ? runQaMatch : null}
-          playLabel={`${t.playStage}: ${t.preparationProgress}`}
-          playDisabled={!uploadRecord || !result || result.status === "invalid" || isBusyPhase(phase)}
         />
-        <ProgressBar
-          label={t.normalizationProgress}
-          value={normalizationProgress}
-          tone="blue"
-          downloadLabel={t.normalizedVariantsDownload}
-          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("normalization") : null}
-          downloadReady={matchArtifactsReady.normalization}
-        />
-        <ProgressBar
-          label={t.aiTriageProgress}
-          value={aiTriageProgress}
-          tone="blue"
-          downloadLabel={t.aiTriageDownload}
-          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("aiTriage") : null}
-          downloadReady={matchArtifactsReady.aiTriage}
-        />
+        {!isGeneModuleV2 && (
+          <ProgressBar
+            label={legacyLabel(t.normalizationProgress)}
+            value={normalizationProgress}
+            detail={stageProgressDetails.normalizing || ""}
+            tone="blue"
+            downloadLabel={t.normalizedVariantsDownload}
+            onDownload={matchResult?.jobId ? () => downloadMatchArtifact("normalization") : null}
+            downloadReady={matchArtifactsReady.normalization}
+          />
+        )}
+        {(!matchResult || isGeneModuleV2) && (
+          <ProgressBar
+            label={t.aiTriageProgress}
+            value={aiTriageProgress}
+            detail={stageProgressDetails.triaging || ""}
+            tone="blue"
+            downloadLabel={t.aiTriageDownload}
+            onDownload={matchResult?.jobId ? () => downloadMatchArtifact("aiTriage") : null}
+            downloadReady={matchArtifactsReady.aiTriage}
+          />
+        )}
         <ProgressBar
           label={t.enrichmentProgress}
           value={enrichmentProgress}
+          detail={stageProgressDetails.enriching || ""}
           tone="blue"
           downloadLabel={t.enrichmentDownload}
           onDownload={matchResult?.jobId ? () => downloadMatchArtifact("enrichment") : null}
           downloadReady={matchArtifactsReady.enrichmentInterpretive}
-          onPlay={analysisMode === "qa" ? runQaMatch : null}
+          onPlay={analysisMode === "qa" && isGeneModuleV2 ? retryEnrichment : null}
           playLabel={`${t.playStage}: ${t.enrichmentProgress}`}
           playDisabled={
             !uploadRecord ||
@@ -3499,33 +3537,48 @@ function App() {
             isBusyPhase(phase)
           }
         />
+        {(!matchResult || isGeneModuleV2) && (
+          <ProgressBar
+            label={t.enrichmentQualityProgress}
+            value={enrichmentQualityProgress}
+            detail={stageProgressDetails.enrichment_quality_gate || ""}
+            tone="blue"
+            downloadLabel={t.enrichmentQualityDownload}
+            onDownload={matchResult?.jobId ? () => downloadMatchArtifact("enrichmentQuality") : null}
+            downloadReady={matchArtifactsReady.enrichmentQuality}
+          />
+        )}
+        {isGeneModuleV2 && v2DownstreamBlocked && (
+          <p className="warning-message">
+            {matchResult?.metadata?.downstream_message || "V2 grouping and LLM1 are blocked until the enrichment quality gate and explicit enablement pass."}
+          </p>
+        )}
+        {isGeneModuleV2 && !v2DownstreamBlocked && (
+          <>
+            <ProgressBar
+              label={t.groupingPreparationProgress}
+              value={groupingPreparationProgress}
+              detail={stageProgressDetails.grouping_preparation || ""}
+              tone="blue"
+              downloadLabel={t.groupingPayloadsDownload}
+              onDownload={matchResult?.jobId ? () => downloadMatchArtifact("groupedPayloads") : null}
+              downloadReady={matchArtifactsReady.groupedPayloads}
+            />
+            <ProgressBar
+              label={t.groupedInterpretationProgress}
+              value={groupedInterpretationProgress}
+              detail={groupedInterpretationDetail || stageProgressDetails.grouped_individual_interpretation || ""}
+              tone="blue"
+              downloadLabel={t.groupedInterpretationDownload}
+              onDownload={matchResult?.jobId ? () => downloadMatchArtifact("groupedInterpretation") : null}
+              downloadReady={matchArtifactsReady.groupedInterpretation}
+            />
+          </>
+        )}
+        {!isGeneModuleV2 && (
+          <>
         <ProgressBar
-          label={t.enrichmentQualityProgress}
-          value={enrichmentQualityProgress}
-          tone="blue"
-          downloadLabel={t.enrichmentQualityDownload}
-          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("enrichmentQuality") : null}
-          downloadReady={matchArtifactsReady.enrichmentQuality}
-        />
-        <ProgressBar
-          label={t.groupingPreparationProgress}
-          value={groupingPreparationProgress}
-          tone="blue"
-          downloadLabel={t.groupingPayloadsDownload}
-          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("groupedPayloads") : null}
-          downloadReady={matchArtifactsReady.groupedPayloads}
-        />
-        <ProgressBar
-          label={t.groupedInterpretationProgress}
-          value={groupedInterpretationProgress}
-          detail={groupedInterpretationDetail}
-          tone="blue"
-          downloadLabel={t.groupedInterpretationDownload}
-          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("groupedInterpretation") : null}
-          downloadReady={matchArtifactsReady.groupedInterpretation}
-        />
-        <ProgressBar
-          label={t.individualInterpretationProgress}
+          label={legacyLabel(t.individualInterpretationProgress)}
           value={individualInterpretationProgress}
           detail={individualInterpretationDetail}
           tone="blue"
@@ -3541,7 +3594,7 @@ function App() {
           }
         />
         <ProgressBar
-          label={t.interpretationNormalizationProgress}
+          label={legacyLabel(t.interpretationNormalizationProgress)}
           value={interpretationNormalizationProgress}
           tone="blue"
           downloadLabel={t.interpretationNormalizationDownload}
@@ -3556,7 +3609,7 @@ function App() {
           }
         />
         <ProgressBar
-          label={t.globalInterpretationProgress}
+          label={legacyLabel(t.globalInterpretationProgress)}
           value={globalInterpretationProgress}
           tone="blue"
           downloadLabel={t.globalInterpretationDownload}
@@ -3571,7 +3624,7 @@ function App() {
           }
         />
         <ProgressBar
-          label={t.finalReportProgress}
+          label={legacyLabel(t.finalReportProgress)}
           value={finalReportProgress}
           tone="blue"
           downloadLabel={t.finalReportDownload}
@@ -3585,6 +3638,8 @@ function App() {
             isBusyPhase(phase)
           }
         />
+          </>
+        )}
         {analysisMode === "qa" && (finalReportDownloads.es || finalReportDownloads.en) && (
           <div className="report-download-row">
             {finalReportDownloads.es && (

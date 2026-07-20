@@ -8,6 +8,7 @@ import base64
 import csv
 import datetime as dt
 import json
+import os
 from collections import Counter
 from pathlib import Path
 
@@ -27,6 +28,27 @@ def write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def write_progress(output_dir: Path, *, substage: str, processed: int = 0, total: int = 0, unit: str = "rows", message: str = "") -> None:
+    path = output_dir / "triage_progress.json"
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(
+        json.dumps(
+            {
+                "stage": "triaging",
+                "substage": substage,
+                "processed": max(0, int(processed)),
+                "total": max(0, int(total)),
+                "unit": unit,
+                "message": message,
+                "updatedAt": utc_now(),
+            },
+            ensure_ascii=True,
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def is_missing(value) -> bool:
@@ -110,11 +132,12 @@ def process(input_path: Path, output_dir: Path) -> dict:
     source_rows = read_csv(input_path)
     if not source_rows:
         raise ValueError("sheet_final_consolidated.csv is empty.")
+    write_progress(output_dir, substage="evaluating_rules", total=len(source_rows), unit="rows", message="Evaluating deterministic AI triage rules")
     if "module_id" not in source_rows[0] or "local_region_class" not in source_rows[0]:
         raise ValueError("AI triage currently supports only gene_module_v2 match outputs.")
 
     evaluated_rows = []
-    for row in source_rows:
+    for index, row in enumerate(source_rows, start=1):
         decision, reason = triage_row(row)
         evaluated_rows.append(
             {
@@ -123,6 +146,8 @@ def process(input_path: Path, output_dir: Path) -> dict:
                 "triage_reason": reason,
             }
         )
+        if index % 5000 == 0:
+            write_progress(output_dir, substage="evaluating_rules", processed=index, total=len(source_rows), unit="rows", message="Evaluating deterministic AI triage rules")
 
     included_rows = [row for row in evaluated_rows if clean_str(row.get("triage_decision")) == "include_ai"]
     excluded_rows = [row for row in evaluated_rows if clean_str(row.get("triage_decision")) != "include_ai"]
@@ -151,6 +176,7 @@ def process(input_path: Path, output_dir: Path) -> dict:
         "timestamps": {"startedAt": started_at, "completedAt": utc_now()},
     }
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_progress(output_dir, substage="complete", processed=len(source_rows), total=len(source_rows), unit="rows", message="AI triage completed")
     print(json.dumps(summary, ensure_ascii=False))
     return summary
 
