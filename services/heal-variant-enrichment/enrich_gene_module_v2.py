@@ -9,6 +9,7 @@ used for secondary sources after an exact colocated-allele confirmation.
 from __future__ import annotations
 
 import argparse
+import atexit
 import base64
 import csv
 import datetime as dt
@@ -17,6 +18,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -34,6 +36,20 @@ VEP_BATCH_SIZE = 200
 DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_CACHE_TTL_DAYS = 14
 DEFAULT_SECONDARY_WORKERS = 4
+SOURCE_WORKERS = {
+    "ensembl_variation": 4,
+    "clinvar": 2,
+    "myvariant": 4,
+    "gwas": 2,
+    "pharmgkb": 1,
+}
+SECONDARY_SOURCE_ORDER = (
+    "ensembl_variation",
+    "clinvar",
+    "myvariant",
+    "gwas",
+    "pharmgkb",
+)
 
 
 def utc_now() -> str:
@@ -64,16 +80,29 @@ def write_json(path: Path, payload: dict) -> None:
     temporary.replace(path)
 
 
-def write_progress(output_dir: Path, *, substage: str, processed: int = 0, total: int = 0, unit: str = "variants", message: str = "") -> None:
+def write_progress(
+    output_dir: Path,
+    *,
+    substage: str,
+    processed: int = 0,
+    total: int = 0,
+    unit: str = "variants",
+    message: str = "",
+    stage: str = "enriching",
+    phase: str = "",
+    metrics: dict | None = None,
+) -> None:
     write_json(
         output_dir / "enrichment_progress.json",
         {
-            "stage": "enriching",
+            "stage": stage,
+            "phase": phase or stage,
             "substage": substage,
             "processed": max(0, int(processed)),
             "total": max(0, int(total)),
             "unit": unit,
             "message": message,
+            "metrics": metrics or {},
             "updatedAt": utc_now(),
         },
     )
@@ -112,9 +141,10 @@ class EnrichmentCache:
     def __init__(self, path: Path, ttl_days: int):
         self.path = path
         self.ttl = dt.timedelta(days=ttl_days)
+        self._lock = threading.RLock()
         path.parent.mkdir(parents=True, exist_ok=True)
         connection = self.connect()
-        try:
+        with self._lock:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS enrichment_cache (
@@ -134,25 +164,36 @@ class EnrichmentCache:
             )
             connection.execute("PRAGMA journal_mode=WAL")
             connection.commit()
-        finally:
-            connection.close()
+        self._connection = connection
 
     def connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=45)
+        connection = sqlite3.connect(self.path, timeout=45, check_same_thread=False)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout=45000")
         return connection
 
-    def get(self, assembly: str, variant_key: str, source: str, fingerprint: str) -> dict | None:
-        connection = self.connect()
-        try:
+    def thread_connection(self) -> sqlite3.Connection:
+        return self._connection
+
+    def close_thread_connection(self) -> None:
+        return None
+
+    def close(self) -> None:
+        with self._lock:
+            connection = getattr(self, "_connection", None)
+            if connection is not None:
+                connection.close()
+                self._connection = None
+
+    def get(self, assembly: str, variant_key: str, source: str, fingerprint: str, connection: sqlite3.Connection | None = None) -> dict | None:
+        connection = connection or self.thread_connection()
+        with self._lock:
             row = connection.execute(
                 """SELECT response_json, status, http_status, fetched_at, expires_at
                    FROM enrichment_cache
                    WHERE assembly = ? AND variant_key = ? AND source = ? AND request_fingerprint = ?""",
                 (assembly, variant_key, source, fingerprint),
             ).fetchone()
-        finally:
-            connection.close()
         if not row:
             return None
         try:
@@ -164,7 +205,7 @@ class EnrichmentCache:
             return None
         return {"payload": payload, "status": row["status"], "http_status": row["http_status"], "fetched_at": row["fetched_at"]}
 
-    def put(self, assembly: str, variant_key: str, source: str, fingerprint: str, payload: object, status: str, http_status: int | None) -> None:
+    def put(self, assembly: str, variant_key: str, source: str, fingerprint: str, payload: object, status: str, http_status: int | None, connection: sqlite3.Connection | None = None) -> None:
         fetched_at = dt.datetime.now(dt.UTC)
         values = (
             assembly,
@@ -178,10 +219,10 @@ class EnrichmentCache:
             (fetched_at + self.ttl).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             PIPELINE_VERSION,
         )
+        connection = connection or self.thread_connection()
         for attempt in range(4):
             try:
-                connection = self.connect()
-                try:
+                with self._lock:
                     connection.execute(
                         """INSERT INTO enrichment_cache
                            (assembly, variant_key, source, request_fingerprint, response_json, status, http_status, fetched_at, expires_at, pipeline_version)
@@ -197,9 +238,7 @@ class EnrichmentCache:
                         values,
                     )
                     connection.commit()
-                finally:
-                    connection.close()
-                return
+                    return
             except sqlite3.OperationalError as error:
                 if "locked" not in str(error).lower() or attempt == 3:
                     raise
@@ -339,17 +378,104 @@ def exact_allele_match(allele_string: object, ref: str, alt: str) -> bool:
     return clean(ref).upper() in alleles and clean(alt).upper() in alleles
 
 
-def exact_rsid(variant: dict, item: dict) -> tuple[str, str]:
+def intervals_overlap(start_a: int, end_a: int, start_b: int, end_b: int) -> bool:
+    return min(end_a, end_b) >= max(start_a, start_b)
+
+
+def normalized_allele_signature(ref: object, alt: object) -> tuple[str, str]:
+    ref_text = clean(ref).upper()
+    alt_text = clean(alt).upper()
+    while len(ref_text) > 1 and len(alt_text) > 1 and ref_text[0] == alt_text[0]:
+        ref_text = ref_text[1:]
+        alt_text = alt_text[1:]
+    while len(ref_text) > 1 and len(alt_text) > 1 and ref_text[-1] == alt_text[-1]:
+        ref_text = ref_text[:-1]
+        alt_text = alt_text[:-1]
+    return ref_text, alt_text
+
+
+def vep_entry_matches_variant(variant: dict, entry: dict) -> tuple[bool, str]:
+    if not isinstance(entry, dict):
+        return False, ""
+    entry_chrom = normalize_chromosome(entry.get("seq_region_name"))
+    variant_chrom = normalize_chromosome(variant.get("chrom_vcf"))
+    if entry_chrom and variant_chrom and entry_chrom != variant_chrom:
+        return False, ""
+    try:
+        variant_start = int(variant.get("pos_vcf"))
+        variant_end = variant_start + max(len(clean(variant.get("ref_vcf"))), 1) - 1
+        entry_start = int(entry.get("start"))
+        entry_end = int(entry.get("end") or entry_start)
+    except (TypeError, ValueError):
+        return (True, "exact_allele") if exact_allele_match(entry.get("allele_string"), clean(variant.get("ref_vcf")), clean(variant.get("alt_vcf"))) else (False, "")
+    if not intervals_overlap(variant_start, variant_end, entry_start, entry_end):
+        return False, ""
+    ref = clean(variant.get("ref_vcf"))
+    alt = clean(variant.get("alt_vcf"))
+    if exact_allele_match(entry.get("allele_string"), ref, alt):
+        return True, "exact_allele"
+    observed_signature = normalized_allele_signature(ref, alt)
+    alleles = [clean(value) for value in re.split(r"[|/,]", clean(entry.get("allele_string"))) if clean(value)]
+    for left_index, left in enumerate(alleles):
+        for right_index, right in enumerate(alleles):
+            if left_index == right_index:
+                continue
+            if normalized_allele_signature(left, right) == observed_signature:
+                return True, "normalized_indel_allele"
+    return False, ""
+
+
+def resolve_rsid(variant: dict, item: dict) -> dict:
     colocated = item.get("colocated_variants") if isinstance(item, dict) else []
     colocated = colocated if isinstance(colocated, list) else []
-    exact = [entry for entry in colocated if isinstance(entry, dict) and exact_allele_match(entry.get("allele_string"), variant["ref_vcf"], variant["alt_vcf"])]
+    colocated_rsids = sorted({normalize_rsid(entry.get("id")) for entry in colocated if isinstance(entry, dict) and normalize_rsid(entry.get("id"))})
+    exact: list[tuple[dict, str]] = []
+    for entry in colocated:
+        matched, match_type = vep_entry_matches_variant(variant, entry)
+        if matched and normalize_rsid(entry.get("id")):
+            exact.append((entry, match_type))
     vcf_id = normalize_rsid(variant.get("id_vcf"))
-    if vcf_id and any(normalize_rsid(entry.get("id")) == vcf_id for entry in exact):
-        return vcf_id, "vcf_id_confirmed_by_vep_exact_allele"
-    resolved = sorted({normalize_rsid(entry.get("id")) for entry in exact if normalize_rsid(entry.get("id"))})
+    resolved = sorted({normalize_rsid(entry.get("id")) for entry, _ in exact if normalize_rsid(entry.get("id"))})
+    if vcf_id and vcf_id in resolved:
+        return {
+            "resolved_rsid": vcf_id,
+            "status": "vcf_id_confirmed_by_vep_exact_allele",
+            "reason": "vcf_id_and_vep_allele_match",
+            "colocated_count": len(colocated),
+            "colocated_rsid_count": len(colocated_rsids),
+        }
     if resolved:
-        return resolved[0], "vep_colocated_exact_allele"
-    return "", "unresolved_no_exact_rsid"
+        match_types = {match_type for entry, match_type in exact if normalize_rsid(entry.get("id")) in resolved}
+        status = "vep_colocated_normalized_indel" if "normalized_indel_allele" in match_types else "vep_colocated_exact_allele"
+        if len(resolved) > 1:
+            status = "ambiguous_multiple_exact_rsids"
+        return {
+            "resolved_rsid": resolved[0] if len(resolved) == 1 else "",
+            "status": status,
+            "reason": "unique_vep_colocated_allele_match" if len(resolved) == 1 else "multiple_vep_colocated_allele_matches",
+            "colocated_count": len(colocated),
+            "colocated_rsid_count": len(colocated_rsids),
+        }
+    if colocated_rsids:
+        return {
+            "resolved_rsid": "",
+            "status": "vep_colocated_allele_mismatch",
+            "reason": "colocated_rsid_requires_coordinate_allele_reconciliation",
+            "colocated_count": len(colocated),
+            "colocated_rsid_count": len(colocated_rsids),
+        }
+    return {
+        "resolved_rsid": "",
+        "status": "unresolved_no_exact_rsid",
+        "reason": "vep_response_has_no_colocated_rsid",
+        "colocated_count": len(colocated),
+        "colocated_rsid_count": 0,
+    }
+
+
+def exact_rsid(variant: dict, item: dict) -> tuple[str, str]:
+    resolved = resolve_rsid(variant, item)
+    return resolved["resolved_rsid"], resolved["status"]
 
 
 def parse_vep_for_gene(item: dict, target_gene: str) -> dict:
@@ -430,26 +556,39 @@ def secondary_source_status(source: str, payload: dict, error: str) -> str:
     return "success"
 
 
-def cached_secondary(cache: EnrichmentCache, assembly: str, variant: dict, rsid: str, source: str, func, timeout_seconds: int) -> tuple[dict, str, bool]:
+def cached_secondary(cache: EnrichmentCache, assembly: str, variant: dict, rsid: str, source: str, func, timeout_seconds: int) -> tuple[dict, str, bool, str, float]:
     request = {"rsid": rsid, "source": source, "pipeline": PIPELINE_VERSION}
     key = fingerprint(request)
+    started = time.perf_counter()
     cached = cache.get(assembly, variant["variant_key"], source, key)
     if cached:
         cached_payload = cached["payload"] if isinstance(cached["payload"], dict) else {}
-        return cached_payload.get("data") or {}, clean(cached_payload.get("error")), True
+        return cached_payload.get("data") or {}, clean(cached_payload.get("error")), True, cached.get("status") or "success", time.perf_counter() - started
     payload, error = func(rsid, timeout_seconds)
     status = secondary_source_status(source, payload, error)
     cache.put(assembly, variant["variant_key"], source, key, {"data": payload, "error": error}, status, None)
-    return payload, error, False
+    return payload, error, False, status, time.perf_counter() - started
 
 
-def fetch_secondary(variant: dict, assembly: str, cache: EnrichmentCache, timeout_seconds: int) -> dict:
+def fetch_secondary_source(variant: dict, assembly: str, cache: EnrichmentCache, timeout_seconds: int, source: str, output_key: str, func) -> dict:
     rsid = clean(variant.get("resolved_rsid"))
     if not rsid:
-        return {
-            "errors": {}, "source_status": {source: "not_queried" for source in ["ensembl_variation", "clinvar", "myvariant", "gwas", "pharmgkb"]},
-            "cache_hits": 0, "ensemblVariation": {}, "clinVar": {}, "myVariant": {}, "gwasCatalog": {}, "clinPgx": {},
-        }
+        return {"variant_key": variant["variant_key"], "source": source, "output_key": output_key, "payload": {}, "error": "", "cache_hit": False, "status": "not_queried", "elapsed_seconds": 0.0}
+    payload, error, cache_hit, status, elapsed = cached_secondary(cache, assembly, variant, rsid, source, func, timeout_seconds)
+    return {
+        "variant_key": variant["variant_key"], "source": source, "output_key": output_key,
+        "payload": payload, "error": error, "cache_hit": cache_hit, "status": status,
+        "elapsed_seconds": elapsed,
+    }
+
+
+def fetch_secondary_sources(
+    variants: list[dict],
+    assembly: str,
+    cache: EnrichmentCache,
+    timeout_seconds: int,
+    on_progress=None,
+) -> tuple[dict[str, dict], dict]:
     calls = {
         "ensembl_variation": ("ensemblVariation", legacy.fetch_ensembl_variation),
         "clinvar": ("clinVar", legacy.fetch_clinvar),
@@ -457,18 +596,56 @@ def fetch_secondary(variant: dict, assembly: str, cache: EnrichmentCache, timeou
         "gwas": ("gwasCatalog", legacy.fetch_gwas_catalog),
         "pharmgkb": ("clinPgx", legacy.fetch_clinpgx),
     }
-    result = {"errors": {}, "source_status": {}, "cache_hits": 0}
+    enrichments = {
+        variant["variant_key"]: {
+            "errors": {}, "source_status": {source: "not_queried" for source in SECONDARY_SOURCE_ORDER},
+            "cache_hits": 0, "ensemblVariation": {}, "clinVar": {}, "myVariant": {}, "gwasCatalog": {}, "clinPgx": {},
+        }
+        for variant in variants
+    }
+    metrics = {
+        "calls_total": len(variants) * len(calls), "calls_completed": 0, "cache_hits": 0,
+        "source_stats": {source: {"workers": SOURCE_WORKERS[source], "completed": 0, "cache_hits": 0, "network_calls": 0, "errors": 0, "not_found": 0, "elapsed_seconds": 0.0} for source in calls},
+    }
+    secondary_started = time.perf_counter()
     for source, (output_key, func) in calls.items():
-        payload, error, cache_hit = cached_secondary(cache, assembly, variant, rsid, source, func, timeout_seconds)
-        result[output_key] = payload
-        result["cache_hits"] += int(cache_hit)
-        result["source_status"][source] = secondary_source_status(source, payload, error)
-        if error:
-            result["errors"][source] = error
-        # PharmGKB's public endpoints include deliberate rate spacing in the legacy client.
-        if not cache_hit and source != "pharmgkb":
-            time.sleep(0.08)
-    return result
+        source_started = time.perf_counter()
+        workers = max(1, int(SOURCE_WORKERS.get(source, DEFAULT_SECONDARY_WORKERS)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(fetch_secondary_source, variant, assembly, cache, timeout_seconds, source, output_key, func): variant
+                for variant in variants
+            }
+            for future in as_completed(futures):
+                variant = futures[future]
+                try:
+                    result = future.result()
+                except Exception as error:  # Secondary sources must not erase VEP evidence.
+                    result = {
+                        "variant_key": variant["variant_key"], "source": source, "output_key": output_key,
+                        "payload": {}, "error": str(error), "cache_hit": False, "status": "source_error", "elapsed_seconds": 0.0,
+                    }
+                target = enrichments[result["variant_key"]]
+                target[output_key] = result["payload"] or {}
+                target["source_status"][source] = result["status"]
+                target["cache_hits"] += int(result["cache_hit"])
+                if result["error"]:
+                    target["errors"][source] = result["error"]
+                source_metrics = metrics["source_stats"][source]
+                source_metrics["completed"] += 1
+                source_metrics["cache_hits"] += int(result["cache_hit"])
+                source_metrics["network_calls"] += int(not result["cache_hit"])
+                source_metrics["errors"] += int(result["status"] == "source_error")
+                source_metrics["not_found"] += int(result["status"] == "not_found")
+                source_metrics["elapsed_seconds"] += float(result["elapsed_seconds"] or 0.0)
+                metrics["calls_completed"] += 1
+                metrics["cache_hits"] += int(result["cache_hit"])
+                metrics["elapsed_seconds"] = round(time.perf_counter() - secondary_started, 3)
+                metrics["calls_per_second"] = round(metrics["calls_completed"] / max(metrics["elapsed_seconds"], 0.001), 3)
+                source_metrics["wall_seconds"] = round(time.perf_counter() - source_started, 3)
+                if on_progress:
+                    on_progress(metrics, source)
+    return enrichments, metrics
 
 
 def snake_case_only(row: dict) -> dict:
@@ -503,11 +680,33 @@ def build_module_row(row: dict, enrichment: dict) -> dict:
 def build_variant_master_row(variant: dict, enrichment: dict, module_count: int) -> dict:
     vep = enrichment.get("ensemblVep") or {}
     variation = enrichment.get("ensemblVariation") or {}
+    resolution_status = clean(enrichment.get("rsid_resolution_status"))
+    if clean(enrichment.get("vep_status")) == "source_error":
+        vep_only_class = "vep_error"
+    elif resolution_status == "vep_colocated_allele_mismatch":
+        vep_only_class = "colocated_rsid_allele_mismatch"
+    elif resolution_status == "ambiguous_multiple_exact_rsids":
+        vep_only_class = "ambiguous_multiple_exact_rsids"
+    elif clean(vep.get("vrs")) or clean(vep.get("picked_hgvsc")) or clean(vep.get("picked_hgvsp")):
+        vep_only_class = "functional_annotation_without_exact_rsid"
+    else:
+        vep_only_class = "no_usable_vep_annotation"
+    fallback_query_mode = (
+        "vrs_or_hgvs_available"
+        if clean(vep.get("vrs")) or clean(vep.get("picked_hgvsc")) or clean(vep.get("picked_hgvsp"))
+        else "coordinate_only"
+    )
     return {
         "variant_key": variant["variant_key"], "assembly": variant["assembly"], "chrom_vcf": variant["chrom_vcf"],
         "pos_vcf": variant["pos_vcf"], "ref_vcf": variant["ref_vcf"], "alt_vcf": variant["alt_vcf"],
         "id_vcf": variant.get("id_vcf", ""), "resolved_rsid": enrichment.get("resolved_rsid", ""),
-        "rsid_resolution_status": enrichment.get("rsid_resolution_status", ""), "module_row_count": module_count,
+        "rsid_resolution_status": resolution_status,
+        "resolution_reason": enrichment.get("resolution_reason", ""),
+        "vep_only_class": vep_only_class,
+        "vep_only_fallback_query_mode": fallback_query_mode,
+        "vep_colocated_count": enrichment.get("vep_colocated_count", ""),
+        "vep_colocated_rsid_count": enrichment.get("vep_colocated_rsid_count", ""),
+        "module_row_count": module_count,
         "vep_status": enrichment.get("vep_status", ""), "vep_most_severe_consequence": vep.get("most_severe_consequence", ""),
         "vep_gene_symbols": vep.get("gene_symbols", ""), "vep_hgvsc": vep.get("picked_hgvsc", ""),
         "vep_hgvsp": vep.get("picked_hgvsp", ""), "vep_cadd_phred": vep.get("picked_cadd_phred", ""),
@@ -517,8 +716,35 @@ def build_variant_master_row(variant: dict, enrichment: dict, module_count: int)
     }
 
 
+def materialize_module_rows(
+    rows: list[dict],
+    variants: dict[str, dict],
+    enrichments_by_variant: dict[str, dict],
+    vep_raw: dict[str, dict],
+) -> tuple[list[dict], list[dict]]:
+    output_rows: list[dict] = []
+    evidence_rows: list[dict] = []
+    for row in rows:
+        key = clean(row.get("variant_key"))
+        variant = variants[key]
+        base = enrichments_by_variant[key]
+        item = (vep_raw.get(key) or {}).get("item") or {}
+        per_gene = {**base, "ensemblVep": parse_vep_for_gene(item, clean(row.get("approved_symbol")))}
+        output_rows.append(build_module_row(row, per_gene))
+        evidence_rows.append({
+            "variant_key": key, "gene": clean(row.get("approved_symbol")), "module_id": clean(row.get("module_id")),
+            "resolved_rsid": per_gene.get("resolved_rsid"), "rsid_resolution_status": per_gene.get("rsid_resolution_status"),
+            "resolution_reason": per_gene.get("resolution_reason"), "source_status": per_gene.get("source_status"),
+            "errors": per_gene.get("errors"), "vep": per_gene.get("ensemblVep"), "vep_raw": item,
+            "ensembl_variation": per_gene.get("ensemblVariation"), "clinvar": per_gene.get("clinVar"),
+            "myvariant": per_gene.get("myVariant"), "gwas": per_gene.get("gwasCatalog"), "pharmgkb": per_gene.get("clinPgx"),
+        })
+    return output_rows, evidence_rows
+
+
 def main_process(payload: dict) -> dict:
     started_at = utc_now()
+    process_started = time.perf_counter()
     input_path = Path(payload["inputPath"])
     output_dir = Path(payload["outputDir"])
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -528,6 +754,7 @@ def main_process(payload: dict) -> dict:
         raise ValueError("V2 enrichment requires an explicit supported assembly.")
     timeout_seconds = int(payload.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS)
     cache = EnrichmentCache(cache_dir / "enrichment_cache.sqlite", int(payload.get("cacheTtlDays") or DEFAULT_CACHE_TTL_DAYS))
+    atexit.register(cache.close)
     rows = [row for row in read_csv(input_path) if clean(row.get("variant_key")) and clean(row.get("has_genotype")).lower() in {"true", "1", "yes"}]
     if not rows:
         raise ValueError("AI triage input contains no observed v2 physical variants.")
@@ -545,9 +772,19 @@ def main_process(payload: dict) -> dict:
             }
         module_counts[variant_key] = module_counts.get(variant_key, 0) + 1
     physical_variants = list(variants.values())
-    write_progress(output_dir, substage="vep", processed=0, total=len(physical_variants), unit="physical variants", message="Preparing coordinate-based VEP enrichment")
+    write_progress(
+        output_dir,
+        stage="enrichment_vep",
+        phase="vep_base",
+        substage="vep",
+        processed=0,
+        total=len(physical_variants),
+        unit="physical variants",
+        message="Preparing coordinate-based VEP enrichment",
+    )
 
     provenance = {"retrievedAt": utc_now(), "pipelineVersion": PIPELINE_VERSION, "assembly": assembly}
+    vep_started = time.perf_counter()
     vep_raw: dict[str, dict] = {}
     vep_cache_hits = 0
     vep_requests = 0
@@ -558,28 +795,48 @@ def main_process(payload: dict) -> dict:
         vep_cache_hits += cache_hits
         vep_requests += requests
         warnings.extend(batch_warnings)
+        vep_elapsed = time.perf_counter() - vep_started
         write_progress(
             output_dir,
+            stage="enrichment_vep",
+            phase="vep_base",
             substage="vep",
             processed=min(offset + VEP_BATCH_SIZE, len(physical_variants)),
             total=len(physical_variants),
             unit="physical variants",
             message="Enriching normalized variants with Ensembl VEP",
+            metrics={
+                "cache_hits": vep_cache_hits,
+                "network_batches": vep_requests,
+                "elapsed_seconds": round(vep_elapsed, 3),
+                "items_per_second": round(min(offset + VEP_BATCH_SIZE, len(physical_variants)) / max(vep_elapsed, 0.001), 3),
+            },
         )
+    vep_elapsed_seconds = time.perf_counter() - vep_started
 
     enrichments_by_variant: dict[str, dict] = {}
     variants_for_secondary: list[dict] = []
+    resolution_counts: dict[str, int] = {}
     for variant in physical_variants:
         raw = vep_raw.get(variant["variant_key"], {})
         item = raw.get("item") if isinstance(raw.get("item"), dict) else {}
-        rsid, rsid_status = exact_rsid(variant, item)
+        resolution = resolve_rsid(variant, item)
+        rsid = resolution["resolved_rsid"]
+        rsid_status = resolution["status"]
         variant["resolved_rsid"] = rsid
+        resolution_counts[rsid_status] = resolution_counts.get(rsid_status, 0) + 1
         enrichment = {
             "resolved_rsid": rsid,
             "rsid_resolution_status": rsid_status,
+            "resolution_reason": resolution["reason"],
+            "vep_colocated_count": resolution["colocated_count"],
+            "vep_colocated_rsid_count": resolution["colocated_rsid_count"],
             "vep_status": clean(raw.get("status")) or "not_found",
             "errors": {"ensembl_vep": clean(raw.get("error"))} if clean(raw.get("error")) else {},
-            "source_status": {"ensembl_vep": clean(raw.get("status")) or "not_found"},
+            "source_status": {
+                "ensembl_vep": clean(raw.get("status")) or "not_found",
+                **{source: "not_queried" for source in SECONDARY_SOURCE_ORDER},
+            },
             "ensemblVep": parse_vep_for_gene(item, ""),
             "cacheHit": bool(raw.get("cache_hit")),
         }
@@ -587,52 +844,108 @@ def main_process(payload: dict) -> dict:
         if rsid:
             variants_for_secondary.append(variant)
 
-    secondary_completed = len(physical_variants) - len(variants_for_secondary)
-    write_progress(output_dir, substage="secondary_sources", processed=secondary_completed, total=len(physical_variants), unit="physical variants", message="Resolving exact rsIDs and querying secondary sources")
-    # VEP is queried once per physical variant; target-gene transcript selection happens when expanding module rows.
-    secondary_workers = max(1, min(int(payload.get("secondaryWorkers") or DEFAULT_SECONDARY_WORKERS), 8))
-    with ThreadPoolExecutor(max_workers=secondary_workers) as executor:
-        future_map = {executor.submit(fetch_secondary, variant, assembly, cache, timeout_seconds): variant for variant in variants_for_secondary}
-        for future in as_completed(future_map):
-            variant = future_map[future]
-            try:
-                secondary = future.result()
-            except Exception as error:  # a secondary source failure never masks a VEP result
-                secondary = {"errors": {"secondary_worker": str(error)}, "source_status": {}}
-            enrichment = enrichments_by_variant[variant["variant_key"]]
-            enrichment.update({key: value for key, value in secondary.items() if key not in {"errors", "source_status"}})
-            enrichment["errors"].update(secondary.get("errors") or {})
-            enrichment["source_status"].update(secondary.get("source_status") or {})
-            secondary_completed += 1
+    base_rows, base_evidence_rows = materialize_module_rows(rows, variants, enrichments_by_variant, vep_raw)
+    base_csv = output_dir / "v2_enrichment_vep_base.csv"
+    resolution_audit_path = output_dir / "v2_enrichment_resolution_audit.jsonl"
+    write_csv(base_csv, base_rows, source_fields(base_rows))
+    with resolution_audit_path.open("w", encoding="utf-8") as handle:
+        for item in base_evidence_rows:
+            handle.write(json.dumps(item, ensure_ascii=True) + "\n")
+    write_json(
+        output_dir / "enrichment_vep_base_summary.json",
+        {
+            "status": "valid",
+            "schemaVersion": "gene_module_v2",
+            "physicalVariants": len(physical_variants),
+            "moduleRows": len(rows),
+            "vepSuccessfulVariants": sum(1 for value in enrichments_by_variant.values() if value.get("vep_status") == "success"),
+            "resolutionCounts": resolution_counts,
+            "vepCacheHits": vep_cache_hits,
+            "vepNetworkVariants": vep_requests,
+            "outputs": {"vepBaseCsv": str(base_csv), "resolutionAuditJsonl": str(resolution_audit_path)},
+        },
+    )
+
+    write_progress(
+        output_dir,
+        stage="enrichment_complete",
+        phase="secondary_sources",
+        substage="secondary_sources",
+        processed=0,
+        total=len(variants_for_secondary) * len(SECONDARY_SOURCE_ORDER),
+        unit="source calls",
+        message="Querying secondary sources for exact variant identities",
+        metrics={"eligibleVariants": len(variants_for_secondary), "resolutionCounts": resolution_counts},
+    )
+
+    def on_secondary_progress(metrics: dict, source: str) -> None:
+        completed = int(metrics.get("calls_completed") or 0)
+        total = int(metrics.get("calls_total") or 0)
+        if completed % 10 == 0 or completed == total:
             write_progress(
                 output_dir,
-                substage="secondary_sources",
-                processed=secondary_completed,
-                total=len(physical_variants),
-                unit="physical variants",
-                message="Querying ClinVar, frequency, GWAS and PGx sources",
+                stage="enrichment_complete",
+                phase="secondary_sources",
+                substage=f"secondary_{source}",
+                processed=completed,
+                total=total,
+                unit="source calls",
+                message=f"Querying {source}",
+                metrics=metrics,
             )
 
-    output_rows: list[dict] = []
-    evidence_rows: list[dict] = []
-    for row in rows:
-        key = clean(row.get("variant_key"))
-        variant = variants[key]
-        base = enrichments_by_variant[key]
-        item = (vep_raw.get(key) or {}).get("item") or {}
-        per_gene = {**base, "ensemblVep": parse_vep_for_gene(item, clean(row.get("approved_symbol")))}
-        output_rows.append(build_module_row(row, per_gene))
-        evidence_rows.append({
-            "variant_key": key, "gene": clean(row.get("approved_symbol")), "module_id": clean(row.get("module_id")),
-            "resolved_rsid": per_gene.get("resolved_rsid"), "rsid_resolution_status": per_gene.get("rsid_resolution_status"),
-            "source_status": per_gene.get("source_status"), "errors": per_gene.get("errors"),
-            "vep": per_gene.get("ensemblVep"), "vep_raw": item,
-            "ensembl_variation": per_gene.get("ensemblVariation"),
-            "clinvar": per_gene.get("clinVar"), "myvariant": per_gene.get("myVariant"),
-            "gwas": per_gene.get("gwasCatalog"), "pharmgkb": per_gene.get("clinPgx"),
-        })
+    secondary_started = time.perf_counter()
+    secondary_enrichments, secondary_metrics = fetch_secondary_sources(
+        variants_for_secondary,
+        assembly,
+        cache,
+        timeout_seconds,
+        on_progress=on_secondary_progress,
+    )
+    secondary_metrics["wall_seconds"] = round(time.perf_counter() - secondary_started, 3)
+    for variant_key, secondary in secondary_enrichments.items():
+        enrichment = enrichments_by_variant[variant_key]
+        enrichment.update({key: value for key, value in secondary.items() if key not in {"errors", "source_status"}})
+        enrichment["errors"].update(secondary.get("errors") or {})
+        enrichment["source_status"].update(secondary.get("source_status") or {})
+
+    complete_rows, _complete_evidence_rows = materialize_module_rows(rows, variants, enrichments_by_variant, vep_raw)
+    complete_rows = [row for row in complete_rows if clean(row.get("resolved_rsid"))]
+    complete_csv = output_dir / "v2_enrichment_complete.csv"
+    write_csv(complete_csv, complete_rows, source_fields(complete_rows))
+    write_progress(
+        output_dir,
+        stage="enrichment_vep_only",
+        phase="vep_only_remediation",
+        substage="audit_unresolved",
+        processed=0,
+        total=len(physical_variants) - len(variants_for_secondary),
+        unit="physical variants",
+        message="Auditing VEP-only, ambiguous and VEP-error variants",
+        metrics={"secondary": secondary_metrics, "resolutionCounts": resolution_counts},
+    )
+
+    output_rows, evidence_rows = materialize_module_rows(rows, variants, enrichments_by_variant, vep_raw)
 
     master_rows = [build_variant_master_row(variant, enrichments_by_variant[variant["variant_key"]], module_counts[variant["variant_key"]]) for variant in physical_variants]
+    vep_only_master_rows = [row for row in master_rows if not clean(row.get("resolved_rsid"))]
+    vep_only_csv = output_dir / "v2_enrichment_vep_only_audit.csv"
+    write_csv(vep_only_csv, vep_only_master_rows, source_fields(master_rows))
+    write_progress(
+        output_dir,
+        stage="enrichment_vep_only",
+        phase="vep_only_remediation",
+        substage="complete",
+        processed=len(vep_only_master_rows),
+        total=len(physical_variants) - len(variants_for_secondary),
+        unit="physical variants",
+        message="VEP-only resolution audit completed",
+        metrics={
+            "vepOnlyVariants": len(vep_only_master_rows),
+            "resolutionCounts": resolution_counts,
+            "secondary": secondary_metrics,
+        },
+    )
     fields = source_fields(output_rows)
     master_fields = source_fields(master_rows)
     output_csv = output_dir / "heal_observed_variant_enrichment_v2.csv"
@@ -647,6 +960,21 @@ def main_process(payload: dict) -> dict:
     with evidence_path.open("w", encoding="utf-8") as handle:
         for item in evidence_rows:
             handle.write(json.dumps(item, ensure_ascii=True) + "\n")
+
+    performance = {
+        "schemaVersion": "gene_module_v2",
+        "startedAt": started_at,
+        "completedAt": utc_now(),
+        "elapsedSeconds": time.perf_counter() - process_started,
+        "physicalVariants": len(physical_variants),
+        "moduleRows": len(rows),
+        "vepSeconds": vep_elapsed_seconds,
+        "secondary": secondary_metrics,
+        "secondaryWallSeconds": secondary_metrics.get("wall_seconds", 0),
+        "resolutionCounts": resolution_counts,
+    }
+    performance_path = output_dir / "enrichment_performance_summary.json"
+    write_json(performance_path, performance)
 
     normalization_summary = {}
     normalization_summary_path = clean(payload.get("normalizationSummaryPath"))
@@ -666,6 +994,9 @@ def main_process(payload: dict) -> dict:
         "physicalVariants": len(physical_variants), "moduleRows": len(rows),
         "vepSuccessfulVariants": vep_success_count, "vepCoverage": vep_coverage, "minimumVepCoverage": 0.95,
         "exactRsidsResolved": sum(1 for value in enrichments_by_variant.values() if clean(value.get("resolved_rsid"))),
+        "resolutionCounts": resolution_counts,
+        "vepOnlyVariants": len(vep_only_master_rows),
+        "secondaryMetrics": secondary_metrics,
         "vepCacheHits": vep_cache_hits, "vepNetworkVariants": vep_requests,
         "sourceErrors": source_errors, "warnings": warnings,
         "decision": "pass" if gate_status == "pass" else "block_downstream_until_enrichment_is_remediated",
@@ -680,10 +1011,23 @@ def main_process(payload: dict) -> dict:
         "observedVariantEnrichmentCsv": str(output_csv), "observedVariantEnrichmentColabCsv": str(observed_csv),
         "observedVariantEnrichmentPlusCsv": str(plus_csv), "v2EnrichmentVariantMasterCsv": str(master_csv),
         "v2EnrichmentEvidenceAuditJsonl": str(evidence_path), "enrichmentQualitySummaryJson": str(quality_path),
-        "metadata": {"qualityGate": quality, "downstreamSupported": False},
+        "v2EnrichmentVepBaseCsv": str(base_csv), "v2EnrichmentCompleteCsv": str(complete_csv),
+        "v2EnrichmentVepOnlyAuditCsv": str(vep_only_csv), "v2EnrichmentResolutionAuditJsonl": str(resolution_audit_path),
+        "enrichmentPerformanceSummaryJson": str(performance_path),
+        "metadata": {"qualityGate": quality, "downstreamSupported": False, "performance": performance},
     }
     write_json(output_dir / "observed_variant_enrichment_summary.json", summary)
-    write_progress(output_dir, substage="complete", processed=len(physical_variants), total=len(physical_variants), unit="physical variants", message="External enrichment completed")
+    write_progress(
+        output_dir,
+        stage="enrichment_quality_gate",
+        phase="quality_gate",
+        substage="complete",
+        processed=1,
+        total=1,
+        unit="quality gates",
+        message="External enrichment completed; quality gate ready",
+        metrics={"qualityGate": quality, "performance": performance},
+    )
     print(json.dumps(summary, ensure_ascii=True))
     return summary
 

@@ -1,5 +1,5 @@
 import express from "express";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
 import { mkdir, open, readFile, readdir, rename, rm, stat, statfs, unlink, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -613,30 +613,36 @@ function sanitizeFinalReportResult(result) {
 
 function publicArtifactsReady(job) {
   const artifacts = job.artifacts || {};
+  const artifactExists = (value) => Boolean(value && existsSync(value));
   return {
-    matches: Boolean(artifacts.sheetFinalConsolidatedCsv),
-    normalization: Boolean(artifacts.normalizedVariantsCsv || artifacts.normalizedVcfPath),
-    normalizationAudit: Boolean(artifacts.normalizationExcludedAuditCsv),
+    matches: artifactExists(artifacts.sheetFinalConsolidatedCsv),
+    normalization: artifactExists(artifacts.normalizedVariantsCsv || artifacts.normalizedVcfPath),
+    normalizationAudit: artifactExists(artifacts.normalizationExcludedAuditCsv),
     debug: Boolean(
-      artifacts.vcfCandidatesCsv ||
-        artifacts.sheetFinalMatchStrictCsv ||
-        artifacts.sheetFinalMatchLikelyNeedsAltReviewCsv ||
-        artifacts.sheetFinalMatchByPositionNeedsReviewCsv ||
-        artifacts.sheetFinalNoVcfMatchByChrPosCsv,
+      artifactExists(artifacts.vcfCandidatesCsv) ||
+        artifactExists(artifacts.sheetFinalMatchStrictCsv) ||
+        artifactExists(artifacts.sheetFinalMatchLikelyNeedsAltReviewCsv) ||
+        artifactExists(artifacts.sheetFinalMatchByPositionNeedsReviewCsv) ||
+        artifactExists(artifacts.sheetFinalNoVcfMatchByChrPosCsv),
     ),
-    preparation: Boolean(artifacts.deliverableAuditCsv || artifacts.deliverableMinCsv),
-    aiTriage: Boolean(artifacts.aiTriageCsv),
-    enrichment: Boolean(artifacts.observedVariantEnrichmentCsv),
-    enrichmentInterpretive: Boolean(artifacts.observedVariantInterpretiveCsv),
-    enrichmentPlus: Boolean(artifacts.observedVariantEnrichmentPlusCsv),
-    enrichmentQuality: Boolean(artifacts.enrichmentQualitySummaryJson),
-    groupedPayloads: Boolean(artifacts.groupPayloadsCsv || artifacts.groupPayloadsJsonl),
-    groupedVariantDetail: Boolean(artifacts.groupVariantDetailCsv),
-    groupedInterpretation: Boolean(artifacts.groupInterpretationsCsv),
-    individualInterpretation: Boolean(artifacts.individualVariantInterpretationsCsv),
-    interpretationNormalization: Boolean(artifacts.individualVariantInterpretationsNormalizedCsv),
-    globalInterpretation: Boolean(artifacts.globalInterpretationJson || artifacts.globalInterpretationSectionsCsv),
-    finalReport: Boolean(artifacts.finalReportDocx),
+    preparation: artifactExists(artifacts.deliverableAuditCsv || artifacts.deliverableMinCsv),
+    aiTriage: artifactExists(artifacts.aiTriageCsv),
+    enrichment: artifactExists(artifacts.observedVariantEnrichmentCsv),
+    enrichmentInterpretive: artifactExists(artifacts.observedVariantInterpretiveCsv),
+    enrichmentPlus: artifactExists(artifacts.observedVariantEnrichmentPlusCsv),
+    enrichmentQuality: artifactExists(artifacts.enrichmentQualitySummaryJson),
+    enrichmentVepBase: artifactExists(artifacts.v2EnrichmentVepBaseCsv),
+    enrichmentResolutionAudit: artifactExists(artifacts.v2EnrichmentResolutionAuditJsonl),
+    enrichmentComplete: artifactExists(artifacts.v2EnrichmentCompleteCsv),
+    enrichmentVepOnly: artifactExists(artifacts.v2EnrichmentVepOnlyAuditCsv),
+    enrichmentPerformance: artifactExists(artifacts.enrichmentPerformanceSummaryJson),
+    groupedPayloads: artifactExists(artifacts.groupPayloadsCsv || artifacts.groupPayloadsJsonl),
+    groupedVariantDetail: artifactExists(artifacts.groupVariantDetailCsv),
+    groupedInterpretation: artifactExists(artifacts.groupInterpretationsCsv),
+    individualInterpretation: artifactExists(artifacts.individualVariantInterpretationsCsv),
+    interpretationNormalization: artifactExists(artifacts.individualVariantInterpretationsNormalizedCsv),
+    globalInterpretation: artifactExists(artifacts.globalInterpretationJson || artifacts.globalInterpretationSectionsCsv),
+    finalReport: artifactExists(artifacts.finalReportDocx),
   };
 }
 
@@ -947,6 +953,7 @@ async function updateJobProgressFromFile(job, progressPath, fallbackStage, { fin
     total,
     unit: progress.unit || "items",
     message: progress.message || null,
+    metrics: progress.metrics || {},
     updatedAt: progress.updatedAt || null,
   };
   job.message = progress.message || job.message;
@@ -2813,6 +2820,14 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         const enrichmentRunId = `variant-enrichment-${runId}`;
         const enrichmentOutputDir = jobStageDirectory(job.id, "enrichment");
         await mkdir(enrichmentOutputDir, { recursive: true });
+        Object.assign(job.artifacts, {
+          v2EnrichmentVepBaseCsv: path.join(enrichmentOutputDir, "v2_enrichment_vep_base.csv"),
+          v2EnrichmentResolutionAuditJsonl: path.join(enrichmentOutputDir, "v2_enrichment_resolution_audit.jsonl"),
+          v2EnrichmentCompleteCsv: path.join(enrichmentOutputDir, "v2_enrichment_complete.csv"),
+          v2EnrichmentVepOnlyAuditCsv: path.join(enrichmentOutputDir, "v2_enrichment_vep_only_audit.csv"),
+          enrichmentPerformanceSummaryJson: path.join(enrichmentOutputDir, "enrichment_performance_summary.json"),
+        });
+        await persistVcfCanonJob(job);
         const aiTriageCsvPath = path.resolve(job.artifacts.aiTriageCsv || "");
         if (!isPathInside(aiTriagePathsRoot.root, aiTriageCsvPath)) {
           throw new Error("Variant enrichment input is outside the allowed AI triage root.");
@@ -2838,6 +2853,11 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         job.artifacts.v2EnrichmentVariantMasterCsv = enrichmentSummary.outputs?.v2EnrichmentVariantMasterCsv || "";
         job.artifacts.v2EnrichmentEvidenceAuditJsonl = enrichmentSummary.outputs?.v2EnrichmentEvidenceAuditJsonl || "";
         job.artifacts.enrichmentQualitySummaryJson = enrichmentSummary.outputs?.enrichmentQualitySummaryJson || "";
+        job.artifacts.v2EnrichmentVepBaseCsv = enrichmentSummary.outputs?.v2EnrichmentVepBaseCsv || job.artifacts.v2EnrichmentVepBaseCsv || "";
+        job.artifacts.v2EnrichmentResolutionAuditJsonl = enrichmentSummary.outputs?.v2EnrichmentResolutionAuditJsonl || job.artifacts.v2EnrichmentResolutionAuditJsonl || "";
+        job.artifacts.v2EnrichmentCompleteCsv = enrichmentSummary.outputs?.v2EnrichmentCompleteCsv || job.artifacts.v2EnrichmentCompleteCsv || "";
+        job.artifacts.v2EnrichmentVepOnlyAuditCsv = enrichmentSummary.outputs?.v2EnrichmentVepOnlyAuditCsv || job.artifacts.v2EnrichmentVepOnlyAuditCsv || "";
+        job.artifacts.enrichmentPerformanceSummaryJson = enrichmentSummary.outputs?.enrichmentPerformanceSummaryJson || job.artifacts.enrichmentPerformanceSummaryJson || "";
         if (!job.artifacts.observedVariantEnrichmentPlusCsv || !job.artifacts.enrichmentQualitySummaryJson) {
           throw new Error("Coordinate enrichment did not produce its required v2 artifacts.");
         }
@@ -3101,6 +3121,16 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
         ? jobStageDirectory(job.id, "enrichment-retry")
         : path.join(enrichmentPaths.runs, enrichmentRunId);
       await mkdir(enrichmentOutputDir, { recursive: true });
+      if (isGeneModuleV2) {
+        Object.assign(job.artifacts, {
+          v2EnrichmentVepBaseCsv: path.join(enrichmentOutputDir, "v2_enrichment_vep_base.csv"),
+          v2EnrichmentResolutionAuditJsonl: path.join(enrichmentOutputDir, "v2_enrichment_resolution_audit.jsonl"),
+          v2EnrichmentCompleteCsv: path.join(enrichmentOutputDir, "v2_enrichment_complete.csv"),
+          v2EnrichmentVepOnlyAuditCsv: path.join(enrichmentOutputDir, "v2_enrichment_vep_only_audit.csv"),
+          enrichmentPerformanceSummaryJson: path.join(enrichmentOutputDir, "enrichment_performance_summary.json"),
+        });
+        await persistVcfCanonJob(job);
+      }
       const enrichmentPayload = {
         event: "heal.variant_enrichment.retry_requested",
         runId: enrichmentRunId,
@@ -3122,6 +3152,11 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
       job.artifacts.v2EnrichmentVariantMasterCsv = enrichmentSummary.outputs?.v2EnrichmentVariantMasterCsv || "";
       job.artifacts.v2EnrichmentEvidenceAuditJsonl = enrichmentSummary.outputs?.v2EnrichmentEvidenceAuditJsonl || "";
       job.artifacts.enrichmentQualitySummaryJson = enrichmentSummary.outputs?.enrichmentQualitySummaryJson || "";
+      job.artifacts.v2EnrichmentVepBaseCsv = enrichmentSummary.outputs?.v2EnrichmentVepBaseCsv || job.artifacts.v2EnrichmentVepBaseCsv || "";
+      job.artifacts.v2EnrichmentResolutionAuditJsonl = enrichmentSummary.outputs?.v2EnrichmentResolutionAuditJsonl || job.artifacts.v2EnrichmentResolutionAuditJsonl || "";
+      job.artifacts.v2EnrichmentCompleteCsv = enrichmentSummary.outputs?.v2EnrichmentCompleteCsv || job.artifacts.v2EnrichmentCompleteCsv || "";
+      job.artifacts.v2EnrichmentVepOnlyAuditCsv = enrichmentSummary.outputs?.v2EnrichmentVepOnlyAuditCsv || job.artifacts.v2EnrichmentVepOnlyAuditCsv || "";
+      job.artifacts.enrichmentPerformanceSummaryJson = enrichmentSummary.outputs?.enrichmentPerformanceSummaryJson || job.artifacts.enrichmentPerformanceSummaryJson || "";
       job.result = {
         ...(job.result || {}),
         variantEnrichment: sanitizeVariantEnrichmentResult(enrichmentSummary),
@@ -3907,6 +3942,40 @@ app.get("/api/vcf-canon-matches/:jobId/normalization-summary", async (req, res) 
 
 app.get("/api/vcf-canon-matches/:jobId/enrichment-variant-master", async (req, res) => {
   await downloadRuntimeArtifact(req, res, "v2EnrichmentVariantMasterCsv", "v2_enrichment_variant_master", variantEnrichmentPaths);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/enrichment-vep-base", async (req, res) => {
+  await downloadRuntimeArtifact(req, res, "v2EnrichmentVepBaseCsv", "v2_enrichment_vep_base", variantEnrichmentPaths);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/enrichment-complete", async (req, res) => {
+  await downloadRuntimeArtifact(req, res, "v2EnrichmentCompleteCsv", "v2_enrichment_complete", variantEnrichmentPaths);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/enrichment-vep-only", async (req, res) => {
+  await downloadRuntimeArtifact(req, res, "v2EnrichmentVepOnlyAuditCsv", "v2_enrichment_vep_only_audit", variantEnrichmentPaths);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/enrichment-resolution-audit", async (req, res) => {
+  await downloadRuntimeArtifact(
+    req,
+    res,
+    "v2EnrichmentResolutionAuditJsonl",
+    "v2_enrichment_resolution_audit",
+    variantEnrichmentPaths,
+    { jsonl: true },
+  );
+});
+
+app.get("/api/vcf-canon-matches/:jobId/enrichment-performance", async (req, res) => {
+  await downloadRuntimeArtifact(
+    req,
+    res,
+    "enrichmentPerformanceSummaryJson",
+    "enrichment_performance_summary",
+    variantEnrichmentPaths,
+    { json: true },
+  );
 });
 
 app.get("/api/vcf-canon-matches/:jobId/enrichment-evidence-audit", async (req, res) => {

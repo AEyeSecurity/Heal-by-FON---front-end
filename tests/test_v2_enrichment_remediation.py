@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -235,6 +236,65 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
         self.assertEqual(rsid, "rs1139424")
         self.assertEqual(reason, "vep_colocated_exact_allele")
 
+    def test_resolves_left_aligned_indel_from_normalized_allele_signature(self):
+        variant = {
+            "chrom_vcf": "chr1",
+            "pos_vcf": "100",
+            "ref_vcf": "CA",
+            "alt_vcf": "CTA",
+        }
+        item = {
+            "colocated_variants": [{
+                "id": "rs1234",
+                "seq_region_name": "1",
+                "start": 101,
+                "end": 101,
+                "allele_string": "A/TA",
+            }]
+        }
+
+        resolved = enrichment.resolve_rsid(variant, item)
+
+        self.assertEqual(resolved["resolved_rsid"], "rs1234")
+        self.assertEqual(resolved["status"], "vep_colocated_normalized_indel")
+        self.assertEqual(resolved["reason"], "unique_vep_colocated_allele_match")
+
+    def test_classifies_colocated_rsid_with_nonmatching_allele_as_audit_only(self):
+        variant = {"chrom_vcf": "chr1", "pos_vcf": "100", "ref_vcf": "A", "alt_vcf": "G"}
+        item = {
+            "colocated_variants": [{
+                "id": "rs123",
+                "seq_region_name": "1",
+                "start": 100,
+                "end": 100,
+                "allele_string": "A/T",
+            }]
+        }
+
+        resolved = enrichment.resolve_rsid(variant, item)
+
+        self.assertEqual(resolved["resolved_rsid"], "")
+        self.assertEqual(resolved["status"], "vep_colocated_allele_mismatch")
+        self.assertEqual(resolved["reason"], "colocated_rsid_requires_coordinate_allele_reconciliation")
+
+    def test_secondary_sources_report_per_source_metrics_and_statuses(self):
+        variant = {"variant_key": "GRCh38:chr1:100:A:G", "resolved_rsid": "rs1"}
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = enrichment.EnrichmentCache(Path(temporary) / "cache.sqlite", ttl_days=1)
+            with patch.object(enrichment.legacy, "fetch_ensembl_variation", return_value=({}, "")), \
+                patch.object(enrichment.legacy, "fetch_clinvar", return_value=({"count": "0"}, "")), \
+                patch.object(enrichment.legacy, "fetch_myvariant", return_value=({}, "")), \
+                patch.object(enrichment.legacy, "fetch_gwas_catalog", return_value=({"association_count": "0"}, "")), \
+                patch.object(enrichment.legacy, "fetch_clinpgx", return_value=({"clinical_annotation_count": "0"}, "")):
+                _, metrics = enrichment.fetch_secondary_sources([variant], "GRCh38", cache, 1)
+            cache.close()
+
+        self.assertEqual(metrics["calls_total"], 5)
+        self.assertEqual(metrics["calls_completed"], 5)
+        self.assertEqual(metrics["source_stats"]["clinvar"]["not_found"], 1)
+        self.assertEqual(metrics["source_stats"]["gwas"]["not_found"], 1)
+        self.assertGreaterEqual(metrics["source_stats"]["pharmgkb"]["completed"], 1)
+
     def test_target_gene_parser_does_not_select_another_gene_transcript(self):
         item = {
             "most_severe_consequence": "missense_variant",
@@ -262,6 +322,7 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
             cache.put("GRCh38", "v2_test", "vep", "fingerprint", {"public": "annotation"}, "success", 200)
             cached = cache.get("GRCh38", "v2_test", "vep", "fingerprint")
             text = cache_path.read_bytes().decode("latin1", errors="ignore")
+            cache.close()
 
         self.assertEqual(cached["payload"], {"public": "annotation"})
         self.assertNotIn("0/1", text)

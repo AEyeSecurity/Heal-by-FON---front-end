@@ -173,6 +173,9 @@ const COPY = {
     preparing: "Preparando CSVs de auditoria...",
     normalizing: "Normalizando alelos VCF contra la referencia...",
     enriching: "Enriqueciendo variantes observadas...",
+    enrichmentVepBaseProgress: "Enrichment base VEP",
+    enrichmentCompleteProgress: "Enrichment completo",
+    enrichmentVepOnlyProgress: "Resolucion VEP-only",
     enrichmentQuality: "Validando cobertura y calidad del enrichment...",
     groupingPreparing: "Preparando payloads agrupados por gen y modulo...",
     groupedInterpretationStarting: "Iniciando interpretacion individual agrupada...",
@@ -262,6 +265,9 @@ const COPY = {
     enrichmentPhysicalVariants: "Variantes fisicas",
     enrichmentVepCoverage: "Cobertura VEP",
     enrichmentExactRsids: "rsIDs exactos resueltos",
+    enrichmentVepOnlyVariants: "Variantes VEP-only",
+    enrichmentResolutionAmbiguous: "Resoluciones ambiguas",
+    enrichmentResolutionAlleleMismatch: "Alelo no coincidente",
     enrichmentQualityDecision: "Decision QA",
     enrichmentInputRows: "Filas fuente",
     enrichmentPlusRows: "Filas Enrichment Plus",
@@ -360,6 +366,11 @@ const COPY = {
     normalizedVariantsDownload: "Descargar variantes normalizadas",
     normalizationAuditDownload: "Descargar audit de normalizacion",
     enrichmentQualityDownload: "Descargar resumen QA enrichment",
+    enrichmentVepBaseDownload: "Descargar base VEP",
+    enrichmentCompleteDownload: "Descargar enrichment completo",
+    enrichmentVepOnlyDownload: "Descargar auditoria VEP-only",
+    enrichmentResolutionAuditDownload: "Descargar auditoria de resolucion",
+    enrichmentPerformanceDownload: "Descargar metricas de rendimiento",
     enrichmentEvidenceAuditDownload: "Descargar evidencia enrichment",
     groupingPayloadsDownload: "Descargar payloads agrupados",
     groupingVariantDetailDownload: "Descargar detalle por variante",
@@ -454,6 +465,9 @@ const COPY = {
     preparing: "Preparing audit CSVs...",
     normalizing: "Normalizing VCF alleles against the managed reference...",
     enriching: "Enriching observed variants...",
+    enrichmentVepBaseProgress: "VEP base enrichment",
+    enrichmentCompleteProgress: "Complete enrichment",
+    enrichmentVepOnlyProgress: "VEP-only resolution",
     enrichmentQuality: "Checking enrichment coverage and quality...",
     groupingPreparing: "Preparing grouped gene-module payloads...",
     groupedInterpretationStarting: "Starting grouped individual interpretation...",
@@ -543,6 +557,9 @@ const COPY = {
     enrichmentPhysicalVariants: "Physical variants",
     enrichmentVepCoverage: "VEP coverage",
     enrichmentExactRsids: "Exact resolved rsIDs",
+    enrichmentVepOnlyVariants: "VEP-only variants",
+    enrichmentResolutionAmbiguous: "Ambiguous resolutions",
+    enrichmentResolutionAlleleMismatch: "Allele mismatches",
     enrichmentQualityDecision: "QA decision",
     enrichmentInputRows: "Source rows",
     enrichmentPlusRows: "Enrichment Plus rows",
@@ -641,6 +658,11 @@ const COPY = {
     normalizedVariantsDownload: "Download normalized variants",
     normalizationAuditDownload: "Download normalization audit",
     enrichmentQualityDownload: "Download enrichment QA summary",
+    enrichmentVepBaseDownload: "Download VEP base",
+    enrichmentCompleteDownload: "Download complete enrichment",
+    enrichmentVepOnlyDownload: "Download VEP-only audit",
+    enrichmentResolutionAuditDownload: "Download resolution audit",
+    enrichmentPerformanceDownload: "Download performance metrics",
     enrichmentEvidenceAuditDownload: "Download enrichment evidence audit",
     groupingPayloadsDownload: "Download grouped payloads",
     groupingVariantDetailDownload: "Download grouped variant detail",
@@ -703,7 +725,10 @@ function stageProgressDetailText(detail) {
   const processed = Number(detail.processed || 0);
   const total = Number(detail.total || 0);
   const count = total > 0 ? processed + "/" + total + " " + (detail.unit || "items") : "";
-  return [count, detail.message].filter(Boolean).join(" - ");
+  const metrics = detail.metrics || {};
+  const rate = Number(metrics.calls_per_second || metrics.items_per_second || 0);
+  const speed = rate > 0 ? `${rate.toFixed(1)}/s` : "";
+  return [detail.substage, count, speed, detail.message].filter(Boolean).join(" - ");
 }
 
 function ProgressBar({
@@ -1514,6 +1539,9 @@ function MatchResultPanel({ result, locale, t }) {
           [t.enrichmentPhysicalVariants, formatNumber(enrichmentQuality.physicalVariants, locale)],
           [t.enrichmentVepCoverage, `${((Number(enrichmentQuality.vepCoverage) || 0) * 100).toFixed(1)}%`],
           [t.enrichmentExactRsids, formatNumber(enrichmentQuality.exactRsidsResolved, locale)],
+          [t.enrichmentVepOnlyVariants, formatNumber(enrichmentQuality.vepOnlyVariants, locale)],
+          [t.enrichmentResolutionAmbiguous, formatNumber(enrichmentQuality.resolutionCounts?.ambiguous || 0, locale)],
+          [t.enrichmentResolutionAlleleMismatch, formatNumber(enrichmentQuality.resolutionCounts?.vep_colocated_allele_mismatch || 0, locale)],
           [t.enrichmentSourceErrors, formatNumber(Object.values(enrichmentQuality.sourceErrors || {}).reduce((sum, value) => sum + Number(value || 0), 0), locale)],
           [t.enrichmentQualityDecision, enrichmentQuality.status || "-"],
         ]
@@ -1707,6 +1735,26 @@ function MatchResultPanel({ result, locale, t }) {
       `/api/vcf-canon-matches/${result.jobId}/enrichment-evidence-audit`,
       "v2_enrichment_evidence_audit.jsonl",
     );
+  }
+
+  async function downloadEnrichmentVepBase() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/enrichment-vep-base`, "v2_enrichment_vep_base.csv");
+  }
+
+  async function downloadEnrichmentComplete() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/enrichment-complete`, "v2_enrichment_complete.csv");
+  }
+
+  async function downloadEnrichmentVepOnly() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/enrichment-vep-only`, "v2_enrichment_vep_only_audit.csv");
+  }
+
+  async function downloadEnrichmentResolutionAudit() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/enrichment-resolution-audit`, "v2_enrichment_resolution_audit.jsonl");
+  }
+
+  async function downloadEnrichmentPerformance() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/enrichment-performance`, "enrichment_performance_summary.json");
   }
 
   async function downloadGroupedPayloads() {
@@ -1950,6 +1998,26 @@ function MatchResultPanel({ result, locale, t }) {
           <Download size={17} />
           {t.enrichmentEvidenceAuditDownload}
         </button>}
+        {isGeneModuleV2 && artifactReady.enrichmentVepBase && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentVepBase}>
+          <Download size={17} />
+          {t.enrichmentVepBaseDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.enrichmentComplete && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentComplete}>
+          <Download size={17} />
+          {t.enrichmentCompleteDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.enrichmentVepOnly && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentVepOnly}>
+          <Download size={17} />
+          {t.enrichmentVepOnlyDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.enrichmentResolutionAudit && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentResolutionAudit}>
+          <Download size={17} />
+          {t.enrichmentResolutionAuditDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.enrichmentPerformance && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentPerformance}>
+          <Download size={17} />
+          {t.enrichmentPerformanceDownload}
+        </button>}
         {isGeneModuleV2 && artifactReady.groupedPayloads && <button className="secondary-button match-download-button" type="button" onClick={downloadGroupedPayloads}>
           <Download size={17} />
           {t.groupingPayloadsDownload}
@@ -2057,6 +2125,9 @@ function App() {
   const [preparationProgress, setPreparationProgress] = useState(0);
   const [aiTriageProgress, setAiTriageProgress] = useState(0);
   const [enrichmentProgress, setEnrichmentProgress] = useState(0);
+  const [enrichmentVepBaseProgress, setEnrichmentVepBaseProgress] = useState(0);
+  const [enrichmentCompleteProgress, setEnrichmentCompleteProgress] = useState(0);
+  const [enrichmentVepOnlyProgress, setEnrichmentVepOnlyProgress] = useState(0);
   const [enrichmentQualityProgress, setEnrichmentQualityProgress] = useState(0);
   const [groupingPreparationProgress, setGroupingPreparationProgress] = useState(0);
   const [groupedInterpretationProgress, setGroupedInterpretationProgress] = useState(0);
@@ -2084,6 +2155,11 @@ function App() {
     preparation: false,
     aiTriage: false,
     enrichment: false,
+    enrichmentVepBase: false,
+    enrichmentResolutionAudit: false,
+    enrichmentComplete: false,
+    enrichmentVepOnly: false,
+    enrichmentPerformance: false,
     enrichmentInterpretive: false,
     enrichmentPlus: false,
     enrichmentQuality: false,
@@ -2142,6 +2218,9 @@ function App() {
     setPreparationProgress(0);
     setAiTriageProgress(0);
     setEnrichmentProgress(0);
+    setEnrichmentVepBaseProgress(0);
+    setEnrichmentCompleteProgress(0);
+    setEnrichmentVepOnlyProgress(0);
     setEnrichmentQualityProgress(0);
     setGroupingPreparationProgress(0);
     setGroupedInterpretationProgress(0);
@@ -2160,6 +2239,11 @@ function App() {
       preparation: false,
       aiTriage: false,
       enrichment: false,
+      enrichmentVepBase: false,
+      enrichmentResolutionAudit: false,
+      enrichmentComplete: false,
+      enrichmentVepOnly: false,
+      enrichmentPerformance: false,
       enrichmentInterpretive: false,
       enrichmentPlus: false,
       enrichmentQuality: false,
@@ -2299,6 +2383,16 @@ function App() {
           `/api/vcf-canon-matches/${matchResult.jobId}/enrichment-evidence-audit`,
           "v2_enrichment_evidence_audit.jsonl",
         );
+      } else if (kind === "enrichmentVepBase") {
+        await downloadCsv(`/api/vcf-canon-matches/${matchResult.jobId}/enrichment-vep-base`, "v2_enrichment_vep_base.csv");
+      } else if (kind === "enrichmentComplete") {
+        await downloadCsv(`/api/vcf-canon-matches/${matchResult.jobId}/enrichment-complete`, "v2_enrichment_complete.csv");
+      } else if (kind === "enrichmentVepOnly") {
+        await downloadCsv(`/api/vcf-canon-matches/${matchResult.jobId}/enrichment-vep-only`, "v2_enrichment_vep_only_audit.csv");
+      } else if (kind === "enrichmentResolutionAudit") {
+        await downloadCsv(`/api/vcf-canon-matches/${matchResult.jobId}/enrichment-resolution-audit`, "v2_enrichment_resolution_audit.jsonl");
+      } else if (kind === "enrichmentPerformance") {
+        await downloadCsv(`/api/vcf-canon-matches/${matchResult.jobId}/enrichment-performance`, "enrichment_performance_summary.json");
       } else if (kind === "groupedPayloads") {
         await downloadCsv(
           `/api/vcf-canon-matches/${matchResult.jobId}/grouped-payloads`,
@@ -2457,6 +2551,11 @@ function App() {
       preparation: Boolean(ready.preparation),
       aiTriage: Boolean(ready.aiTriage),
       enrichment: Boolean(ready.enrichment),
+      enrichmentVepBase: Boolean(ready.enrichmentVepBase),
+      enrichmentResolutionAudit: Boolean(ready.enrichmentResolutionAudit),
+      enrichmentComplete: Boolean(ready.enrichmentComplete),
+      enrichmentVepOnly: Boolean(ready.enrichmentVepOnly),
+      enrichmentPerformance: Boolean(ready.enrichmentPerformance),
       enrichmentInterpretive: Boolean(ready.enrichmentInterpretive),
       enrichmentPlus: Boolean(ready.enrichmentPlus),
       enrichmentQuality: Boolean(ready.enrichmentQuality),
@@ -2479,6 +2578,11 @@ function App() {
       ready.preparation ||
       ready.aiTriage ||
       ready.enrichment ||
+      ready.enrichmentVepBase ||
+      ready.enrichmentResolutionAudit ||
+      ready.enrichmentComplete ||
+      ready.enrichmentVepOnly ||
+      ready.enrichmentPerformance ||
       ready.enrichmentInterpretive ||
       ready.enrichmentPlus ||
       ready.enrichmentQuality ||
@@ -2549,12 +2653,45 @@ function App() {
         setPreparationProgress(100);
         setAiTriageProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.aiTriageProgress);
+      } else if (job.stage === "enrichment_vep") {
+        setPhase("enrichment_vep");
+        setMatchProgress(100);
+        setNormalizationProgress(100);
+        setPreparationProgress(100);
+        setAiTriageProgress(100);
+        setEnrichmentVepBaseProgress(job.stageProgress ?? job.progress ?? 0);
+        setEnrichmentProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.enriching);
+      } else if (job.stage === "enrichment_complete") {
+        setPhase("enrichment_complete");
+        setMatchProgress(100);
+        setNormalizationProgress(100);
+        setPreparationProgress(100);
+        setAiTriageProgress(100);
+        setEnrichmentVepBaseProgress(100);
+        setEnrichmentCompleteProgress(job.stageProgress ?? job.progress ?? 0);
+        setEnrichmentProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.enriching);
+      } else if (job.stage === "enrichment_vep_only") {
+        setPhase("enrichment_vep_only");
+        setMatchProgress(100);
+        setNormalizationProgress(100);
+        setPreparationProgress(100);
+        setAiTriageProgress(100);
+        setEnrichmentVepBaseProgress(100);
+        setEnrichmentCompleteProgress(100);
+        setEnrichmentVepOnlyProgress(job.stageProgress ?? job.progress ?? 0);
+        setEnrichmentProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.enriching);
       } else if (job.stage === "enriching") {
         setPhase("enriching");
         setMatchProgress(100);
         setNormalizationProgress(100);
         setPreparationProgress(100);
         setAiTriageProgress(100);
+        setEnrichmentVepBaseProgress(100);
+        setEnrichmentCompleteProgress(100);
+        setEnrichmentVepOnlyProgress(0);
         setEnrichmentProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.enriching);
       } else if (job.stage === "enrichment_quality_gate") {
@@ -2563,6 +2700,9 @@ function App() {
         setNormalizationProgress(100);
         setPreparationProgress(100);
         setAiTriageProgress(100);
+        setEnrichmentVepBaseProgress(100);
+        setEnrichmentCompleteProgress(100);
+        setEnrichmentVepOnlyProgress(100);
         setEnrichmentProgress(100);
         setEnrichmentQualityProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.enrichmentQuality);
@@ -2754,6 +2894,9 @@ function App() {
           setPreparationProgress(0);
           setAiTriageProgress(0);
           setEnrichmentProgress(0);
+          setEnrichmentVepBaseProgress(0);
+          setEnrichmentCompleteProgress(0);
+          setEnrichmentVepOnlyProgress(0);
           setEnrichmentQualityProgress(0);
           setGroupingPreparationProgress(0);
           setGroupedInterpretationProgress(0);
@@ -2770,6 +2913,11 @@ function App() {
             preparation: false,
             aiTriage: false,
             enrichment: false,
+            enrichmentVepBase: false,
+            enrichmentResolutionAudit: false,
+            enrichmentComplete: false,
+            enrichmentVepOnly: false,
+            enrichmentPerformance: false,
             enrichmentInterpretive: false,
             enrichmentPlus: false,
             enrichmentQuality: false,
@@ -2874,6 +3022,15 @@ function App() {
     }
     if (nextMatchResult?.artifactsReady?.enrichment || nextMatchResult?.variantEnrichment) {
       setEnrichmentProgress(100);
+    }
+    if (nextMatchResult?.artifactsReady?.enrichmentVepBase) {
+      setEnrichmentVepBaseProgress(100);
+    }
+    if (nextMatchResult?.artifactsReady?.enrichmentComplete) {
+      setEnrichmentCompleteProgress(100);
+    }
+    if (nextMatchResult?.artifactsReady?.enrichmentVepOnly) {
+      setEnrichmentVepOnlyProgress(100);
     }
     if (nextMatchResult?.artifactsReady?.enrichmentQuality || nextMatchResult?.metadata?.enrichment_quality_gate) {
       setEnrichmentQualityProgress(100);
@@ -3224,6 +3381,11 @@ function App() {
       preparation: false,
       aiTriage: false,
       enrichment: false,
+      enrichmentVepBase: false,
+      enrichmentResolutionAudit: false,
+      enrichmentComplete: false,
+      enrichmentVepOnly: false,
+      enrichmentPerformance: false,
       enrichmentInterpretive: false,
       enrichmentPlus: false,
       enrichmentQuality: false,
@@ -3520,23 +3682,50 @@ function App() {
             downloadReady={matchArtifactsReady.aiTriage}
           />
         )}
-        <ProgressBar
-          label={t.enrichmentProgress}
-          value={enrichmentProgress}
-          detail={stageProgressDetails.enriching || ""}
-          tone="blue"
-          downloadLabel={t.enrichmentDownload}
-          onDownload={matchResult?.jobId ? () => downloadMatchArtifact("enrichment") : null}
-          downloadReady={matchArtifactsReady.enrichmentInterpretive}
-          onPlay={analysisMode === "qa" && isGeneModuleV2 ? retryEnrichment : null}
-          playLabel={`${t.playStage}: ${t.enrichmentProgress}`}
-          playDisabled={
-            !uploadRecord ||
-            !result ||
-            result.status === "invalid" ||
-            isBusyPhase(phase)
-          }
-        />
+        {isGeneModuleV2 ? (
+          <>
+            <ProgressBar
+              label={t.enrichmentVepBaseProgress}
+              value={enrichmentVepBaseProgress}
+              detail={stageProgressDetails.enrichment_vep || ""}
+              tone="blue"
+              downloadLabel={t.enrichmentVepBaseDownload}
+              onDownload={matchResult?.jobId ? () => downloadMatchArtifact("enrichmentVepBase") : null}
+              downloadReady={matchArtifactsReady.enrichmentVepBase}
+            />
+            <ProgressBar
+              label={t.enrichmentCompleteProgress}
+              value={enrichmentCompleteProgress}
+              detail={stageProgressDetails.enrichment_complete || ""}
+              tone="blue"
+              downloadLabel={t.enrichmentCompleteDownload}
+              onDownload={matchResult?.jobId ? () => downloadMatchArtifact("enrichmentComplete") : null}
+              downloadReady={matchArtifactsReady.enrichmentComplete}
+            />
+            <ProgressBar
+              label={t.enrichmentVepOnlyProgress}
+              value={enrichmentVepOnlyProgress}
+              detail={stageProgressDetails.enrichment_vep_only || ""}
+              tone="blue"
+              downloadLabel={t.enrichmentVepOnlyDownload}
+              onDownload={matchResult?.jobId ? () => downloadMatchArtifact("enrichmentVepOnly") : null}
+              downloadReady={matchArtifactsReady.enrichmentVepOnly}
+            />
+          </>
+        ) : (
+          <ProgressBar
+            label={t.enrichmentProgress}
+            value={enrichmentProgress}
+            detail={stageProgressDetails.enriching || ""}
+            tone="blue"
+            downloadLabel={t.enrichmentDownload}
+            onDownload={matchResult?.jobId ? () => downloadMatchArtifact("enrichment") : null}
+            downloadReady={matchArtifactsReady.enrichmentInterpretive}
+            onPlay={analysisMode === "qa" ? retryEnrichment : null}
+            playLabel={`${t.playStage}: ${t.enrichmentProgress}`}
+            playDisabled={!uploadRecord || !result || result.status === "invalid" || isBusyPhase(phase)}
+          />
+        )}
         {(!matchResult || isGeneModuleV2) && (
           <ProgressBar
             label={t.enrichmentQualityProgress}
