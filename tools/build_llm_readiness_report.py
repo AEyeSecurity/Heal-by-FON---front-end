@@ -20,7 +20,7 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
 INK = "15324B"
@@ -215,6 +215,7 @@ def build_docx(summary: dict, samples: list[dict], groups: list[dict], completen
         ["Errores VEP", f"{findings['vep_errors']:,}", "La consecuencia funcional queda bloqueada."],
         ["Identidad no resuelta", f"{findings['identity_unresolved']:,}", "La evidencia secundaria no puede atribuirse con seguridad."],
         ["Error en alguna fuente secundaria", f"{findings['source_error_variants']:,}", "Error operativo no equivale a ausencia de evidencia."],
+        ["Leakage del prefilter intermedio", f"{findings['normalization_prefilter_leakage_rows']:,}", "Las filas finales fueron revalidadas, pero este paso agrega costo y debe corregirse."],
     ], [2.15, 0.85, 3.0])
     comparison = summary.get("previous_run_comparison", {})
     add_heading(doc, "Comparacion con la corrida anterior", 2)
@@ -355,6 +356,7 @@ def build_pdf(summary: dict, samples: list[dict], output: Path):
         f"{findings['spliceai_zero_signal']:,} variantes tienen SpliceAI poblado pero score maximo <0,10.",
         f"{findings['vep_errors']:,} variantes tienen error VEP y {findings['identity_unresolved']:,} no poseen identidad exacta confirmada.",
         f"{findings['source_error_variants']:,} variantes tienen al menos un error de fuente secundaria.",
+        f"El prefilter intermedio dejo pasar {findings['normalization_prefilter_leakage_rows']:,} registros fuera de target; no contaminaron las 20.492 filas finales, pero explican costo evitable.",
         "La ausencia en un VCF sparse no demuestra homocigosis de referencia ni callability; CNV y VNTR siguen no evaluados.",
         "Frente al baseline, las cardinalidades son iguales: hubo +78 exitos Ensembl y +84 ClinVar, pero la remediacion por coordenadas resolvio 0 identidades exactas y agrego deuda de errores ClinVar.",
     ):
@@ -367,7 +369,7 @@ def build_pdf(summary: dict, samples: list[dict], output: Path):
         "GWAS es asociacion poblacional. PharmGKB es contexto gen-farmaco. ClinVar exige coincidencia de alelo y review status.",
     ):
         story.append(Paragraph(f"- {text}", styles["bullet"]))
-    story += [PageBreak(), Paragraph("4. Readiness", styles["h1"])]
+    story += [Paragraph("4. Readiness", styles["h1"])]
     story.append(pdf_table([["Gate", "Estado", "Motivo"]] + [[name, value["status"], Paragraph(value["reason"], styles["small"])] for name, value in summary["gates"].items()], [1.65 * inch, 0.65 * inch, 3.8 * inch]))
     story += [Paragraph("5. Muestra representativa", styles["h1"]), Paragraph("El workbook contiene las 50 variantes fisicas y sus 61 proyecciones gen-modulo. Estos cuatro casos ilustran el rango de informacion disponible.", styles["body"])]
     story.append(Paragraph("La muestra cubre coding/protein, splice, ClinVar no benigno, PharmGKB, GWAS, discordancia UTR/intron, identidad no resuelta y errores de fuente. Cada caso incluye informacion disponible, limitaciones y campos de aprobacion profesional.", styles["body"]))
@@ -377,7 +379,7 @@ def build_pdf(summary: dict, samples: list[dict], output: Path):
     story += [Paragraph("7. Checklist profesional", styles["h1"])]
     for text in ("Revisar las 50 variantes y completar la plantilla Bioinfo Review.", "Validar ClinVar no benigno, VUS/conflictos, indels e identidades ambiguas.", "Resolver UTR/intron contra MANE/canonical y transcritos relevantes.", "Revisar SpliceAI >=0,10 y separar source_error de not_found.", "Curar funcion, pathway, directionality, evidencia y fuentes por gen-modulo.", "Aprobar o rechazar el piloto solamente despues de que pasen los cuatro gates."):
         story.append(Paragraph(f"- {text}", styles["bullet"]))
-    story += [Paragraph("8. Conclusion", styles["h1"]), Paragraph("La plataforma esta lista para QA deterministico y diseño de payloads, no para interpretacion productiva. Cerrar identidad/transcriptos y curar mecanismos es el camino mas corto para reducir 7.486 filas a 180 grupos auditables sin introducir conclusiones biologicas no sustentadas.", styles["body"])]
+    story += [Paragraph("8. Conclusion", styles["h1"]), Paragraph("La plataforma esta lista para QA deterministico y payloads, no para interpretacion productiva. Resolver identidad/transcriptos y curar mecanismos permite reducir 7.486 filas a 180 grupos auditables.", styles["body"])]
 
     def footer(canvas, document):
         canvas.saveState()

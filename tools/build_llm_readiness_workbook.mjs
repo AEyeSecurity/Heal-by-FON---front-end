@@ -175,8 +175,9 @@ const findingRows = [
   ["Unresolved identity", summary.findings.identity_unresolved, null, "Do not promote secondary evidence"],
   ["Source error variants", summary.findings.source_error_variants, null, "Separate from not_found"],
   ["SpliceAI <0.10", summary.findings.spliceai_zero_signal, null, "No attention increment"],
+  ["Intermediate prefilter leakage", summary.findings.normalization_prefilter_leakage_rows, null, "Fix before performance sign-off"],
 ];
-overview.getRange("A17:D20").values = findingRows;
+overview.getRange("A17:D21").values = findingRows;
 overview.getRange("C17").formulas = [["=B17/$C$12"]];
 overview.getRange("C17:C20").fillDown();
 overview.getRange("C17:C20").format.numberFormat = "0.0%";

@@ -542,6 +542,7 @@ La corrida termino y sus artefactos principales son reconciliables. Sin embargo,
 - SpliceAI aparece en {findings['spliceai_populated']} variantes, pero {findings['spliceai_zero_signal']} tienen score maximo menor a 0.10.
 - {findings['vep_errors']} variantes tienen error VEP y {findings['identity_unresolved']} no poseen identidad exacta confirmada.
 - {findings['source_error_variants']} variantes tienen al menos un error de fuente secundaria.
+- El prefilter intermedio dejo pasar {findings['normalization_prefilter_leakage_rows']} registros fuera de target; las {counts['normalized_variants']} variantes finales fueron revalidadas, pero el costo operativo debe corregirse.
 - El canon tiene {counts['canonical_rows']} filas de estado, pero el VCF sparse no permite inferir homocigosis de referencia ni callability ante ausencia.
 - El registro de mecanismos fue generado como template y requiere curacion profesional antes de llegar a LLM1.
 
@@ -583,6 +584,7 @@ def process(run_dir: Path, canon_clean: Path, output_dir: Path, previous_summary
     run_dir = run_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     paths = {
+        "normalization_summary": run_dir / "normalization" / "normalization_summary.json",
         "normalized": run_dir / "normalization" / "normalized_variants.csv.gz",
         "variant_gene": run_dir / "matching" / "vcf_variant_gene_matches.csv",
         "matched_modules": run_dir / "matching" / "sheet_final_consolidated.csv",
@@ -626,7 +628,12 @@ def process(run_dir: Path, canon_clean: Path, output_dir: Path, previous_summary
     write_csv(output_dir / "bioinformatician_review_template.csv", review_rows)
     raw_count = extract_raw_evidence(paths["plus"], sample_keys, output_dir / "llm_readiness_sample_50_raw_evidence.jsonl.gz")
 
+    normalization_summary = json.loads(paths["normalization_summary"].read_text(encoding="utf-8"))
     quality = json.loads(paths["quality"].read_text(encoding="utf-8"))
+    normalization_prefilter_leakage = as_int(
+        (normalization_summary.get("counts") or {}).get("normalized_outside_target")
+        or (normalization_summary.get("qualityGate") or {}).get("targetLeakageRows")
+    )
     readiness_counts = Counter(clean(row.get("readiness_axis")) for row in audit_rows)
     functional_counts = Counter(clean(row.get("functional_axis")) for row in audit_rows)
     evidence_counts = Counter(clean(row.get("evidence_axis")) for row in audit_rows)
@@ -655,7 +662,10 @@ def process(run_dir: Path, canon_clean: Path, output_dir: Path, previous_summary
     gates = {
         "extraction_contract_ready": {
             "status": "partial" if canonical_complete else "fail",
-            "reason": "Canon coverage is explicit, but sparse VCF callability, hom-ref, CNV and VNTR remain unknown/not assessed.",
+            "reason": (
+                "Canon coverage is explicit, but sparse VCF callability, hom-ref, CNV and VNTR remain unknown/not assessed; "
+                f"the intermediate normalization prefilter also leaked {normalization_prefilter_leakage} non-target rows before final validation."
+            ),
         },
         "annotation_ready": {
             "status": "pass" if annotation_ready else "fail",
@@ -731,6 +741,7 @@ def process(run_dir: Path, canon_clean: Path, output_dir: Path, previous_summary
             "vep_errors": sum(1 for row in audit_rows if clean(row.get("vep_status")) != "success"),
             "identity_unresolved": sum(1 for row in audit_rows if clean(row.get("identity_axis")) not in {"exact_coordinate_allele", "normalized_indel_match"}),
             "source_error_variants": source_error_variants,
+            "normalization_prefilter_leakage_rows": normalization_prefilter_leakage,
             "annotation_conflict_rows": len(conflict_rows),
         },
         "gates": gates,
