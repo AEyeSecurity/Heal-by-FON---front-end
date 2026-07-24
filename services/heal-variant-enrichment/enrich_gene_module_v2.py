@@ -1637,6 +1637,10 @@ def main_process(payload: dict) -> dict:
         legacy_path=legacy_cache_path,
     )
     atexit.register(cache.close)
+    analysis_mode = clean(payload.get("analysisMode") or payload.get("analysis_mode") or "quick").lower()
+    if analysis_mode not in {"quick", "complete", "qa"}:
+        analysis_mode = "quick"
+    coordinate_identity_enabled = analysis_mode in {"complete", "qa"}
     rows = [row for row in read_csv(input_path) if clean(row.get("variant_key")) and clean(row.get("has_genotype")).lower() in {"true", "1", "yes"}]
     if not rows:
         raise ValueError("AI triage input contains no observed v2 physical variants.")
@@ -1758,30 +1762,63 @@ def main_process(payload: dict) -> dict:
             metrics=metrics,
         )
 
-    identity_metrics = resolve_coordinate_variants(
-        physical_variants,
-        enrichments_by_variant,
-        assembly,
-        cache,
-        timeout_seconds,
-        on_progress=on_identity_progress,
-    )
-    myvariant_identity_metrics = resolve_myvariant_coordinate_variants(
-        physical_variants,
-        enrichments_by_variant,
-        assembly,
-        cache,
-        timeout_seconds,
-        on_progress=on_identity_progress,
-    )
-    clinvar_coordinate_metrics = fetch_clinvar_coordinate_variants(
-        physical_variants,
-        enrichments_by_variant,
-        assembly,
-        cache,
-        timeout_seconds,
-        on_progress=on_identity_progress,
-    )
+    if coordinate_identity_enabled:
+        identity_metrics = resolve_coordinate_variants(
+            physical_variants,
+            enrichments_by_variant,
+            assembly,
+            cache,
+            timeout_seconds,
+            on_progress=on_identity_progress,
+        )
+        myvariant_identity_metrics = resolve_myvariant_coordinate_variants(
+            physical_variants,
+            enrichments_by_variant,
+            assembly,
+            cache,
+            timeout_seconds,
+            on_progress=on_identity_progress,
+        )
+        clinvar_coordinate_metrics = fetch_clinvar_coordinate_variants(
+            physical_variants,
+            enrichments_by_variant,
+            assembly,
+            cache,
+            timeout_seconds,
+            on_progress=on_identity_progress,
+        )
+    else:
+        skipped_metrics = {
+            "total": 0,
+            "completed": 0,
+            "cache_hits": 0,
+            "network_calls": 0,
+            "resolved": 0,
+            "not_found": 0,
+            "source_errors": 0,
+            "elapsed_seconds": 0.0,
+            "skipped": True,
+            "skip_reason": "coordinate_identity_resolution_disabled_for_quick_analysis",
+            "query_mode": "coordinate",
+        }
+        identity_metrics = {**skipped_metrics, "source": "ensembl_variation"}
+        myvariant_identity_metrics = {**skipped_metrics, "source": "myvariant"}
+        clinvar_coordinate_metrics = {**skipped_metrics, "source": "clinvar"}
+        write_progress(
+            output_dir,
+            stage="enrichment_identity",
+            phase="identity_resolution",
+            substage="skipped_quick_analysis",
+            processed=0,
+            total=0,
+            unit="physical variants",
+            message="Coordinate/HGVS identity rescue skipped for superficial analysis",
+            metrics={
+                "analysisMode": analysis_mode,
+                "coordinateIdentityEnabled": False,
+                "reason": "quick_analysis_keeps_vep_and_exact_rsid_enrichment_only",
+            },
+        )
     resolution_counts["coordinate_exact_allele"] = int(identity_metrics.get("resolved") or 0) + int(myvariant_identity_metrics.get("resolved") or 0)
 
     base_rows, base_evidence_rows = materialize_module_rows(rows, variants, enrichments_by_variant, vep_raw)
@@ -1978,6 +2015,8 @@ def main_process(payload: dict) -> dict:
 
     identity_summary = {
         "schemaVersion": "gene_module_v2",
+        "analysisMode": analysis_mode,
+        "coordinateIdentityEnabled": coordinate_identity_enabled,
         "physicalVariants": len(physical_variants),
         "vepResolved": sum(1 for value in enrichments_by_variant.values() if clean(value.get("rsid_resolution_status", "")).startswith("vep_")),
         "coordinateResolved": int(identity_metrics.get("resolved") or 0),
@@ -1997,6 +2036,8 @@ def main_process(payload: dict) -> dict:
 
     performance = {
         "schemaVersion": "gene_module_v2",
+        "analysisMode": analysis_mode,
+        "coordinateIdentityEnabled": coordinate_identity_enabled,
         "startedAt": started_at,
         "completedAt": utc_now(),
         "elapsedSeconds": time.perf_counter() - process_started,
@@ -2069,7 +2110,9 @@ def main_process(payload: dict) -> dict:
     }
     gate_status = technical_gate["status"]
     quality = {
-        "schemaVersion": "gene_module_v2", "status": gate_status, "createdAt": utc_now(),
+        "schemaVersion": "gene_module_v2", "analysisMode": analysis_mode,
+        "coordinateIdentityEnabled": coordinate_identity_enabled,
+        "status": gate_status, "createdAt": utc_now(),
         "normalizationValidRate": normalization_rate, "minimumNormalizationValidRate": 0.99,
         "physicalVariants": len(physical_variants), "moduleRows": len(rows),
         "vepSuccessfulVariants": vep_success_count, "vepCoverage": vep_coverage, "minimumVepCoverage": minimum_vep_coverage,
@@ -2096,6 +2139,7 @@ def main_process(payload: dict) -> dict:
     write_json(quality_path, quality)
     summary = {
         "status": "valid", "schemaVersion": "gene_module_v2", "adapter": "gene_module_coordinate_enrichment",
+        "analysisMode": analysis_mode,
         "startedAt": started_at, "completedAt": utc_now(), "inputPath": str(input_path),
         "observedVariantEnrichmentCsv": str(output_csv), "observedVariantEnrichmentColabCsv": str(observed_csv),
         "observedVariantEnrichmentPlusCsv": str(plus_csv), "v2EnrichmentVariantMasterCsv": str(master_csv),
