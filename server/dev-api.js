@@ -3036,7 +3036,9 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         const groupedPrepRunId = `group-prep-${runId}`;
         const groupedPrepOutputDir = jobStageDirectory(job.id, "group-prep");
         await mkdir(groupedPrepOutputDir, { recursive: true });
-        const enrichmentPlusPath = path.resolve(job.artifacts.observedVariantEnrichmentPlusCsv || "");
+        const enrichmentPlusPath = path.resolve(
+          job.artifacts.v2EnrichmentModuleProjectionCsv || job.artifacts.observedVariantEnrichmentPlusCsv || "",
+        );
         if (!isPathInside(enrichmentPaths.root, enrichmentPlusPath)) {
           throw new Error("Grouped interpretation prep input is outside the allowed enrichment root.");
         }
@@ -3060,6 +3062,25 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           ...job.result,
           groupPrep: sanitizeGroupedInterpretationPrepResult(groupedPrepSummary),
         };
+
+        if (groupedPrepSummary.gates?.groupPayloadReady !== "pass") {
+          job.status = "complete";
+          job.progress = 100;
+          job.stage = "grouping_preparation";
+          job.stageProgress = 100;
+          job.message = "Grouped payload v3 dry-run completed; professional curation gates remain blocked";
+          job.result = {
+            ...job.result,
+            metadata: {
+              ...(job.result?.metadata || {}),
+              downstream_supported: false,
+              downstream_input: "llm1_group_payload_v3_dry_run",
+              downstream_message:
+                "Grouped payload v3 was generated without LLM calls. LLM1 remains blocked until canonical status, annotation, mechanism curation, and professional approval gates pass.",
+            },
+          };
+          return;
+        }
 
         job.progress = 97;
         job.stage = "grouped_individual_interpretation";

@@ -44,7 +44,8 @@
         "mixed_signal_with_priority_variants",
         "utr_contextual_signal",
         "conflicting_group_review_needed",
-        "limited_group_signal"
+        "limited_group_signal",
+        "abstained_insufficient_evidence"
       ]
     },
     "interpretation_one_sentence_en": { "type": "string" },
@@ -55,7 +56,7 @@
     "technical_interpretation_es": { "type": "string" },
     "final_confidence_level": {
       "type": "string",
-      "enum": ["High", "Moderate", "Low", "Conflicting"]
+      "enum": ["High", "Moderate", "Low", "Conflicting", "Abstain"]
     },
     "confidence_rationale_en": { "type": "string" },
     "confidence_rationale_es": { "type": "string" },
