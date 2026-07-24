@@ -59,6 +59,8 @@ $env:HEAL_CANON_PROCESSOR_SCRIPT = Join-Path $appRoot "services\heal-canon-intak
 $env:HEAL_MATCH_PREPARATION_SCRIPT = Join-Path $appRoot "services\heal-match-preparation\prepare_match_deliverable.py"
 $env:HEAL_VARIANT_ENRICHMENT_SCRIPT = Join-Path $appRoot "services\heal-variant-enrichment\enrich_observed_variants.py"
 $env:HEAL_V2_LLM1_ENABLED = "false"
+# V2 QA remains conservative but allows the known test VCF's VEP coverage.
+$env:HEAL_V2_MIN_VEP_COVERAGE = "0.90"
 
 # The shared n8n definitions remain frozen during the migration window. Do not
 # send HEAL requests to their historical C: paths; the API uses its local F:

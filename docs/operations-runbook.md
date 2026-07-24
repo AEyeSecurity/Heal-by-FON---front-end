@@ -237,7 +237,7 @@ The manifest records the source URL, retrieval time and SHA-256 hashes. To provi
 F:\Heal by FON\app\services\heal-vcf-normalization\provision_grch38_reference.ps1
 ```
 
-V2 uses the local coordinate enrichment service rather than the legacy n8n rsID workflow. `HEAL_V2_LLM1_ENABLED=false` is the safe default: jobs stop at `enrichment_quality_gate`, and LLM1/grouping remains unavailable until normalization and VEP coverage pass review.
+V2 uses the local coordinate enrichment service rather than the legacy n8n rsID workflow. `HEAL_V2_LLM1_ENABLED=false` is the safe default: jobs stop at `enrichment_quality_gate`, and LLM1/grouping remains unavailable until normalization and VEP coverage pass review. The default VEP quality threshold is `0.90`, configurable through `HEAL_V2_MIN_VEP_COVERAGE`.
 
 During the migration freeze, legacy n8n workflow URLs are intentionally disabled in the F: API launcher. Their two versioned definitions have F: paths and an F: backup, but they must be edited through authenticated n8n UI before the C: fallback is removed. Do not use the n8n CLI import command because it deactivates active workflows.
 

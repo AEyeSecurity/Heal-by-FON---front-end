@@ -91,6 +91,10 @@ const ALLOWED_LLM2_MODELS = new Set(
 );
 const ALLOW_LLM_DRY_RUN = process.env.HEAL_ALLOW_LLM_DRY_RUN === "true";
 const HEAL_V2_LLM1_ENABLED = process.env.HEAL_V2_LLM1_ENABLED === "true";
+const HEAL_V2_MIN_VEP_COVERAGE = Math.min(
+  1,
+  Math.max(0, Number.parseFloat(process.env.HEAL_V2_MIN_VEP_COVERAGE || "0.90") || 0.90),
+);
 const MAINTENANCE_MODE = process.env.HEAL_MAINTENANCE_MODE === "true";
 const DEPLOYMENT_SHA = process.env.HEAL_DEPLOYMENT_SHA || "unknown";
 const NORMALIZER_IMAGE = process.env.HEAL_VCF_NORMALIZER_IMAGE || "heal-vcf-normalizer:1.0.0";
@@ -1840,6 +1844,7 @@ app.get("/api/health", async (_req, res) => {
     n8nVcfCanonMatchWebhookConfigured: Boolean(N8N_VCF_CANON_MATCH_WEBHOOK_URL),
     n8nVariantEnrichmentWebhookConfigured: Boolean(N8N_VARIANT_ENRICHMENT_WEBHOOK_URL),
     v2Llm1Enabled: HEAL_V2_LLM1_ENABLED,
+    v2MinVepCoverage: HEAL_V2_MIN_VEP_COVERAGE,
     n8nIndividualInterpretationWebhookConfigured: Boolean(N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL),
     n8nGlobalInterpretationWebhookConfigured: Boolean(N8N_GLOBAL_INTERPRETATION_WEBHOOK_URL),
   });

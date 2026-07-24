@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -36,6 +37,13 @@ enrichment = load_module("heal_v2_enrichment_test", ENRICHMENT_PATH)
 
 
 class V2EnrichmentRemediationTests(unittest.TestCase):
+    def test_vep_quality_gate_threshold_is_configurable(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HEAL_V2_MIN_VEP_COVERAGE", None)
+            self.assertEqual(enrichment.configured_min_vep_coverage(), 0.90)
+        with patch.dict(os.environ, {"HEAL_V2_MIN_VEP_COVERAGE": "0.92"}):
+            self.assertEqual(enrichment.configured_min_vep_coverage(), 0.92)
+
     def test_detects_grch38_and_splits_observed_multiallelic_genotype(self):
         with tempfile.TemporaryDirectory() as temporary:
             vcf_path = Path(temporary) / "sample.vcf"

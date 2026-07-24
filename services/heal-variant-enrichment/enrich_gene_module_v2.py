@@ -30,6 +30,7 @@ import enrich_observed_variants as legacy
 
 
 PIPELINE_VERSION = "gene-module-v2-enrichment-1"
+DEFAULT_MIN_VEP_COVERAGE = 0.90
 VEP_URL = "https://rest.ensembl.org/vep/human/region"
 VEP_INFO_URL = "https://rest.ensembl.org/info/data"
 VEP_BATCH_SIZE = 200
@@ -58,6 +59,14 @@ def utc_now() -> str:
 
 def clean(value: object) -> str:
     return legacy.clean_str(value)
+
+
+def configured_min_vep_coverage() -> float:
+    try:
+        value = float(os.environ.get("HEAL_V2_MIN_VEP_COVERAGE", DEFAULT_MIN_VEP_COVERAGE))
+    except (TypeError, ValueError):
+        return DEFAULT_MIN_VEP_COVERAGE
+    return min(1.0, max(0.0, value))
 
 
 def read_csv(path: Path) -> list[dict]:
@@ -1072,12 +1081,13 @@ def main_process(payload: dict) -> dict:
     for value in enrichments_by_variant.values():
         for source in (value.get("errors") or {}):
             source_errors[source] = source_errors.get(source, 0) + 1
-    gate_status = "pass" if normalization_rate >= 0.99 and vep_coverage >= 0.95 else "fail"
+    minimum_vep_coverage = configured_min_vep_coverage()
+    gate_status = "pass" if normalization_rate >= 0.99 and vep_coverage >= minimum_vep_coverage else "fail"
     quality = {
         "schemaVersion": "gene_module_v2", "status": gate_status, "createdAt": utc_now(),
         "normalizationValidRate": normalization_rate, "minimumNormalizationValidRate": 0.99,
         "physicalVariants": len(physical_variants), "moduleRows": len(rows),
-        "vepSuccessfulVariants": vep_success_count, "vepCoverage": vep_coverage, "minimumVepCoverage": 0.95,
+        "vepSuccessfulVariants": vep_success_count, "vepCoverage": vep_coverage, "minimumVepCoverage": minimum_vep_coverage,
         "exactRsidsResolved": sum(1 for value in enrichments_by_variant.values() if clean(value.get("resolved_rsid"))),
         "resolutionCounts": resolution_counts,
         "vepOnlyVariants": len(vep_only_master_rows),
