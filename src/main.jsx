@@ -369,6 +369,7 @@ const COPY = {
     enrichmentVepBaseDownload: "Descargar base VEP",
     enrichmentCompleteDownload: "Descargar enrichment completo",
     enrichmentVepOnlyDownload: "Descargar auditoria VEP-only",
+    enrichmentPhysicalMatrixDownload: "Descargar matriz fisica por variante",
     enrichmentResolutionAuditDownload: "Descargar auditoria de resolucion",
     enrichmentPerformanceDownload: "Descargar metricas de rendimiento",
     enrichmentEvidenceAuditDownload: "Descargar evidencia enrichment",
@@ -661,6 +662,7 @@ const COPY = {
     enrichmentVepBaseDownload: "Download VEP base",
     enrichmentCompleteDownload: "Download complete enrichment",
     enrichmentVepOnlyDownload: "Download VEP-only audit",
+    enrichmentPhysicalMatrixDownload: "Download physical variant matrix",
     enrichmentResolutionAuditDownload: "Download resolution audit",
     enrichmentPerformanceDownload: "Download performance metrics",
     enrichmentEvidenceAuditDownload: "Download enrichment evidence audit",
@@ -1749,6 +1751,13 @@ function MatchResultPanel({ result, locale, t }) {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/enrichment-vep-only`, "v2_enrichment_vep_only_audit.csv");
   }
 
+  async function downloadEnrichmentPhysicalMatrix() {
+    await downloadCsv(
+      `/api/vcf-canon-matches/${result.jobId}/enrichment-physical-matrix`,
+      "v2_enrichment_physical_matrix.csv",
+    );
+  }
+
   async function downloadEnrichmentResolutionAudit() {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/enrichment-resolution-audit`, "v2_enrichment_resolution_audit.jsonl");
   }
@@ -2010,6 +2019,10 @@ function MatchResultPanel({ result, locale, t }) {
           <Download size={17} />
           {t.enrichmentVepOnlyDownload}
         </button>}
+        {isGeneModuleV2 && artifactReady.enrichmentPhysicalMatrix && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentPhysicalMatrix}>
+          <Download size={17} />
+          {t.enrichmentPhysicalMatrixDownload}
+        </button>}
         {isGeneModuleV2 && artifactReady.enrichmentResolutionAudit && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentResolutionAudit}>
           <Download size={17} />
           {t.enrichmentResolutionAuditDownload}
@@ -2159,6 +2172,7 @@ function App() {
     enrichmentResolutionAudit: false,
     enrichmentComplete: false,
     enrichmentVepOnly: false,
+    enrichmentPhysicalMatrix: false,
     enrichmentPerformance: false,
     enrichmentInterpretive: false,
     enrichmentPlus: false,
@@ -2243,6 +2257,7 @@ function App() {
       enrichmentResolutionAudit: false,
       enrichmentComplete: false,
       enrichmentVepOnly: false,
+      enrichmentPhysicalMatrix: false,
       enrichmentPerformance: false,
       enrichmentInterpretive: false,
       enrichmentPlus: false,
@@ -2555,6 +2570,7 @@ function App() {
       enrichmentResolutionAudit: Boolean(ready.enrichmentResolutionAudit),
       enrichmentComplete: Boolean(ready.enrichmentComplete),
       enrichmentVepOnly: Boolean(ready.enrichmentVepOnly),
+      enrichmentPhysicalMatrix: Boolean(ready.enrichmentPhysicalMatrix),
       enrichmentPerformance: Boolean(ready.enrichmentPerformance),
       enrichmentInterpretive: Boolean(ready.enrichmentInterpretive),
       enrichmentPlus: Boolean(ready.enrichmentPlus),
@@ -2582,6 +2598,7 @@ function App() {
       ready.enrichmentResolutionAudit ||
       ready.enrichmentComplete ||
       ready.enrichmentVepOnly ||
+      ready.enrichmentPhysicalMatrix ||
       ready.enrichmentPerformance ||
       ready.enrichmentInterpretive ||
       ready.enrichmentPlus ||
@@ -2917,6 +2934,7 @@ function App() {
             enrichmentResolutionAudit: false,
             enrichmentComplete: false,
             enrichmentVepOnly: false,
+            enrichmentPhysicalMatrix: false,
             enrichmentPerformance: false,
             enrichmentInterpretive: false,
             enrichmentPlus: false,

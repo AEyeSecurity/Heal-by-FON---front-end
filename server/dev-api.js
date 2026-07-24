@@ -635,6 +635,7 @@ function publicArtifactsReady(job) {
     enrichmentResolutionAudit: artifactExists(artifacts.v2EnrichmentResolutionAuditJsonl),
     enrichmentComplete: artifactExists(artifacts.v2EnrichmentCompleteCsv),
     enrichmentVepOnly: artifactExists(artifacts.v2EnrichmentVepOnlyAuditCsv),
+    enrichmentPhysicalMatrix: artifactExists(artifacts.v2EnrichmentPhysicalMatrixCsv),
     enrichmentPerformance: artifactExists(artifacts.enrichmentPerformanceSummaryJson),
     groupedPayloads: artifactExists(artifacts.groupPayloadsCsv || artifacts.groupPayloadsJsonl),
     groupedVariantDetail: artifactExists(artifacts.groupVariantDetailCsv),
@@ -2825,6 +2826,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           v2EnrichmentResolutionAuditJsonl: path.join(enrichmentOutputDir, "v2_enrichment_resolution_audit.jsonl"),
           v2EnrichmentCompleteCsv: path.join(enrichmentOutputDir, "v2_enrichment_complete.csv"),
           v2EnrichmentVepOnlyAuditCsv: path.join(enrichmentOutputDir, "v2_enrichment_vep_only_audit.csv"),
+          v2EnrichmentPhysicalMatrixCsv: path.join(enrichmentOutputDir, "v2_enrichment_physical_matrix.csv"),
           enrichmentPerformanceSummaryJson: path.join(enrichmentOutputDir, "enrichment_performance_summary.json"),
         });
         await persistVcfCanonJob(job);
@@ -2857,6 +2859,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         job.artifacts.v2EnrichmentResolutionAuditJsonl = enrichmentSummary.outputs?.v2EnrichmentResolutionAuditJsonl || job.artifacts.v2EnrichmentResolutionAuditJsonl || "";
         job.artifacts.v2EnrichmentCompleteCsv = enrichmentSummary.outputs?.v2EnrichmentCompleteCsv || job.artifacts.v2EnrichmentCompleteCsv || "";
         job.artifacts.v2EnrichmentVepOnlyAuditCsv = enrichmentSummary.outputs?.v2EnrichmentVepOnlyAuditCsv || job.artifacts.v2EnrichmentVepOnlyAuditCsv || "";
+        job.artifacts.v2EnrichmentPhysicalMatrixCsv = enrichmentSummary.outputs?.v2EnrichmentPhysicalMatrixCsv || job.artifacts.v2EnrichmentPhysicalMatrixCsv || "";
         job.artifacts.enrichmentPerformanceSummaryJson = enrichmentSummary.outputs?.enrichmentPerformanceSummaryJson || job.artifacts.enrichmentPerformanceSummaryJson || "";
         if (!job.artifacts.observedVariantEnrichmentPlusCsv || !job.artifacts.enrichmentQualitySummaryJson) {
           throw new Error("Coordinate enrichment did not produce its required v2 artifacts.");
@@ -3127,6 +3130,7 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
           v2EnrichmentResolutionAuditJsonl: path.join(enrichmentOutputDir, "v2_enrichment_resolution_audit.jsonl"),
           v2EnrichmentCompleteCsv: path.join(enrichmentOutputDir, "v2_enrichment_complete.csv"),
           v2EnrichmentVepOnlyAuditCsv: path.join(enrichmentOutputDir, "v2_enrichment_vep_only_audit.csv"),
+          v2EnrichmentPhysicalMatrixCsv: path.join(enrichmentOutputDir, "v2_enrichment_physical_matrix.csv"),
           enrichmentPerformanceSummaryJson: path.join(enrichmentOutputDir, "enrichment_performance_summary.json"),
         });
         await persistVcfCanonJob(job);
@@ -3156,6 +3160,7 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
       job.artifacts.v2EnrichmentResolutionAuditJsonl = enrichmentSummary.outputs?.v2EnrichmentResolutionAuditJsonl || job.artifacts.v2EnrichmentResolutionAuditJsonl || "";
       job.artifacts.v2EnrichmentCompleteCsv = enrichmentSummary.outputs?.v2EnrichmentCompleteCsv || job.artifacts.v2EnrichmentCompleteCsv || "";
       job.artifacts.v2EnrichmentVepOnlyAuditCsv = enrichmentSummary.outputs?.v2EnrichmentVepOnlyAuditCsv || job.artifacts.v2EnrichmentVepOnlyAuditCsv || "";
+      job.artifacts.v2EnrichmentPhysicalMatrixCsv = enrichmentSummary.outputs?.v2EnrichmentPhysicalMatrixCsv || job.artifacts.v2EnrichmentPhysicalMatrixCsv || "";
       job.artifacts.enrichmentPerformanceSummaryJson = enrichmentSummary.outputs?.enrichmentPerformanceSummaryJson || job.artifacts.enrichmentPerformanceSummaryJson || "";
       job.result = {
         ...(job.result || {}),
@@ -3954,6 +3959,10 @@ app.get("/api/vcf-canon-matches/:jobId/enrichment-complete", async (req, res) =>
 
 app.get("/api/vcf-canon-matches/:jobId/enrichment-vep-only", async (req, res) => {
   await downloadRuntimeArtifact(req, res, "v2EnrichmentVepOnlyAuditCsv", "v2_enrichment_vep_only_audit", variantEnrichmentPaths);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/enrichment-physical-matrix", async (req, res) => {
+  await downloadRuntimeArtifact(req, res, "v2EnrichmentPhysicalMatrixCsv", "v2_enrichment_physical_matrix", variantEnrichmentPaths);
 });
 
 app.get("/api/vcf-canon-matches/:jobId/enrichment-resolution-audit", async (req, res) => {

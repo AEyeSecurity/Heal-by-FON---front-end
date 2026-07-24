@@ -716,6 +716,66 @@ def build_variant_master_row(variant: dict, enrichment: dict, module_count: int)
     }
 
 
+def build_physical_matrix_row(
+    variant: dict,
+    representative_row: dict,
+    enrichment: dict,
+    module_count: int,
+) -> dict:
+    """Build one compact, source-oriented row per normalized physical variant."""
+    view = legacy.build_plus_output_row_v2(
+        {
+            **representative_row,
+            "variant_key": variant["variant_key"],
+            "assembly_name": variant["assembly"],
+            "chrom_vcf": variant["chrom_vcf"],
+            "pos_vcf": variant["pos_vcf"],
+            "ref_vcf": variant["ref_vcf"],
+            "alt_vcf": variant["alt_vcf"],
+            "id_vcf": variant.get("id_vcf", ""),
+        },
+        enrichment,
+    )
+    row = {
+        "variant_key": variant["variant_key"],
+        "assembly": variant["assembly"],
+        "chrom_vcf": variant["chrom_vcf"],
+        "pos_vcf": variant["pos_vcf"],
+        "ref_vcf": variant["ref_vcf"],
+        "alt_vcf": variant["alt_vcf"],
+        "id_vcf": variant.get("id_vcf", ""),
+        "resolved_rsid": enrichment.get("resolved_rsid", ""),
+        "rsid_resolution_status": clean(enrichment.get("rsid_resolution_status")),
+        "resolution_reason": clean(enrichment.get("resolution_reason")),
+        "module_row_count": module_count,
+        "secondary_query_eligible": "true" if clean(enrichment.get("resolved_rsid")) else "false",
+        "secondary_query_mode": "exact_rsid" if clean(enrichment.get("resolved_rsid")) else "not_queried_no_exact_rsid",
+        "vep_status": clean(enrichment.get("vep_status")),
+        "source_error_sources": "|".join(sorted((enrichment.get("errors") or {}).keys())),
+    }
+    statuses = enrichment.get("source_status") or {}
+    for source in SECONDARY_SOURCE_ORDER:
+        row[f"source_status_{source}"] = clean(statuses.get(source) or "not_queried")
+
+    # Keep biological summaries while excluding raw payloads and module-specific fields.
+    prefixes = (
+        "ensembl_",
+        "vep_",
+        "clinvar_",
+        "myvariant_",
+        "gwas_",
+        "pharmgkb_",
+        "population_",
+        "external_",
+        "interpretation_",
+    )
+    for key, value in view.items():
+        if not key.startswith(prefixes) or key.endswith("_json") or key.endswith("_raw_json"):
+            continue
+        row[key] = clean(value)
+    return row
+
+
 def materialize_module_rows(
     rows: list[dict],
     variants: dict[str, dict],
@@ -761,10 +821,12 @@ def main_process(payload: dict) -> dict:
     write_progress(output_dir, substage="deduplicating_physical_variants", total=len(rows), unit="module rows", message="Building unique physical variant set")
 
     variants: dict[str, dict] = {}
+    representative_rows: dict[str, dict] = {}
     module_counts: dict[str, int] = {}
     for row in rows:
         variant_key = clean(row.get("variant_key")) or stable_variant_key(assembly, normalize_chromosome(row.get("chrom_vcf")), clean(row.get("pos_vcf")), clean(row.get("ref_vcf")), clean(row.get("alt_vcf")))
         if variant_key not in variants:
+            representative_rows[variant_key] = row
             variants[variant_key] = {
                 "variant_key": variant_key, "assembly": assembly, "chrom_vcf": normalize_chromosome(row.get("chrom_vcf")),
                 "pos_vcf": clean(row.get("pos_vcf")), "ref_vcf": clean(row.get("ref_vcf")), "alt_vcf": clean(row.get("alt_vcf")),
@@ -931,6 +993,17 @@ def main_process(payload: dict) -> dict:
     vep_only_master_rows = [row for row in master_rows if not clean(row.get("resolved_rsid"))]
     vep_only_csv = output_dir / "v2_enrichment_vep_only_audit.csv"
     write_csv(vep_only_csv, vep_only_master_rows, source_fields(master_rows))
+    physical_matrix_rows = [
+        build_physical_matrix_row(
+            variant,
+            representative_rows[variant["variant_key"]],
+            enrichments_by_variant[variant["variant_key"]],
+            module_counts[variant["variant_key"]],
+        )
+        for variant in physical_variants
+    ]
+    physical_matrix_csv = output_dir / "v2_enrichment_physical_matrix.csv"
+    write_csv(physical_matrix_csv, physical_matrix_rows, source_fields(physical_matrix_rows))
     write_progress(
         output_dir,
         stage="enrichment_vep_only",
@@ -1013,6 +1086,7 @@ def main_process(payload: dict) -> dict:
         "v2EnrichmentEvidenceAuditJsonl": str(evidence_path), "enrichmentQualitySummaryJson": str(quality_path),
         "v2EnrichmentVepBaseCsv": str(base_csv), "v2EnrichmentCompleteCsv": str(complete_csv),
         "v2EnrichmentVepOnlyAuditCsv": str(vep_only_csv), "v2EnrichmentResolutionAuditJsonl": str(resolution_audit_path),
+        "v2EnrichmentPhysicalMatrixCsv": str(physical_matrix_csv),
         "enrichmentPerformanceSummaryJson": str(performance_path),
         "metadata": {"qualityGate": quality, "downstreamSupported": False, "performance": performance},
     }

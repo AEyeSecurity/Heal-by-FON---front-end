@@ -327,6 +327,44 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
         self.assertEqual(cached["payload"], {"public": "annotation"})
         self.assertNotIn("0/1", text)
 
+    def test_physical_matrix_row_has_one_variant_and_all_secondary_statuses(self):
+        variant = {
+            "variant_key": "v2_test",
+            "assembly": "GRCh38",
+            "chrom_vcf": "chr1",
+            "pos_vcf": "10",
+            "ref_vcf": "A",
+            "alt_vcf": "G",
+            "id_vcf": "",
+        }
+        enrichment_payload = {
+            "resolved_rsid": "rs1",
+            "rsid_resolution_status": "vep_colocated_exact_allele",
+            "resolution_reason": "exact",
+            "vep_status": "success",
+            "source_status": {source: "success" for source in enrichment.SECONDARY_SOURCE_ORDER},
+            "errors": {},
+            "ensemblVep": {},
+            "ensemblVariation": {},
+            "clinVar": {},
+            "myVariant": {},
+            "gwasCatalog": {},
+            "clinPgx": {},
+        }
+        row = enrichment.build_physical_matrix_row(
+            variant,
+            {"has_genotype": "true", "gt_raw": "0/1", "ref_vcf": "A", "alt_vcf": "G"},
+            enrichment_payload,
+            2,
+        )
+
+        self.assertEqual(row["variant_key"], "v2_test")
+        self.assertEqual(row["module_row_count"], 2)
+        self.assertEqual(row["secondary_query_eligible"], "true")
+        for source in enrichment.SECONDARY_SOURCE_ORDER:
+            self.assertEqual(row[f"source_status_{source}"], "success")
+        self.assertFalse(any(key.endswith("_raw_json") for key in row))
+
 
 if __name__ == "__main__":
     unittest.main()
