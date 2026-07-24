@@ -571,6 +571,66 @@ h1 {
   color: #9f1d1d;
 }
 
+.execution-log-panel {
+  margin-top: 16px;
+  border: 1px solid #8bc9a2;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #f1fff5;
+  color: #163d26;
+}
+
+.execution-log-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  border-bottom: 1px solid #b9e1c5;
+  background: #ddf7e5;
+}
+
+.execution-log-heading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.execution-log-heading span {
+  color: #4c7059;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.execution-log-body {
+  max-height: 220px;
+  overflow: auto;
+  padding: 9px 12px;
+  background: #f8fffa;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.76rem;
+}
+
+.execution-log-line {
+  display: grid;
+  grid-template-columns: 74px 150px minmax(0, 1fr);
+  gap: 9px;
+  padding: 3px 0;
+  line-height: 1.35;
+}
+
+.execution-log-line time {
+  color: #6d9478;
+}
+
+.execution-log-event {
+  color: #227345;
+}
+
+.execution-log-empty {
+  color: #6d9478;
+}
+
 .result-panel {
   margin-top: 20px;
   padding: 24px;
@@ -1030,5 +1090,18 @@ h1 {
   .chrom-card div,
   .canon-mini-grid {
     grid-template-columns: 1fr;
+  }
+
+  .execution-log-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .execution-log-line {
+    grid-template-columns: 64px 1fr;
+  }
+
+  .execution-log-line > span:last-child {
+    grid-column: 2;
   }
 }

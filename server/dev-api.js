@@ -1,6 +1,6 @@
 import express from "express";
 import { createWriteStream, existsSync } from "node:fs";
-import { mkdir, open, readFile, readdir, rename, rm, stat, statfs, unlink, utimes, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, readdir, rename, rm, stat, statfs, unlink, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
@@ -112,6 +112,7 @@ const TURNSTILE_ALLOWED_HOSTNAMES = (process.env.HEAL_TURNSTILE_ALLOWED_HOSTNAME
   .filter(Boolean);
 
 const jobs = new Map();
+const jobLogQueues = new Map();
 const canonJobs = new Map();
 const uploads = new Map();
 const initRateLimits = new Map();
@@ -969,6 +970,10 @@ function runBase64JsonScript(scriptPath, payload, progressOptions = null) {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    appendVcfCanonJobLog(progressOptions?.job, "process_started", {
+      script: path.basename(scriptPath),
+      service: path.basename(path.dirname(scriptPath)),
+    }).catch(() => {});
     let stdout = "";
     let stderr = "";
     let progressUpdating = false;
@@ -991,7 +996,13 @@ function runBase64JsonScript(scriptPath, payload, progressOptions = null) {
       stdout += chunk.toString("utf8");
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
+      const text = chunk.toString("utf8");
+      stderr += text;
+      for (const line of text.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
+        appendVcfCanonJobLog(progressOptions?.job, "process_stderr", {
+          message: line.slice(0, 2000),
+        }).catch(() => {});
+      }
     });
     child.on("error", (error) => {
       if (progressTimer) clearInterval(progressTimer);
@@ -999,6 +1010,11 @@ function runBase64JsonScript(scriptPath, payload, progressOptions = null) {
     });
     child.on("close", async (code) => {
       if (progressTimer) clearInterval(progressTimer);
+      appendVcfCanonJobLog(progressOptions?.job, "process_exit", {
+        script: path.basename(scriptPath),
+        exitCode: code,
+        stderr: stderr.trim().slice(-2000) || null,
+      }).catch(() => {});
       if (progressOptions?.job && progressOptions?.progressPath) {
         await updateJobProgressFromFile(progressOptions.job, progressOptions.progressPath, progressOptions.stage, { final: true }).catch(() => {});
       }
@@ -1015,6 +1031,10 @@ function runBase64JsonScript(scriptPath, payload, progressOptions = null) {
         reject(new Error(result.errors?.[0] || stderr || `Processor exited with code ${code}.`));
         return;
       }
+      appendVcfCanonJobLog(progressOptions?.job, "process_result", {
+        processorStatus: result.status || null,
+        outputKeys: result.outputs ? Object.keys(result.outputs) : [],
+      }).catch(() => {});
       resolve(result);
     });
   });
@@ -1262,6 +1282,24 @@ async function processVariantEnrichment(payload, job) {
     return webhookResult;
   }
   return await runBase64JsonScript(SERVICE_SCRIPTS.legacyEnrichment, payload);
+}
+
+function variantEnrichmentOutputs(summary) {
+  const outputs = summary?.outputs && typeof summary.outputs === "object" ? summary.outputs : summary || {};
+  return {
+    observedVariantEnrichmentCsv: outputs.observedVariantEnrichmentCsv || "",
+    observedVariantInterpretiveCsv: outputs.observedVariantInterpretiveCsv || "",
+    observedVariantEnrichmentPlusCsv: outputs.observedVariantEnrichmentPlusCsv || "",
+    v2EnrichmentVariantMasterCsv: outputs.v2EnrichmentVariantMasterCsv || "",
+    v2EnrichmentEvidenceAuditJsonl: outputs.v2EnrichmentEvidenceAuditJsonl || "",
+    enrichmentQualitySummaryJson: outputs.enrichmentQualitySummaryJson || "",
+    v2EnrichmentVepBaseCsv: outputs.v2EnrichmentVepBaseCsv || "",
+    v2EnrichmentResolutionAuditJsonl: outputs.v2EnrichmentResolutionAuditJsonl || "",
+    v2EnrichmentCompleteCsv: outputs.v2EnrichmentCompleteCsv || "",
+    v2EnrichmentVepOnlyAuditCsv: outputs.v2EnrichmentVepOnlyAuditCsv || "",
+    v2EnrichmentPhysicalMatrixCsv: outputs.v2EnrichmentPhysicalMatrixCsv || "",
+    enrichmentPerformanceSummaryJson: outputs.enrichmentPerformanceSummaryJson || "",
+  };
 }
 
 async function processGroupedInterpretationPrep(payload) {
@@ -1574,6 +1612,34 @@ function vcfCanonJobPath(jobId) {
   return path.join(vcfCanonMatchPaths().jobs, `${safeFileName(jobId)}.json`);
 }
 
+function vcfCanonJobLogPath(jobId) {
+  return path.join(vcfCanonMatchPaths().jobs, `${safeFileName(jobId)}.jsonl`);
+}
+
+function appendVcfCanonJobLog(job, event, details = {}) {
+  if (!job?.id) return Promise.resolve();
+  const entry = {
+    timestamp: new Date().toISOString(),
+    event,
+    stage: job.stage || null,
+    status: job.status || null,
+    progress: Number.isFinite(Number(job.progress)) ? Number(job.progress) : null,
+    stageProgress: Number.isFinite(Number(job.stageProgress)) ? Number(job.stageProgress) : null,
+    message: job.message || null,
+    ...details,
+  };
+  const logPath = vcfCanonJobLogPath(job.id);
+  const previous = jobLogQueues.get(job.id) || Promise.resolve();
+  const next = previous
+    .catch(() => {})
+    .then(async () => {
+      await mkdir(path.dirname(logPath), { recursive: true });
+      await appendFile(logPath, `${JSON.stringify(entry, null, 0)}\n`, "utf8");
+    });
+  jobLogQueues.set(job.id, next);
+  return next;
+}
+
 async function persistVcfCanonJob(job) {
   if (!shouldPersistVcfCanonJob(job)) return;
   const paths = vcfCanonMatchPaths();
@@ -1582,6 +1648,9 @@ async function persistVcfCanonJob(job) {
   const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
   await writeFile(temporary, JSON.stringify(serializeJobForStorage(job), null, 2), "utf8");
   await rename(temporary, target);
+  appendVcfCanonJobLog(job, "job_state", {
+    stageProgressDetail: job.stageProgressDetail || null,
+  }).catch(() => {});
 }
 
 async function loadPersistedVcfCanonJobs() {
@@ -2859,18 +2928,19 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           requestedAt: new Date().toISOString(),
         };
         const enrichmentSummary = await processVariantEnrichmentWithRetry(enrichmentPayload, job, 3);
-        job.artifacts.observedVariantEnrichmentCsv = enrichmentSummary.outputs?.observedVariantEnrichmentCsv || "";
-        job.artifacts.observedVariantInterpretiveCsv = enrichmentSummary.outputs?.observedVariantInterpretiveCsv || "";
-        job.artifacts.observedVariantEnrichmentPlusCsv = enrichmentSummary.outputs?.observedVariantEnrichmentPlusCsv || "";
-        job.artifacts.v2EnrichmentVariantMasterCsv = enrichmentSummary.outputs?.v2EnrichmentVariantMasterCsv || "";
-        job.artifacts.v2EnrichmentEvidenceAuditJsonl = enrichmentSummary.outputs?.v2EnrichmentEvidenceAuditJsonl || "";
-        job.artifacts.enrichmentQualitySummaryJson = enrichmentSummary.outputs?.enrichmentQualitySummaryJson || "";
-        job.artifacts.v2EnrichmentVepBaseCsv = enrichmentSummary.outputs?.v2EnrichmentVepBaseCsv || job.artifacts.v2EnrichmentVepBaseCsv || "";
-        job.artifacts.v2EnrichmentResolutionAuditJsonl = enrichmentSummary.outputs?.v2EnrichmentResolutionAuditJsonl || job.artifacts.v2EnrichmentResolutionAuditJsonl || "";
-        job.artifacts.v2EnrichmentCompleteCsv = enrichmentSummary.outputs?.v2EnrichmentCompleteCsv || job.artifacts.v2EnrichmentCompleteCsv || "";
-        job.artifacts.v2EnrichmentVepOnlyAuditCsv = enrichmentSummary.outputs?.v2EnrichmentVepOnlyAuditCsv || job.artifacts.v2EnrichmentVepOnlyAuditCsv || "";
-        job.artifacts.v2EnrichmentPhysicalMatrixCsv = enrichmentSummary.outputs?.v2EnrichmentPhysicalMatrixCsv || job.artifacts.v2EnrichmentPhysicalMatrixCsv || "";
-        job.artifacts.enrichmentPerformanceSummaryJson = enrichmentSummary.outputs?.enrichmentPerformanceSummaryJson || job.artifacts.enrichmentPerformanceSummaryJson || "";
+        const enrichmentOutputs = variantEnrichmentOutputs(enrichmentSummary);
+        job.artifacts.observedVariantEnrichmentCsv = enrichmentOutputs.observedVariantEnrichmentCsv;
+        job.artifacts.observedVariantInterpretiveCsv = enrichmentOutputs.observedVariantInterpretiveCsv;
+        job.artifacts.observedVariantEnrichmentPlusCsv = enrichmentOutputs.observedVariantEnrichmentPlusCsv;
+        job.artifacts.v2EnrichmentVariantMasterCsv = enrichmentOutputs.v2EnrichmentVariantMasterCsv;
+        job.artifacts.v2EnrichmentEvidenceAuditJsonl = enrichmentOutputs.v2EnrichmentEvidenceAuditJsonl;
+        job.artifacts.enrichmentQualitySummaryJson = enrichmentOutputs.enrichmentQualitySummaryJson;
+        job.artifacts.v2EnrichmentVepBaseCsv = enrichmentOutputs.v2EnrichmentVepBaseCsv || job.artifacts.v2EnrichmentVepBaseCsv || "";
+        job.artifacts.v2EnrichmentResolutionAuditJsonl = enrichmentOutputs.v2EnrichmentResolutionAuditJsonl || job.artifacts.v2EnrichmentResolutionAuditJsonl || "";
+        job.artifacts.v2EnrichmentCompleteCsv = enrichmentOutputs.v2EnrichmentCompleteCsv || job.artifacts.v2EnrichmentCompleteCsv || "";
+        job.artifacts.v2EnrichmentVepOnlyAuditCsv = enrichmentOutputs.v2EnrichmentVepOnlyAuditCsv || job.artifacts.v2EnrichmentVepOnlyAuditCsv || "";
+        job.artifacts.v2EnrichmentPhysicalMatrixCsv = enrichmentOutputs.v2EnrichmentPhysicalMatrixCsv || job.artifacts.v2EnrichmentPhysicalMatrixCsv || "";
+        job.artifacts.enrichmentPerformanceSummaryJson = enrichmentOutputs.enrichmentPerformanceSummaryJson || job.artifacts.enrichmentPerformanceSummaryJson || "";
         if (!job.artifacts.observedVariantEnrichmentPlusCsv || !job.artifacts.enrichmentQualitySummaryJson) {
           throw new Error("Coordinate enrichment did not produce its required v2 artifacts.");
         }
@@ -3022,9 +3092,10 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         requestedAt: new Date().toISOString(),
       };
       const enrichmentSummary = await processVariantEnrichmentWithRetry(enrichmentPayload, job, 3);
-      job.artifacts.observedVariantEnrichmentCsv = enrichmentSummary.outputs?.observedVariantEnrichmentCsv || "";
-      job.artifacts.observedVariantInterpretiveCsv = enrichmentSummary.outputs?.observedVariantInterpretiveCsv || "";
-      job.artifacts.observedVariantEnrichmentPlusCsv = enrichmentSummary.outputs?.observedVariantEnrichmentPlusCsv || "";
+      const enrichmentOutputs = variantEnrichmentOutputs(enrichmentSummary);
+      job.artifacts.observedVariantEnrichmentCsv = enrichmentOutputs.observedVariantEnrichmentCsv;
+      job.artifacts.observedVariantInterpretiveCsv = enrichmentOutputs.observedVariantInterpretiveCsv;
+      job.artifacts.observedVariantEnrichmentPlusCsv = enrichmentOutputs.observedVariantEnrichmentPlusCsv;
       job.result = {
         ...sanitizeVcfCanonMatchResult(summary, upload),
         matchPreparation: sanitizeMatchPreparationResult(preparationSummary),
@@ -3069,6 +3140,44 @@ app.get("/api/vcf-canon-matches/:jobId", (req, res) => {
     return;
   }
   res.json(publicJob(job));
+});
+
+app.get("/api/vcf-canon-matches/:jobId/logs", async (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  const requestedLimit = Number.parseInt(String(req.query.limit || "250"), 10);
+  const limit = Math.min(500, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 250));
+  const logPath = vcfCanonJobLogPath(job.id);
+  const raw = await readFile(logPath, "utf8").catch(() => "");
+  const lines = raw.split(/\r?\n/).filter(Boolean).slice(-limit);
+  const logs = lines.map((line) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      return { timestamp: null, event: "raw_log", message: line };
+    }
+  });
+  if (logs.length === 0) {
+    logs.push({
+      timestamp: job.createdAt || null,
+      event: "historical_run",
+      status: job.status || null,
+      stage: job.stage || null,
+      progress: job.progress ?? null,
+      stageProgress: job.stageProgress ?? null,
+      message: "Structured execution logs were not enabled for this historical run; inspect its stage artifacts and progress files.",
+    });
+  }
+  if (String(req.query.download || "") === "1") {
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeFileName(job.id)}.jsonl"`);
+    res.send(raw);
+    return;
+  }
+  res.json({ jobId: job.id, logs });
 });
 
 app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
@@ -3160,18 +3269,19 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
         requestedAt: new Date().toISOString(),
       };
       const enrichmentSummary = await processVariantEnrichmentWithRetry(enrichmentPayload, job, 3);
-      job.artifacts.observedVariantEnrichmentCsv = enrichmentSummary.outputs?.observedVariantEnrichmentCsv || "";
-      job.artifacts.observedVariantInterpretiveCsv = enrichmentSummary.outputs?.observedVariantInterpretiveCsv || "";
-      job.artifacts.observedVariantEnrichmentPlusCsv = enrichmentSummary.outputs?.observedVariantEnrichmentPlusCsv || "";
-      job.artifacts.v2EnrichmentVariantMasterCsv = enrichmentSummary.outputs?.v2EnrichmentVariantMasterCsv || "";
-      job.artifacts.v2EnrichmentEvidenceAuditJsonl = enrichmentSummary.outputs?.v2EnrichmentEvidenceAuditJsonl || "";
-      job.artifacts.enrichmentQualitySummaryJson = enrichmentSummary.outputs?.enrichmentQualitySummaryJson || "";
-      job.artifacts.v2EnrichmentVepBaseCsv = enrichmentSummary.outputs?.v2EnrichmentVepBaseCsv || job.artifacts.v2EnrichmentVepBaseCsv || "";
-      job.artifacts.v2EnrichmentResolutionAuditJsonl = enrichmentSummary.outputs?.v2EnrichmentResolutionAuditJsonl || job.artifacts.v2EnrichmentResolutionAuditJsonl || "";
-      job.artifacts.v2EnrichmentCompleteCsv = enrichmentSummary.outputs?.v2EnrichmentCompleteCsv || job.artifacts.v2EnrichmentCompleteCsv || "";
-      job.artifacts.v2EnrichmentVepOnlyAuditCsv = enrichmentSummary.outputs?.v2EnrichmentVepOnlyAuditCsv || job.artifacts.v2EnrichmentVepOnlyAuditCsv || "";
-      job.artifacts.v2EnrichmentPhysicalMatrixCsv = enrichmentSummary.outputs?.v2EnrichmentPhysicalMatrixCsv || job.artifacts.v2EnrichmentPhysicalMatrixCsv || "";
-      job.artifacts.enrichmentPerformanceSummaryJson = enrichmentSummary.outputs?.enrichmentPerformanceSummaryJson || job.artifacts.enrichmentPerformanceSummaryJson || "";
+      const enrichmentOutputs = variantEnrichmentOutputs(enrichmentSummary);
+      job.artifacts.observedVariantEnrichmentCsv = enrichmentOutputs.observedVariantEnrichmentCsv;
+      job.artifacts.observedVariantInterpretiveCsv = enrichmentOutputs.observedVariantInterpretiveCsv;
+      job.artifacts.observedVariantEnrichmentPlusCsv = enrichmentOutputs.observedVariantEnrichmentPlusCsv;
+      job.artifacts.v2EnrichmentVariantMasterCsv = enrichmentOutputs.v2EnrichmentVariantMasterCsv;
+      job.artifacts.v2EnrichmentEvidenceAuditJsonl = enrichmentOutputs.v2EnrichmentEvidenceAuditJsonl;
+      job.artifacts.enrichmentQualitySummaryJson = enrichmentOutputs.enrichmentQualitySummaryJson;
+      job.artifacts.v2EnrichmentVepBaseCsv = enrichmentOutputs.v2EnrichmentVepBaseCsv || job.artifacts.v2EnrichmentVepBaseCsv || "";
+      job.artifacts.v2EnrichmentResolutionAuditJsonl = enrichmentOutputs.v2EnrichmentResolutionAuditJsonl || job.artifacts.v2EnrichmentResolutionAuditJsonl || "";
+      job.artifacts.v2EnrichmentCompleteCsv = enrichmentOutputs.v2EnrichmentCompleteCsv || job.artifacts.v2EnrichmentCompleteCsv || "";
+      job.artifacts.v2EnrichmentVepOnlyAuditCsv = enrichmentOutputs.v2EnrichmentVepOnlyAuditCsv || job.artifacts.v2EnrichmentVepOnlyAuditCsv || "";
+      job.artifacts.v2EnrichmentPhysicalMatrixCsv = enrichmentOutputs.v2EnrichmentPhysicalMatrixCsv || job.artifacts.v2EnrichmentPhysicalMatrixCsv || "";
+      job.artifacts.enrichmentPerformanceSummaryJson = enrichmentOutputs.enrichmentPerformanceSummaryJson || job.artifacts.enrichmentPerformanceSummaryJson || "";
       job.result = {
         ...(job.result || {}),
         variantEnrichment: sanitizeVariantEnrichmentResult(enrichmentSummary),

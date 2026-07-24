@@ -403,6 +403,9 @@ const COPY = {
     errorPopupTitle: "Proceso interrumpido",
     errorPopupRetry: "Volve a intentarlo. Si el problema se repite, revisaremos los logs del servidor.",
     errorPopupClose: "Entendido",
+    executionLogTitle: "Consola de ejecucion",
+    executionLogEmpty: "Los eventos internos apareceran aca cuando comience el procesamiento.",
+    executionLogDownload: "Descargar logs",
   },
   en: {
     languageLabel: "Language",
@@ -696,6 +699,9 @@ const COPY = {
     errorPopupTitle: "Process interrupted",
     errorPopupRetry: "Please try again. If the problem repeats, we will review the server logs.",
     errorPopupClose: "Got it",
+    executionLogTitle: "Execution console",
+    executionLogEmpty: "Internal events will appear here when processing starts.",
+    executionLogDownload: "Download logs",
   },
 };
 
@@ -953,6 +959,46 @@ function ErrorDialog({ message, onClose, onRetry, t }) {
         </div>
       </section>
     </div>
+  );
+}
+
+function ExecutionLogPanel({ jobId, logs, onDownload, t, locale }) {
+  return (
+    <section className="execution-log-panel" aria-live="polite" aria-label={t.executionLogTitle}>
+      <div className="execution-log-heading">
+        <div>
+          <strong>{t.executionLogTitle}</strong>
+          {jobId && <span>{jobId}</span>}
+        </div>
+        {jobId && onDownload && (
+          <button className="secondary-button small" type="button" onClick={onDownload}>
+            <Download size={15} />
+            {t.executionLogDownload}
+          </button>
+        )}
+      </div>
+      <div className="execution-log-body">
+        {logs.length === 0 ? (
+          <span className="execution-log-empty">{t.executionLogEmpty}</span>
+        ) : (
+          logs.map((entry, index) => {
+            const timestamp = entry.timestamp
+              ? new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(entry.timestamp))
+              : "--:--:--";
+            const detail = entry.stageProgressDetail;
+            const counts = detail && detail.total > 0 ? ` (${detail.processed}/${detail.total} ${detail.unit || "items"})` : "";
+            const message = entry.message || entry.stderr || entry.event || "event";
+            return (
+              <div className="execution-log-line" key={`${entry.timestamp || "event"}-${index}`}>
+                <time>{timestamp}</time>
+                <span className="execution-log-event">{entry.event}</span>
+                <span>{message}{counts}</span>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -2159,6 +2205,7 @@ function App() {
   const [globalInterpretationProgress, setGlobalInterpretationProgress] = useState(0);
   const [finalReportProgress, setFinalReportProgress] = useState(0);
   const [stageProgressDetails, setStageProgressDetails] = useState({});
+  const [executionLogs, setExecutionLogs] = useState([]);
   const [qaLlm2Model, setQaLlm2Model] = useState("gpt-5-mini");
   const [qaAudienceMode, setQaAudienceMode] = useState("all");
   const [qaLanguageMode, setQaLanguageMode] = useState("both");
@@ -2170,6 +2217,7 @@ function App() {
   const [individualInterpretationDetail, setIndividualInterpretationDetail] = useState("");
   const [result, setResult] = useState(null);
   const [matchResult, setMatchResult] = useState(null);
+  const [activeMatchJobId, setActiveMatchJobId] = useState(null);
   const [matchArtifactsReady, setMatchArtifactsReady] = useState({
     matches: false,
     debug: false,
@@ -2253,6 +2301,7 @@ function App() {
     setGlobalInterpretationProgress(0);
     setFinalReportProgress(0);
     setStageProgressDetails({});
+    setExecutionLogs([]);
     setResult(null);
     setMatchResult(null);
     setMatchArtifactsReady({
@@ -2304,6 +2353,34 @@ function App() {
     } catch {
       return { error: text };
     }
+  }
+
+  async function refreshExecutionLogs(jobId) {
+    if (!jobId) return;
+    const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${jobId}/logs?limit=250`, {
+      headers: accessHeaders(activeAccessTokenRef.current || getJobAccessToken(jobId)),
+    });
+    if (!response.ok) return;
+    const payload = await response.json();
+    setExecutionLogs(Array.isArray(payload.logs) ? payload.logs : []);
+  }
+
+  async function downloadExecutionLogs() {
+    const jobId = activeMatchJobId || matchResult?.jobId;
+    if (!jobId) return;
+    const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${jobId}/logs?limit=500&download=1`, {
+      headers: accessHeaders(activeAccessTokenRef.current || getJobAccessToken(jobId)),
+    });
+    if (!response.ok) return;
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${jobId}.jsonl`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   }
 
   async function downloadCsv(endpoint, fallbackName) {
@@ -2654,7 +2731,9 @@ function App() {
       }
       transientFailures = 0;
       const job = await response.json();
+      setActiveMatchJobId(job.id);
       updateMatchSnapshot(job);
+      refreshExecutionLogs(job.id).catch(() => {});
       if (job.stage && job.stageProgressDetail) {
         setStageProgressDetails((current) => ({
           ...current,
@@ -3397,6 +3476,7 @@ function App() {
     setRetryEnrichmentJobId(null);
     setResult(null);
     setMatchResult(null);
+    setActiveMatchJobId(null);
     setStageProgressDetails({});
     clearFinalReportDownloads();
     setMatchArtifactsReady({
@@ -3872,6 +3952,13 @@ function App() {
           </div>
         )}
         {error && <p className="error-message">{error}</p>}
+        <ExecutionLogPanel
+          jobId={activeMatchJobId || matchResult?.jobId || null}
+          logs={executionLogs}
+          onDownload={activeMatchJobId || matchResult?.jobId ? downloadExecutionLogs : null}
+          t={t}
+          locale={locale}
+        />
         <button className="primary-button" type="button" disabled={!canSend} onClick={submit}>
           <Send size={18} />
           {t.submit}
