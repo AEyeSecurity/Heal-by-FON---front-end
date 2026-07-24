@@ -185,7 +185,7 @@ const COPY = {
     enriching: "Enriqueciendo variantes observadas...",
     enrichmentVepBaseProgress: "Enrichment base VEP",
     enrichmentCompleteProgress: "Enrichment completo",
-    enrichmentVepOnlyProgress: "Resolucion VEP-only",
+    enrichmentVepOnlyProgress: "Identidad no resuelta / seguimiento por coordenadas",
     enrichmentQuality: "Validando cobertura y calidad del enrichment...",
     groupingPreparing: "Preparando payloads agrupados por gen y modulo...",
     groupedInterpretationStarting: "Iniciando interpretacion individual agrupada...",
@@ -275,7 +275,11 @@ const COPY = {
     enrichmentPhysicalVariants: "Variantes fisicas",
     enrichmentVepCoverage: "Cobertura VEP",
     enrichmentExactRsids: "rsIDs exactos resueltos",
-    enrichmentVepOnlyVariants: "Variantes VEP-only",
+    enrichmentVepOnlyVariants: "Identidad no resuelta / seguimiento",
+    enrichmentCoordinateResolved: "Resueltas por coordenada",
+    enrichmentTechnicalGate: "Technical gate",
+    enrichmentEvidenceReadiness: "Evidence readiness",
+    enrichmentNotQueried: "No consultadas",
     enrichmentResolutionAmbiguous: "Resoluciones ambiguas",
     enrichmentResolutionAlleleMismatch: "Alelo no coincidente",
     enrichmentQualityDecision: "Decision QA",
@@ -381,6 +385,10 @@ const COPY = {
     enrichmentVepOnlyDownload: "Descargar auditoria VEP-only",
     enrichmentPhysicalMatrixDownload: "Descargar matriz fisica por variante",
     enrichmentResolutionAuditDownload: "Descargar auditoria de resolucion",
+    enrichmentPhysicalEvidenceAuditDownload: "Descargar auditoria fisica compacta",
+    enrichmentModuleProjectionDownload: "Descargar proyeccion gen-modulo",
+    enrichmentRetryQueueDownload: "Descargar cola de reintentos",
+    enrichmentIdentitySummaryDownload: "Descargar resumen de identidad",
     enrichmentPerformanceDownload: "Descargar metricas de rendimiento",
     enrichmentEvidenceAuditDownload: "Descargar evidencia enrichment",
     groupingPayloadsDownload: "Descargar payloads agrupados",
@@ -481,7 +489,7 @@ const COPY = {
     enriching: "Enriching observed variants...",
     enrichmentVepBaseProgress: "VEP base enrichment",
     enrichmentCompleteProgress: "Complete enrichment",
-    enrichmentVepOnlyProgress: "VEP-only resolution",
+    enrichmentVepOnlyProgress: "Unresolved identity / coordinate follow-up",
     enrichmentQuality: "Checking enrichment coverage and quality...",
     groupingPreparing: "Preparing grouped gene-module payloads...",
     groupedInterpretationStarting: "Starting grouped individual interpretation...",
@@ -571,7 +579,11 @@ const COPY = {
     enrichmentPhysicalVariants: "Physical variants",
     enrichmentVepCoverage: "VEP coverage",
     enrichmentExactRsids: "Exact resolved rsIDs",
-    enrichmentVepOnlyVariants: "VEP-only variants",
+    enrichmentVepOnlyVariants: "Unresolved identity / follow-up",
+    enrichmentCoordinateResolved: "Coordinate-resolved",
+    enrichmentTechnicalGate: "Technical gate",
+    enrichmentEvidenceReadiness: "Evidence readiness",
+    enrichmentNotQueried: "Not queried",
     enrichmentResolutionAmbiguous: "Ambiguous resolutions",
     enrichmentResolutionAlleleMismatch: "Allele mismatches",
     enrichmentQualityDecision: "QA decision",
@@ -677,6 +689,10 @@ const COPY = {
     enrichmentVepOnlyDownload: "Download VEP-only audit",
     enrichmentPhysicalMatrixDownload: "Download physical variant matrix",
     enrichmentResolutionAuditDownload: "Download resolution audit",
+    enrichmentPhysicalEvidenceAuditDownload: "Download compact physical audit",
+    enrichmentModuleProjectionDownload: "Download gene-module projection",
+    enrichmentRetryQueueDownload: "Download retry queue",
+    enrichmentIdentitySummaryDownload: "Download identity summary",
     enrichmentPerformanceDownload: "Download performance metrics",
     enrichmentEvidenceAuditDownload: "Download enrichment evidence audit",
     groupingPayloadsDownload: "Download grouped payloads",
@@ -1598,10 +1614,12 @@ function MatchResultPanel({ result, locale, t }) {
           [t.enrichmentVepCoverage, `${((Number(enrichmentQuality.vepCoverage) || 0) * 100).toFixed(1)}%`],
           [t.enrichmentExactRsids, formatNumber(enrichmentQuality.exactRsidsResolved, locale)],
           [t.enrichmentVepOnlyVariants, formatNumber(enrichmentQuality.vepOnlyVariants, locale)],
+          [t.enrichmentCoordinateResolved, formatNumber(enrichmentQuality.identityMetrics?.ensembl?.resolved || 0, locale)],
           [t.enrichmentResolutionAmbiguous, formatNumber(enrichmentQuality.resolutionCounts?.ambiguous || 0, locale)],
           [t.enrichmentResolutionAlleleMismatch, formatNumber(enrichmentQuality.resolutionCounts?.vep_colocated_allele_mismatch || 0, locale)],
           [t.enrichmentSourceErrors, formatNumber(Object.values(enrichmentQuality.sourceErrors || {}).reduce((sum, value) => sum + Number(value || 0), 0), locale)],
-          [t.enrichmentQualityDecision, enrichmentQuality.status || "-"],
+          [t.enrichmentTechnicalGate, enrichmentQuality.technicalGate?.status || enrichmentQuality.status || "-"],
+          [t.enrichmentEvidenceReadiness, enrichmentQuality.evidenceReadinessGate?.status || "-"],
         ]
       : [
         [t.enrichmentInputRows, formatNumber(enrichment.source_rows, locale)],
@@ -1816,6 +1834,31 @@ function MatchResultPanel({ result, locale, t }) {
 
   async function downloadEnrichmentResolutionAudit() {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/enrichment-resolution-audit`, "v2_enrichment_resolution_audit.jsonl");
+  }
+
+  async function downloadEnrichmentPhysicalEvidenceAudit() {
+    await downloadCsv(
+      `/api/vcf-canon-matches/${result.jobId}/enrichment-physical-evidence-audit`,
+      "v2_enrichment_physical_evidence_audit.jsonl.gz",
+    );
+  }
+
+  async function downloadEnrichmentModuleProjection() {
+    await downloadCsv(
+      `/api/vcf-canon-matches/${result.jobId}/enrichment-module-projection`,
+      "v2_enrichment_module_projection.csv",
+    );
+  }
+
+  async function downloadEnrichmentRetryQueue() {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/enrichment-retry-queue`, "enrichment_retry_queue.jsonl");
+  }
+
+  async function downloadEnrichmentIdentitySummary() {
+    await downloadCsv(
+      `/api/vcf-canon-matches/${result.jobId}/enrichment-identity-summary`,
+      "enrichment_identity_resolution_summary.json",
+    );
   }
 
   async function downloadEnrichmentPerformance() {
@@ -2079,6 +2122,22 @@ function MatchResultPanel({ result, locale, t }) {
           <Download size={17} />
           {t.enrichmentPhysicalMatrixDownload}
         </button>}
+        {isGeneModuleV2 && artifactReady.enrichmentPhysicalEvidenceAudit && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentPhysicalEvidenceAudit}>
+          <Download size={17} />
+          {t.enrichmentPhysicalEvidenceAuditDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.enrichmentModuleProjection && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentModuleProjection}>
+          <Download size={17} />
+          {t.enrichmentModuleProjectionDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.enrichmentRetryQueue && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentRetryQueue}>
+          <Download size={17} />
+          {t.enrichmentRetryQueueDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.enrichmentIdentitySummary && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentIdentitySummary}>
+          <Download size={17} />
+          {t.enrichmentIdentitySummaryDownload}
+        </button>}
         {isGeneModuleV2 && artifactReady.enrichmentResolutionAudit && <button className="secondary-button match-download-button" type="button" onClick={downloadEnrichmentResolutionAudit}>
           <Download size={17} />
           {t.enrichmentResolutionAuditDownload}
@@ -2231,6 +2290,10 @@ function App() {
     enrichmentComplete: false,
     enrichmentVepOnly: false,
     enrichmentPhysicalMatrix: false,
+    enrichmentPhysicalEvidenceAudit: false,
+    enrichmentModuleProjection: false,
+    enrichmentRetryQueue: false,
+    enrichmentIdentitySummary: false,
     enrichmentPerformance: false,
     enrichmentInterpretive: false,
     enrichmentPlus: false,
@@ -2317,6 +2380,10 @@ function App() {
       enrichmentComplete: false,
       enrichmentVepOnly: false,
       enrichmentPhysicalMatrix: false,
+      enrichmentPhysicalEvidenceAudit: false,
+      enrichmentModuleProjection: false,
+      enrichmentRetryQueue: false,
+      enrichmentIdentitySummary: false,
       enrichmentPerformance: false,
       enrichmentInterpretive: false,
       enrichmentPlus: false,
@@ -2493,6 +2560,23 @@ function App() {
         await downloadCsv(`/api/vcf-canon-matches/${matchResult.jobId}/enrichment-vep-only`, "v2_enrichment_vep_only_audit.csv");
       } else if (kind === "enrichmentResolutionAudit") {
         await downloadCsv(`/api/vcf-canon-matches/${matchResult.jobId}/enrichment-resolution-audit`, "v2_enrichment_resolution_audit.jsonl");
+      } else if (kind === "enrichmentPhysicalEvidenceAudit") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/enrichment-physical-evidence-audit`,
+          "v2_enrichment_physical_evidence_audit.jsonl.gz",
+        );
+      } else if (kind === "enrichmentModuleProjection") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/enrichment-module-projection`,
+          "v2_enrichment_module_projection.csv",
+        );
+      } else if (kind === "enrichmentRetryQueue") {
+        await downloadCsv(`/api/vcf-canon-matches/${matchResult.jobId}/enrichment-retry-queue`, "enrichment_retry_queue.jsonl");
+      } else if (kind === "enrichmentIdentitySummary") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/enrichment-identity-summary`,
+          "enrichment_identity_resolution_summary.json",
+        );
       } else if (kind === "enrichmentPerformance") {
         await downloadCsv(`/api/vcf-canon-matches/${matchResult.jobId}/enrichment-performance`, "enrichment_performance_summary.json");
       } else if (kind === "groupedPayloads") {
@@ -2658,6 +2742,10 @@ function App() {
       enrichmentComplete: Boolean(ready.enrichmentComplete),
       enrichmentVepOnly: Boolean(ready.enrichmentVepOnly),
       enrichmentPhysicalMatrix: Boolean(ready.enrichmentPhysicalMatrix),
+      enrichmentPhysicalEvidenceAudit: Boolean(ready.enrichmentPhysicalEvidenceAudit),
+      enrichmentModuleProjection: Boolean(ready.enrichmentModuleProjection),
+      enrichmentRetryQueue: Boolean(ready.enrichmentRetryQueue),
+      enrichmentIdentitySummary: Boolean(ready.enrichmentIdentitySummary),
       enrichmentPerformance: Boolean(ready.enrichmentPerformance),
       enrichmentInterpretive: Boolean(ready.enrichmentInterpretive),
       enrichmentPlus: Boolean(ready.enrichmentPlus),
@@ -2686,6 +2774,10 @@ function App() {
       ready.enrichmentComplete ||
       ready.enrichmentVepOnly ||
       ready.enrichmentPhysicalMatrix ||
+      ready.enrichmentPhysicalEvidenceAudit ||
+      ready.enrichmentModuleProjection ||
+      ready.enrichmentRetryQueue ||
+      ready.enrichmentIdentitySummary ||
       ready.enrichmentPerformance ||
       ready.enrichmentInterpretive ||
       ready.enrichmentPlus ||
@@ -2768,6 +2860,17 @@ function App() {
         setEnrichmentVepBaseProgress(job.stageProgress ?? job.progress ?? 0);
         setEnrichmentProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.enriching);
+      } else if (job.stage === "enrichment_identity") {
+        setPhase("enrichment_identity");
+        setMatchProgress(100);
+        setNormalizationProgress(100);
+        setPreparationProgress(100);
+        setAiTriageProgress(100);
+        setEnrichmentVepBaseProgress(100);
+        setEnrichmentCompleteProgress(0);
+        setEnrichmentVepOnlyProgress(job.stageProgress ?? job.progress ?? 0);
+        setEnrichmentProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.enrichmentVepOnlyProgress);
       } else if (job.stage === "enrichment_complete") {
         setPhase("enrichment_complete");
         setMatchProgress(100);

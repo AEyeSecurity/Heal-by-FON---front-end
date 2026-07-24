@@ -223,10 +223,13 @@ function matchPreparationPaths() {
 
 function variantEnrichmentPaths() {
   const root = path.resolve(VARIANT_ENRICHMENT_ROOT);
+  const cache = path.resolve(RUNTIME_PATHS.enrichmentCache);
   return {
     root,
     runs: root,
-    cache: path.resolve(RUNTIME_PATHS.enrichmentCache),
+    cache,
+    cacheV2: path.join(cache, "enrichment_cache_v2.sqlite"),
+    legacyCache: path.join(cache, "enrichment_cache.sqlite"),
   };
 }
 
@@ -641,6 +644,10 @@ function publicArtifactsReady(job) {
     enrichmentComplete: artifactExists(artifacts.v2EnrichmentCompleteCsv),
     enrichmentVepOnly: artifactExists(artifacts.v2EnrichmentVepOnlyAuditCsv),
     enrichmentPhysicalMatrix: artifactExists(artifacts.v2EnrichmentPhysicalMatrixCsv),
+    enrichmentPhysicalEvidenceAudit: artifactExists(artifacts.v2EnrichmentPhysicalEvidenceAuditJsonlGz),
+    enrichmentModuleProjection: artifactExists(artifacts.v2EnrichmentModuleProjectionCsv),
+    enrichmentRetryQueue: artifactExists(artifacts.enrichmentRetryQueueJsonl),
+    enrichmentIdentitySummary: artifactExists(artifacts.enrichmentIdentityResolutionSummaryJson),
     enrichmentPerformance: artifactExists(artifacts.enrichmentPerformanceSummaryJson),
     groupedPayloads: artifactExists(artifacts.groupPayloadsCsv || artifacts.groupPayloadsJsonl),
     groupedVariantDetail: artifactExists(artifacts.groupVariantDetailCsv),
@@ -1302,6 +1309,10 @@ function variantEnrichmentOutputs(summary) {
     v2EnrichmentCompleteCsv: outputs.v2EnrichmentCompleteCsv || "",
     v2EnrichmentVepOnlyAuditCsv: outputs.v2EnrichmentVepOnlyAuditCsv || "",
     v2EnrichmentPhysicalMatrixCsv: outputs.v2EnrichmentPhysicalMatrixCsv || "",
+    v2EnrichmentPhysicalEvidenceAuditJsonlGz: outputs.v2EnrichmentPhysicalEvidenceAuditJsonlGz || "",
+    v2EnrichmentModuleProjectionCsv: outputs.v2EnrichmentModuleProjectionCsv || "",
+    enrichmentRetryQueueJsonl: outputs.enrichmentRetryQueueJsonl || "",
+    enrichmentIdentityResolutionSummaryJson: outputs.enrichmentIdentityResolutionSummaryJson || "",
     enrichmentPerformanceSummaryJson: outputs.enrichmentPerformanceSummaryJson || "",
   };
 }
@@ -1579,6 +1590,7 @@ function isVariantEnrichmentStage(stage) {
   return [
     "enriching",
     "enrichment_vep",
+    "enrichment_identity",
     "enrichment_complete",
     "enrichment_vep_only",
     "enrichment_quality_gate",
@@ -1601,6 +1613,10 @@ function shouldPersistVcfCanonJob(job) {
         "preparing",
         "triaging",
         "enriching",
+        "enrichment_vep",
+        "enrichment_identity",
+        "enrichment_complete",
+        "enrichment_vep_only",
         "enrichment_quality_gate",
         "grouping_preparation",
         "grouped_individual_interpretation",
@@ -2911,6 +2927,10 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           v2EnrichmentCompleteCsv: path.join(enrichmentOutputDir, "v2_enrichment_complete.csv"),
           v2EnrichmentVepOnlyAuditCsv: path.join(enrichmentOutputDir, "v2_enrichment_vep_only_audit.csv"),
           v2EnrichmentPhysicalMatrixCsv: path.join(enrichmentOutputDir, "v2_enrichment_physical_matrix.csv"),
+          v2EnrichmentPhysicalEvidenceAuditJsonlGz: path.join(enrichmentOutputDir, "v2_enrichment_physical_evidence_audit.jsonl.gz"),
+          v2EnrichmentModuleProjectionCsv: path.join(enrichmentOutputDir, "v2_enrichment_module_projection.csv"),
+          enrichmentRetryQueueJsonl: path.join(enrichmentOutputDir, "enrichment_retry_queue.jsonl"),
+          enrichmentIdentityResolutionSummaryJson: path.join(enrichmentOutputDir, "enrichment_identity_resolution_summary.json"),
           enrichmentPerformanceSummaryJson: path.join(enrichmentOutputDir, "enrichment_performance_summary.json"),
         });
         await persistVcfCanonJob(job);
@@ -2927,9 +2947,11 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           schemaVersion: "gene_module_v2",
           assembly: resolvedVcfAssembly,
           inputPath: aiTriageCsvPath,
-          outputDir: enrichmentOutputDir,
-          cacheDir: enrichmentPaths.cache,
-          normalizationSummaryPath: job.artifacts.normalizationSummaryJson,
+        outputDir: enrichmentOutputDir,
+        cacheDir: enrichmentPaths.cache,
+        cachePath: enrichmentPaths.cacheV2,
+        legacyCachePath: enrichmentPaths.legacyCache,
+        normalizationSummaryPath: job.artifacts.normalizationSummaryJson,
           requestedAt: new Date().toISOString(),
         };
         const enrichmentSummary = await processVariantEnrichmentWithRetry(enrichmentPayload, job, 3);
@@ -2945,8 +2967,20 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         job.artifacts.v2EnrichmentCompleteCsv = enrichmentOutputs.v2EnrichmentCompleteCsv || job.artifacts.v2EnrichmentCompleteCsv || "";
         job.artifacts.v2EnrichmentVepOnlyAuditCsv = enrichmentOutputs.v2EnrichmentVepOnlyAuditCsv || job.artifacts.v2EnrichmentVepOnlyAuditCsv || "";
         job.artifacts.v2EnrichmentPhysicalMatrixCsv = enrichmentOutputs.v2EnrichmentPhysicalMatrixCsv || job.artifacts.v2EnrichmentPhysicalMatrixCsv || "";
+        job.artifacts.v2EnrichmentPhysicalEvidenceAuditJsonlGz = enrichmentOutputs.v2EnrichmentPhysicalEvidenceAuditJsonlGz || job.artifacts.v2EnrichmentPhysicalEvidenceAuditJsonlGz || "";
+        job.artifacts.v2EnrichmentModuleProjectionCsv = enrichmentOutputs.v2EnrichmentModuleProjectionCsv || job.artifacts.v2EnrichmentModuleProjectionCsv || "";
+        job.artifacts.enrichmentRetryQueueJsonl = enrichmentOutputs.enrichmentRetryQueueJsonl || job.artifacts.enrichmentRetryQueueJsonl || "";
+        job.artifacts.enrichmentIdentityResolutionSummaryJson = enrichmentOutputs.enrichmentIdentityResolutionSummaryJson || job.artifacts.enrichmentIdentityResolutionSummaryJson || "";
         job.artifacts.enrichmentPerformanceSummaryJson = enrichmentOutputs.enrichmentPerformanceSummaryJson || job.artifacts.enrichmentPerformanceSummaryJson || "";
-        if (!job.artifacts.observedVariantEnrichmentPlusCsv || !job.artifacts.enrichmentQualitySummaryJson) {
+        const requiredV2Artifacts = [
+          job.artifacts.observedVariantEnrichmentPlusCsv,
+          job.artifacts.enrichmentQualitySummaryJson,
+          job.artifacts.v2EnrichmentPhysicalMatrixCsv,
+          job.artifacts.v2EnrichmentPhysicalEvidenceAuditJsonlGz,
+          job.artifacts.v2EnrichmentModuleProjectionCsv,
+          job.artifacts.enrichmentIdentityResolutionSummaryJson,
+        ];
+        if (requiredV2Artifacts.some((artifactPath) => !artifactPath || !existsSync(artifactPath))) {
           throw new Error("Coordinate enrichment did not produce its required v2 artifacts.");
         }
         job.result = {
@@ -2955,15 +2989,23 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         };
 
         const qualityGate = enrichmentSummary.metadata?.qualityGate || {};
-        const qualityPassed = qualityGate.status === "pass";
+        const technicalPassed = qualityGate.technicalGate
+          ? qualityGate.technicalGate.status === "pass"
+          : qualityGate.status === "pass";
+        const evidenceReady = qualityGate.evidenceReadinessGate
+          ? qualityGate.evidenceReadinessGate.status === "pass"
+          : qualityGate.evidenceReady !== false;
+        const qualityPassed = technicalPassed && evidenceReady;
         if (!HEAL_V2_LLM1_ENABLED || !qualityPassed) {
           job.status = "complete";
           job.progress = 100;
           job.stage = "enrichment_quality_gate";
           job.stageProgress = 100;
           job.message = qualityPassed
-            ? "V2 enrichment quality gate passed; grouped LLM1 remains intentionally disabled"
-            : "V2 enrichment quality gate failed; review remediation artifacts before downstream processing";
+            ? "V2 enrichment technical and evidence gates passed; grouped LLM1 remains intentionally disabled"
+            : technicalPassed
+              ? "V2 enrichment technical gate passed; evidence readiness requires review"
+              : "V2 enrichment technical gate failed; review remediation artifacts before downstream processing";
           job.result = {
             ...job.result,
             metadata: {
@@ -2971,9 +3013,13 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
               downstream_supported: false,
               downstream_input: "enrichment_quality_gate",
               enrichment_quality_gate: qualityGate,
+              technical_gate: qualityGate.technicalGate || { status: technicalPassed ? "pass" : "fail" },
+              evidence_readiness_gate: qualityGate.evidenceReadinessGate || { status: evidenceReady ? "pass" : "fail" },
               downstream_message: qualityPassed
                 ? "V2 enrichment passed quality control. Grouped LLM1 is paused until HEAL_V2_LLM1_ENABLED=true is explicitly enabled."
-                : "V2 enrichment quality control failed. Grouped LLM1 is blocked until normalization and VEP coverage pass the gate.",
+                : technicalPassed
+                  ? "V2 enrichment artifacts are technically complete, but evidence readiness is not approved. Grouped LLM1 remains blocked."
+                  : "V2 enrichment quality control failed. Grouped LLM1 is blocked until technical integrity and evidence readiness pass.",
             },
           };
           return;
@@ -3255,6 +3301,10 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
           v2EnrichmentCompleteCsv: path.join(enrichmentOutputDir, "v2_enrichment_complete.csv"),
           v2EnrichmentVepOnlyAuditCsv: path.join(enrichmentOutputDir, "v2_enrichment_vep_only_audit.csv"),
           v2EnrichmentPhysicalMatrixCsv: path.join(enrichmentOutputDir, "v2_enrichment_physical_matrix.csv"),
+          v2EnrichmentPhysicalEvidenceAuditJsonlGz: path.join(enrichmentOutputDir, "v2_enrichment_physical_evidence_audit.jsonl.gz"),
+          v2EnrichmentModuleProjectionCsv: path.join(enrichmentOutputDir, "v2_enrichment_module_projection.csv"),
+          enrichmentRetryQueueJsonl: path.join(enrichmentOutputDir, "enrichment_retry_queue.jsonl"),
+          enrichmentIdentityResolutionSummaryJson: path.join(enrichmentOutputDir, "enrichment_identity_resolution_summary.json"),
           enrichmentPerformanceSummaryJson: path.join(enrichmentOutputDir, "enrichment_performance_summary.json"),
         });
         await persistVcfCanonJob(job);
@@ -3270,6 +3320,8 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
         inputPath: enrichmentInputPath,
         outputDir: enrichmentOutputDir,
         cacheDir: enrichmentPaths.cache,
+        cachePath: enrichmentPaths.cacheV2,
+        legacyCachePath: enrichmentPaths.legacyCache,
         normalizationSummaryPath: isGeneModuleV2 ? job.artifacts.normalizationSummaryJson || "" : undefined,
         requestedAt: new Date().toISOString(),
       };
@@ -3286,6 +3338,10 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
       job.artifacts.v2EnrichmentCompleteCsv = enrichmentOutputs.v2EnrichmentCompleteCsv || job.artifacts.v2EnrichmentCompleteCsv || "";
       job.artifacts.v2EnrichmentVepOnlyAuditCsv = enrichmentOutputs.v2EnrichmentVepOnlyAuditCsv || job.artifacts.v2EnrichmentVepOnlyAuditCsv || "";
       job.artifacts.v2EnrichmentPhysicalMatrixCsv = enrichmentOutputs.v2EnrichmentPhysicalMatrixCsv || job.artifacts.v2EnrichmentPhysicalMatrixCsv || "";
+      job.artifacts.v2EnrichmentPhysicalEvidenceAuditJsonlGz = enrichmentOutputs.v2EnrichmentPhysicalEvidenceAuditJsonlGz || job.artifacts.v2EnrichmentPhysicalEvidenceAuditJsonlGz || "";
+      job.artifacts.v2EnrichmentModuleProjectionCsv = enrichmentOutputs.v2EnrichmentModuleProjectionCsv || job.artifacts.v2EnrichmentModuleProjectionCsv || "";
+      job.artifacts.enrichmentRetryQueueJsonl = enrichmentOutputs.enrichmentRetryQueueJsonl || job.artifacts.enrichmentRetryQueueJsonl || "";
+      job.artifacts.enrichmentIdentityResolutionSummaryJson = enrichmentOutputs.enrichmentIdentityResolutionSummaryJson || job.artifacts.enrichmentIdentityResolutionSummaryJson || "";
       job.artifacts.enrichmentPerformanceSummaryJson = enrichmentOutputs.enrichmentPerformanceSummaryJson || job.artifacts.enrichmentPerformanceSummaryJson || "";
       job.result = {
         ...(job.result || {}),
@@ -3296,10 +3352,18 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
       job.stage = isGeneModuleV2 ? "enrichment_quality_gate" : "enriching";
       job.stageProgress = 100;
       const qualityGate = enrichmentSummary.metadata?.qualityGate || {};
+      const technicalPassed = qualityGate.technicalGate
+        ? qualityGate.technicalGate.status === "pass"
+        : qualityGate.status === "pass";
+      const evidenceReady = qualityGate.evidenceReadinessGate
+        ? qualityGate.evidenceReadinessGate.status === "pass"
+        : qualityGate.evidenceReady !== false;
       job.message = isGeneModuleV2
-        ? qualityGate.status === "pass"
-          ? "V2 enrichment quality gate passed; grouped LLM1 remains intentionally disabled"
-          : "V2 enrichment quality gate failed; review remediation artifacts"
+        ? technicalPassed && evidenceReady
+          ? "V2 enrichment technical and evidence gates passed; grouped LLM1 remains intentionally disabled"
+          : technicalPassed
+            ? "V2 enrichment technical gate passed; evidence readiness requires review"
+            : "V2 enrichment technical gate failed; review remediation artifacts"
         : "Variant enrichment completed";
       if (isGeneModuleV2) {
         job.result.metadata = {
@@ -3307,6 +3371,8 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
           downstream_supported: false,
           downstream_input: "enrichment_quality_gate",
           enrichment_quality_gate: qualityGate,
+          technical_gate: qualityGate.technicalGate || { status: technicalPassed ? "pass" : "fail" },
+          evidence_readiness_gate: qualityGate.evidenceReadinessGate || { status: evidenceReady ? "pass" : "fail" },
           downstream_message:
             "V2 grouped LLM1 is paused until enrichment quality is approved and HEAL_V2_LLM1_ENABLED=true is explicitly enabled.",
         };
@@ -4088,6 +4154,43 @@ app.get("/api/vcf-canon-matches/:jobId/enrichment-vep-only", async (req, res) =>
 
 app.get("/api/vcf-canon-matches/:jobId/enrichment-physical-matrix", async (req, res) => {
   await downloadRuntimeArtifact(req, res, "v2EnrichmentPhysicalMatrixCsv", "v2_enrichment_physical_matrix", variantEnrichmentPaths);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/enrichment-physical-evidence-audit", async (req, res) => {
+  await downloadRuntimeArtifact(
+    req,
+    res,
+    "v2EnrichmentPhysicalEvidenceAuditJsonlGz",
+    "v2_enrichment_physical_evidence_audit",
+    variantEnrichmentPaths,
+    { jsonl: true },
+  );
+});
+
+app.get("/api/vcf-canon-matches/:jobId/enrichment-module-projection", async (req, res) => {
+  await downloadRuntimeArtifact(req, res, "v2EnrichmentModuleProjectionCsv", "v2_enrichment_module_projection", variantEnrichmentPaths);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/enrichment-retry-queue", async (req, res) => {
+  await downloadRuntimeArtifact(
+    req,
+    res,
+    "enrichmentRetryQueueJsonl",
+    "enrichment_retry_queue",
+    variantEnrichmentPaths,
+    { jsonl: true },
+  );
+});
+
+app.get("/api/vcf-canon-matches/:jobId/enrichment-identity-summary", async (req, res) => {
+  await downloadRuntimeArtifact(
+    req,
+    res,
+    "enrichmentIdentityResolutionSummaryJson",
+    "enrichment_identity_resolution_summary",
+    variantEnrichmentPaths,
+    { json: true },
+  );
 });
 
 app.get("/api/vcf-canon-matches/:jobId/enrichment-resolution-audit", async (req, res) => {

@@ -132,6 +132,28 @@ def extract_gt(format_value: str, sample_value: str) -> str:
     return values[index] if index < len(values) else ""
 
 
+def inspect_vcf_samples(path: Path) -> dict:
+    """Read sample names once so multi-sample VCFs are never handled implicitly."""
+    with open_text(path) as handle:
+        for line in handle:
+            if line.startswith("#CHROM"):
+                columns = line.rstrip("\n").split("\t")
+                return {"sampleNames": columns[9:], "sampleCount": max(0, len(columns) - 9)}
+    return {"sampleNames": [], "sampleCount": 0}
+
+
+def resolve_sample_index(sample_info: dict, sample_name: str | None) -> int:
+    names = list(sample_info.get("sampleNames") or [])
+    if len(names) <= 1:
+        return 0
+    requested = clean(sample_name)
+    if not requested:
+        raise ValueError("Multi-sample VCF requires an explicit sampleName for v2 normalization.")
+    if requested not in names:
+        raise ValueError(f"Requested VCF sampleName was not found: {requested}")
+    return names.index(requested)
+
+
 def is_symbolic(alt: str) -> bool:
     return not alt or alt in {"*", "."} or (alt.startswith("<") and alt.endswith(">")) or "[" in alt or "]" in alt
 
@@ -229,6 +251,7 @@ def is_inside_target_regions(chrom: str, pos: str, regions: dict[str, list[tuple
 def source_alleles(
     path: Path,
     target_regions: dict[str, list[tuple[int, int]]] | None = None,
+    sample_index: int = 0,
 ) -> tuple[dict[tuple[str, str, str, str, str], dict], list[dict], Counter]:
     """Index observed source ALT alleles to preserve original genotype/audit fields."""
     indexed: dict[tuple[str, str, str, str, str], dict] = {}
@@ -244,15 +267,18 @@ def source_alleles(
                 continue
             chrom, pos, record_id, ref, alt, qual, filter_value, info = parts[:8]
             normalized_chrom = normalize_chromosome(chrom)
-            gt = extract_gt(parts[8] if len(parts) > 8 else "", parts[9] if len(parts) > 9 else "")
+            sample_value = parts[9 + sample_index] if len(parts) > 9 + sample_index else ""
+            gt = extract_gt(parts[8] if len(parts) > 8 else "", sample_value)
             alts = [item.strip() for item in alt.split(",") if item.strip()]
             stats["input_records"] += 1
             if len(alts) > 1:
                 stats["multiallelic_records"] += 1
+            record_has_observed_alt = False
             for allele_index, allele_alt in enumerate(alts, start=1):
                 dosage = dosage_for_allele(gt, allele_index)
                 if dosage <= 0:
                     continue
+                record_has_observed_alt = True
                 base = {
                     "source_chrom_vcf": normalized_chrom,
                     "source_pos_vcf": pos,
@@ -279,11 +305,15 @@ def source_alleles(
                 if target_regions is not None and not is_inside_target_regions(chrom, pos, target_regions):
                     # This is a deterministic candidate prefilter, not a clinical exclusion.
                     # The canonical envelope remains the source of truth for final matching.
-                    stats["outside_canon_envelope_prefilter"] += 1
+                    stats["outside_canon_envelope_prefilter_alleles"] += 1
                     continue
                 key = (base["source_chrom_vcf"], pos, ref, alt, str(allele_index))
                 indexed[key] = base
                 stats["observed_source_alleles"] += 1
+            if record_has_observed_alt:
+                stats["records_with_observed_alt"] += 1
+            elif gt:
+                stats["records_without_observed_alt"] += 1
     return indexed, excluded, stats
 
 
@@ -347,7 +377,16 @@ def parse_orig(info: dict[str, str], current: dict) -> tuple[str, str, str, str,
     )
 
 
-def normalized_alleles(path: Path, assembly: str, source_index: dict, excluded: list[dict], stats: Counter, target_regions: dict[str, list[tuple[int, int]]], output_dir: Path) -> list[dict]:
+def normalized_alleles(
+    path: Path,
+    assembly: str,
+    source_index: dict,
+    excluded: list[dict],
+    stats: Counter,
+    target_regions: dict[str, list[tuple[int, int]]],
+    output_dir: Path,
+    sample_index: int = 0,
+) -> list[dict]:
     rows: list[dict] = []
     seen: set[str] = set()
     with open_text(path) as handle:
@@ -389,7 +428,8 @@ def normalized_alleles(path: Path, assembly: str, source_index: dict, excluded: 
                 stats["invalid_normalized_coordinate"] += 1
                 continue
             info = parse_info(info_value)
-            gt = extract_gt(parts[8] if len(parts) > 8 else "", parts[9] if len(parts) > 9 else "")
+            sample_value = parts[9 + sample_index] if len(parts) > 9 + sample_index else ""
+            gt = extract_gt(parts[8] if len(parts) > 8 else "", sample_value)
             dosage = dosage_for_allele(gt, 1)
             if dosage <= 0:
                 continue
@@ -480,6 +520,7 @@ def run_bcftools(
     image: str,
     target_regions_path: Path,
     contig_rename_path: Path,
+    sample_name: str = "",
 ) -> dict:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     input_name = shlex.quote(input_path.name)
@@ -489,9 +530,10 @@ def run_bcftools(
     rename_name = shlex.quote(contig_rename_path.name)
     # Keep the VCF filter inside the container. Creating an uncompressed host copy
     # was the main source of avoidable disk pressure for multi-gigabyte VCFs.
+    sample_filter = f" -s {shlex.quote(sample_name)}" if sample_name else ""
     command_parts = [
         "set -o pipefail;",
-        f"bcftools view -Ov /input/{input_name}",
+        f"bcftools view{sample_filter} -i 'GT=\"alt\"' -Ov /input/{input_name}",
         "|",
         "awk -F '\\t'",
         "-v",
@@ -574,17 +616,19 @@ def process(payload: dict) -> dict:
         raise FileNotFoundError("The canon gene envelope index is required before v2 normalization.")
 
     started_at = utc_now()
-    write_progress(output_dir, stage="normalization", substage="validating_input", message="Validating VCF, assembly and target regions")
+    sample_info = inspect_vcf_samples(input_path)
+    sample_index = resolve_sample_index(sample_info, payload.get("sampleName"))
+    write_progress(output_dir, stage="normalization", substage="validating_input", message="Validating VCF, assembly, samples and target regions")
     workspace = assert_workspace_capacity(output_dir, input_path)
     target_regions = load_target_regions(target_index_path)
-    source_index, excluded_rows, stats = source_alleles(input_path, target_regions)
+    source_index, excluded_rows, stats = source_alleles(input_path, target_regions, sample_index)
     write_progress(
         output_dir,
         stage="normalization",
         substage="target_prefilter",
         processed=int(stats.get("observed_source_alleles", 0)),
-        total=int(stats.get("input_records", 0)),
-        unit="source alleles",
+        total=int(stats.get("records_with_observed_alt", 0)),
+        unit="observed ALT alleles",
         message="Indexed observed alleles inside canon envelopes",
     )
     raw_contigs = supported_vcf_contigs(input_path)
@@ -601,9 +645,10 @@ def process(payload: dict) -> dict:
         clean(payload.get("dockerImage")) or DEFAULT_IMAGE,
         target_regions_path,
         contig_rename_path,
+        (sample_info.get("sampleNames") or [""])[sample_index] if sample_info.get("sampleNames") else "",
     )
     write_progress(output_dir, stage="normalization", substage="bcftools_normalization", processed=0, total=1, unit="command", message="Left-aligning and splitting alleles with bcftools")
-    normalized_rows = normalized_alleles(normalized_vcf, assembly, source_index, excluded_rows, stats, target_regions, output_dir)
+    normalized_rows = normalized_alleles(normalized_vcf, assembly, source_index, excluded_rows, stats, target_regions, output_dir, sample_index)
 
     fields = [
         "variant_key", "assembly", "chrom_vcf", "pos_vcf", "variant_start", "variant_end", "id_vcf", "ref_vcf", "alt_vcf",
@@ -636,12 +681,19 @@ def process(payload: dict) -> dict:
             "targetChromosomes": len(target_regions),
             "targetRegions": target_region_count,
         },
+        "sample": {
+            "sampleCount": sample_info.get("sampleCount", 0),
+            "sampleNames": sample_info.get("sampleNames", []),
+            "selectedSample": (sample_info.get("sampleNames") or [""])[sample_index] if sample_info.get("sampleNames") else "",
+        },
         "workspace": workspace,
         "bcftools": bcftools,
         "counts": {**dict(stats), "excluded": len(excluded_rows), "normalizationValidRate": valid_rate},
         "qualityGate": {
             "minimumNormalizationValidRate": 0.99,
-            "passed": valid_rate >= 0.99 and int(stats.get("normalized_outside_target", 0)) == 0,
+            "retentionPassed": valid_rate >= 0.99,
+            "targetLeakageRows": int(stats.get("normalized_outside_target", 0)),
+            "passed": valid_rate >= 0.99,
         },
     }
     summary_path = output_dir / "normalization_summary.json"

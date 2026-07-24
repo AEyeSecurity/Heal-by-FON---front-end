@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -82,6 +83,20 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
         self.assertEqual(stats["unsupported_contig"], 1)
         self.assertEqual(excluded[0]["exclusion_reason"], "unsupported_contig")
 
+    def test_multi_sample_vcf_requires_explicit_sample(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            vcf_path = Path(temporary) / "multi.vcf"
+            vcf_path.write_text(
+                "##fileformat=VCFv4.2\n"
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\n"
+                "chr1\t100\t.\tA\tG\t.\tPASS\t.\tGT\t0/1\t1/1\n",
+                encoding="utf-8",
+            )
+            sample_info = normalizer.inspect_vcf_samples(vcf_path)
+            with self.assertRaises(ValueError):
+                normalizer.resolve_sample_index(sample_info, "")
+            self.assertEqual(normalizer.resolve_sample_index(sample_info, "S2"), 1)
+
     def test_envelope_prefilter_keeps_only_possible_canon_candidates(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -104,7 +119,7 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
         self.assertEqual(len(sources), 1)
         self.assertEqual(next(iter(sources.values()))["source_id_vcf"], "rs-in")
         self.assertEqual(excluded, [])
-        self.assertEqual(stats["outside_canon_envelope_prefilter"], 1)
+        self.assertEqual(stats["outside_canon_envelope_prefilter_alleles"], 1)
 
     def test_singleton_envelope_object_is_accepted_by_normalizer_and_matcher(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -335,6 +350,43 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
         self.assertEqual(cached["payload"], {"public": "annotation"})
         self.assertNotIn("0/1", text)
 
+    def test_source_error_cache_entries_are_not_reused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = enrichment.EnrichmentCache(Path(temporary) / "enrichment_cache_v2.sqlite", ttl_days=1)
+            cache.put("GRCh38", "v2_error", "clinvar", "fingerprint", {}, "source_error", 429)
+            self.assertIsNone(cache.get("GRCh38", "v2_error", "clinvar", "fingerprint"))
+            cache.close()
+
+    def test_legacy_cache_is_read_only_fallback_for_exact_fingerprint(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            legacy_path = root / "enrichment_cache.sqlite"
+            connection = sqlite3.connect(legacy_path)
+            connection.execute(
+                """CREATE TABLE enrichment_cache (
+                    assembly TEXT NOT NULL, variant_key TEXT NOT NULL, source TEXT NOT NULL,
+                    request_fingerprint TEXT NOT NULL, response_json TEXT NOT NULL, status TEXT NOT NULL,
+                    http_status INTEGER, fetched_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+                    pipeline_version TEXT NOT NULL, PRIMARY KEY (assembly, variant_key, source)
+                )""",
+            )
+            now = "2099-01-01T00:00:00Z"
+            legacy_key = enrichment.fingerprint({"rsid": "rs1", "source": "clinvar", "pipeline": "gene-module-v2-enrichment-1"})
+            connection.execute(
+                "INSERT INTO enrichment_cache VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("GRCh38", "v2_legacy", "clinvar", legacy_key, json.dumps({"data": {"count": "1"}, "error": ""}), "success", 200, now, "2099-01-02T00:00:00Z", "gene-module-v2-enrichment-1"),
+            )
+            connection.commit()
+            connection.close()
+
+            cache = enrichment.EnrichmentCache(root / "enrichment_cache_v2.sqlite", ttl_days=1, legacy_path=legacy_path)
+            current_key = enrichment.fingerprint({"identifier": "rs1", "source": "clinvar", "query_mode": "exact_rsid", "pipeline": enrichment.PIPELINE_VERSION})
+            cached = cache.get("GRCh38", "v2_legacy", "clinvar", current_key, query_mode="exact_rsid", legacy_fingerprint=legacy_key)
+            cache.close()
+
+        self.assertEqual(cached["payload"], {"data": {"count": "1"}, "error": ""})
+        self.assertEqual(cached["status_reason"], "legacy_cache_reused")
+
     def test_physical_matrix_row_has_one_variant_and_all_secondary_statuses(self):
         variant = {
             "variant_key": "v2_test",
@@ -372,6 +424,25 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
         for source in enrichment.SECONDARY_SOURCE_ORDER:
             self.assertEqual(row[f"source_status_{source}"], "success")
         self.assertFalse(any(key.endswith("_raw_json") for key in row))
+
+    def test_physical_evidence_usable_requires_secondary_source(self):
+        variant = {
+            "variant_key": "v2_vep_only",
+            "assembly": "GRCh38",
+            "chrom_vcf": "chr1",
+            "pos_vcf": "10",
+            "ref_vcf": "A",
+            "alt_vcf": "G",
+            "id_vcf": "",
+        }
+        enrichment_payload = {
+            "vep_status": "success",
+            "source_status": {source: "not_found" for source in enrichment.SECONDARY_SOURCE_ORDER},
+            "source_status_reason": {source: "provider_returned_no_evidence" for source in enrichment.SECONDARY_SOURCE_ORDER},
+            "errors": {},
+        }
+        row = enrichment.build_physical_evidence_row(variant, enrichment_payload, {"input": "chr1 10 A G"}, 1)
+        self.assertFalse(row["secondary_evidence_usable"])
 
     def test_progress_write_ignores_transient_windows_replace_lock(self):
         with tempfile.TemporaryDirectory() as temporary:

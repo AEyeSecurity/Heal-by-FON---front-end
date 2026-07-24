@@ -13,6 +13,7 @@ import atexit
 import base64
 import csv
 import datetime as dt
+import gzip
 import hashlib
 import json
 import os
@@ -29,7 +30,8 @@ from pathlib import Path
 import enrich_observed_variants as legacy
 
 
-PIPELINE_VERSION = "gene-module-v2-enrichment-1"
+PIPELINE_VERSION = "gene-module-v2-enrichment-2"
+CACHE_SCHEMA_VERSION = 2
 DEFAULT_MIN_VEP_COVERAGE = 0.90
 VEP_URL = "https://rest.ensembl.org/vep/human/region"
 VEP_INFO_URL = "https://rest.ensembl.org/info/data"
@@ -159,10 +161,12 @@ def source_fields(rows: list[dict]) -> list[str]:
 
 
 class EnrichmentCache:
-    def __init__(self, path: Path, ttl_days: int):
+    def __init__(self, path: Path, ttl_days: int, legacy_path: Path | None = None):
         self.path = path
+        self.legacy_path = legacy_path if legacy_path and legacy_path != path else None
         self.ttl = dt.timedelta(days=ttl_days)
         self._lock = threading.RLock()
+        self._legacy_connections = threading.local()
         path.parent.mkdir(parents=True, exist_ok=True)
         connection = self.connect()
         with self._lock:
@@ -172,14 +176,18 @@ class EnrichmentCache:
                     assembly TEXT NOT NULL,
                     variant_key TEXT NOT NULL,
                     source TEXT NOT NULL,
+                    query_mode TEXT NOT NULL DEFAULT 'default',
                     request_fingerprint TEXT NOT NULL,
+                    identity_fingerprint TEXT NOT NULL DEFAULT '',
                     response_json TEXT NOT NULL,
                     status TEXT NOT NULL,
+                    status_reason TEXT NOT NULL DEFAULT '',
                     http_status INTEGER,
+                    retry_after TEXT NOT NULL DEFAULT '',
                     fetched_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL,
                     pipeline_version TEXT NOT NULL,
-                    PRIMARY KEY (assembly, variant_key, source)
+                    PRIMARY KEY (assembly, variant_key, source, query_mode)
                 )
                 """
             )
@@ -205,17 +213,91 @@ class EnrichmentCache:
             if connection is not None:
                 connection.close()
                 self._connection = None
+            legacy_connection = getattr(self._legacy_connections, "connection", None)
+            if legacy_connection is not None:
+                legacy_connection.close()
+                self._legacy_connections.connection = None
 
-    def get(self, assembly: str, variant_key: str, source: str, fingerprint: str, connection: sqlite3.Connection | None = None) -> dict | None:
+    def legacy_connection(self) -> sqlite3.Connection | None:
+        if not self.legacy_path or not self.legacy_path.exists():
+            return None
+        connection = getattr(self._legacy_connections, "connection", None)
+        if connection is None:
+            uri = f"file:{self.legacy_path.as_posix()}?mode=ro"
+            connection = sqlite3.connect(uri, uri=True, timeout=3, check_same_thread=False)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA busy_timeout=3000")
+            self._legacy_connections.connection = connection
+        return connection
+
+    def legacy_get(
+        self,
+        assembly: str,
+        variant_key: str,
+        source: str,
+        fingerprints: list[str],
+        query_mode: str,
+    ) -> dict | None:
+        connection = self.legacy_connection()
+        if connection is None or not fingerprints:
+            return None
+        try:
+            row = connection.execute(
+                """SELECT request_fingerprint, response_json, status, http_status, fetched_at, expires_at
+                   FROM enrichment_cache
+                   WHERE assembly = ? AND variant_key = ? AND source = ?""",
+                (assembly, variant_key, source),
+            ).fetchone()
+        except sqlite3.Error:
+            return None
+        if not row or row["status"] == "source_error" or row["request_fingerprint"] not in fingerprints:
+            return None
+        try:
+            expires_at = dt.datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
+            if expires_at <= dt.datetime.now(dt.UTC):
+                return None
+            payload = json.loads(row["response_json"])
+        except (ValueError, json.JSONDecodeError, TypeError):
+            return None
+        return {
+            "payload": payload,
+            "status": row["status"],
+            "status_reason": "legacy_cache_reused",
+            "http_status": row["http_status"],
+            "retry_after": "",
+            "fetched_at": row["fetched_at"],
+            "query_mode": query_mode,
+            "identity_fingerprint": "",
+        }
+
+    def get(
+        self,
+        assembly: str,
+        variant_key: str,
+        source: str,
+        fingerprint: str,
+        query_mode: str = "default",
+        connection: sqlite3.Connection | None = None,
+        legacy_fingerprint: str | None = None,
+    ) -> dict | None:
         connection = connection or self.thread_connection()
         with self._lock:
             row = connection.execute(
-                """SELECT response_json, status, http_status, fetched_at, expires_at
+                """SELECT response_json, status, status_reason, http_status, retry_after, fetched_at, expires_at,
+                          query_mode, identity_fingerprint
                    FROM enrichment_cache
-                   WHERE assembly = ? AND variant_key = ? AND source = ? AND request_fingerprint = ?""",
-                (assembly, variant_key, source, fingerprint),
+                   WHERE assembly = ? AND variant_key = ? AND source = ? AND query_mode = ? AND request_fingerprint = ?""",
+                (assembly, variant_key, source, query_mode, fingerprint),
             ).fetchone()
         if not row:
+            return self.legacy_get(
+                assembly,
+                variant_key,
+                source,
+                [value for value in [legacy_fingerprint, fingerprint] if value],
+                query_mode,
+            )
+        if row["status"] == "source_error":
             return None
         try:
             expires_at = dt.datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
@@ -224,20 +306,49 @@ class EnrichmentCache:
             payload = json.loads(row["response_json"])
         except (ValueError, json.JSONDecodeError):
             return None
-        return {"payload": payload, "status": row["status"], "http_status": row["http_status"], "fetched_at": row["fetched_at"]}
+        return {
+            "payload": payload,
+            "status": row["status"],
+            "status_reason": row["status_reason"],
+            "http_status": row["http_status"],
+            "retry_after": row["retry_after"],
+            "fetched_at": row["fetched_at"],
+            "query_mode": row["query_mode"],
+            "identity_fingerprint": row["identity_fingerprint"],
+        }
 
-    def put(self, assembly: str, variant_key: str, source: str, fingerprint: str, payload: object, status: str, http_status: int | None, connection: sqlite3.Connection | None = None) -> None:
+    def put(
+        self,
+        assembly: str,
+        variant_key: str,
+        source: str,
+        fingerprint: str,
+        payload: object,
+        status: str,
+        http_status: int | None,
+        connection: sqlite3.Connection | None = None,
+        *,
+        query_mode: str = "default",
+        identity_fingerprint: str = "",
+        status_reason: str = "",
+        retry_after: str = "",
+    ) -> None:
         fetched_at = dt.datetime.now(dt.UTC)
+        ttl = dt.timedelta(hours=1) if status == "source_error" else self.ttl
         values = (
             assembly,
             variant_key,
             source,
+            query_mode,
             fingerprint,
+            identity_fingerprint,
             json.dumps(payload, ensure_ascii=True),
             status,
+            status_reason,
             http_status,
+            retry_after,
             fetched_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-            (fetched_at + self.ttl).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            (fetched_at + ttl).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             PIPELINE_VERSION,
         )
         connection = connection or self.thread_connection()
@@ -246,13 +357,17 @@ class EnrichmentCache:
                 with self._lock:
                     connection.execute(
                         """INSERT INTO enrichment_cache
-                           (assembly, variant_key, source, request_fingerprint, response_json, status, http_status, fetched_at, expires_at, pipeline_version)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                           ON CONFLICT(assembly, variant_key, source) DO UPDATE SET
+                           (assembly, variant_key, source, query_mode, request_fingerprint, identity_fingerprint,
+                            response_json, status, status_reason, http_status, retry_after, fetched_at, expires_at, pipeline_version)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           ON CONFLICT(assembly, variant_key, source, query_mode) DO UPDATE SET
                              request_fingerprint=excluded.request_fingerprint,
+                             identity_fingerprint=excluded.identity_fingerprint,
                              response_json=excluded.response_json,
                              status=excluded.status,
+                             status_reason=excluded.status_reason,
                              http_status=excluded.http_status,
+                             retry_after=excluded.retry_after,
                              fetched_at=excluded.fetched_at,
                              expires_at=excluded.expires_at,
                              pipeline_version=excluded.pipeline_version""",
@@ -285,6 +400,23 @@ def post_json(url: str, payload: dict, timeout_seconds: int) -> tuple[object | N
         detail = error.read().decode("utf-8", errors="replace")[:1000]
         return None, f"http_{error.code}: {detail}", error.code, dict(error.headers.items()) if error.headers else {}
     except Exception as error:  # External services must not terminate the audited run.
+        return None, str(error), None, {}
+
+
+def get_json(url: str, timeout_seconds: int) -> tuple[object | None, str, int | None, dict]:
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json", "User-Agent": legacy.USER_AGENT},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            return json.loads(body), "", response.status, dict(response.headers.items())
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")[:1000]
+        return None, f"http_{error.code}: {detail}", error.code, dict(error.headers.items()) if error.headers else {}
+    except Exception as error:
         return None, str(error), None, {}
 
 
@@ -329,7 +461,13 @@ def fetch_vep_batch(batch: list[dict], assembly: str, cache: EnrichmentCache, ti
     cache_hits = 0
     for variant in batch:
         request_payload = {"variant": vep_region_line(variant), "params": VEP_PARAMS}
-        cached = cache.get(assembly, variant["variant_key"], "ensembl_vep_region", fingerprint(request_payload))
+        cached = cache.get(
+            assembly,
+            variant["variant_key"],
+            "ensembl_vep_region",
+            fingerprint(request_payload),
+            query_mode="coordinate",
+        )
         if cached:
             resolved[variant["variant_key"]] = {"item": cached["payload"], "cache_hit": True, "status": cached["status"], "error": ""}
             cache_hits += 1
@@ -362,7 +500,18 @@ def fetch_vep_batch(batch: list[dict], assembly: str, cache: EnrichmentCache, ti
     for variant in misses:
         item = items_by_id.get(variant["variant_key"], {})
         status = "success" if item else "source_error" if error else "not_found"
-        cache.put(assembly, variant["variant_key"], "ensembl_vep_region", fingerprint({"variant": vep_region_line(variant), "params": VEP_PARAMS}), item, status, http_status)
+        cache.put(
+            assembly,
+            variant["variant_key"],
+            "ensembl_vep_region",
+            fingerprint({"variant": vep_region_line(variant), "params": VEP_PARAMS}),
+            item,
+            status,
+            http_status,
+            query_mode="coordinate",
+            identity_fingerprint=fingerprint({"assembly": assembly, "variant_key": variant["variant_key"]}),
+            status_reason="vep_response" if item else ("vep_request_error" if error else "vep_no_result"),
+        )
         resolved[variant["variant_key"]] = {"item": item, "cache_hit": False, "status": status, "error": error if not item else ""}
     return resolved, cache_hits, len(misses), errors
 
@@ -494,6 +643,214 @@ def resolve_rsid(variant: dict, item: dict) -> dict:
     }
 
 
+def coordinate_region(variant: dict) -> str:
+    chrom = clean(variant.get("chrom_vcf")).removeprefix("chr")
+    start = int(variant.get("pos_vcf") or variant.get("variant_start") or 0)
+    end = int(variant.get("variant_end") or start + max(len(clean(variant.get("ref_vcf"))), 1) - 1)
+    return f"{chrom}:{start}..{end}"
+
+
+def coordinate_allele_match(variant: dict, entry: dict) -> tuple[bool, str]:
+    """Match Ensembl/MyVariant coordinate records without trusting proximity alone."""
+    try:
+        variant_start = int(variant.get("pos_vcf"))
+        variant_end = int(variant.get("variant_end") or variant_start + max(len(clean(variant.get("ref_vcf"))), 1) - 1)
+        entry_start = int(entry.get("start") or entry.get("position"))
+        entry_end = int(entry.get("end") or entry_start)
+    except (TypeError, ValueError):
+        return False, "invalid_coordinate"
+    if not intervals_overlap(variant_start, variant_end, entry_start, entry_end):
+        return False, "coordinate_mismatch"
+    allele_string = entry.get("allele_string") or entry.get("alleles") or entry.get("_id") or ""
+    ref = clean(variant.get("ref_vcf"))
+    alt = clean(variant.get("alt_vcf"))
+    if exact_allele_match(allele_string, ref, alt):
+        return True, "exact_coordinate_allele"
+    observed_signature = normalized_allele_signature(ref, alt)
+    alleles = [clean(value) for value in re.split(r"[|/,]", clean(allele_string)) if clean(value)]
+    for left_index, left in enumerate(alleles):
+        for right_index, right in enumerate(alleles):
+            if left_index == right_index:
+                continue
+            if normalized_allele_signature(left, right) == observed_signature:
+                return True, "normalized_indel_match"
+    return False, "allele_mismatch"
+
+
+def resolve_coordinate_identity(variant: dict, timeout_seconds: int) -> dict:
+    """Resolve an rsID through Ensembl variation overlap with exact allele checks."""
+    url = (
+        "https://rest.ensembl.org/overlap/region/human/"
+        f"{urllib.parse.quote(coordinate_region(variant), safe=':..')}"
+        "?feature=variation;content-type=application/json"
+    )
+    payload, error, http_status, headers = get_json(url, timeout_seconds)
+    if error:
+        return {
+            "resolved_rsid": "",
+            "candidate_rsids": [],
+            "status": "source_error",
+            "reason": "coordinate_identity_lookup_failed",
+            "error": error,
+            "http_status": http_status,
+            "headers": headers,
+            "url": url,
+        }
+    entries = payload if isinstance(payload, list) else []
+    candidates: list[str] = []
+    exact: list[tuple[str, str]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        identifier = normalize_rsid(entry.get("id"))
+        if identifier:
+            candidates.append(identifier)
+        matched, match_class = coordinate_allele_match(variant, entry)
+        if matched and identifier:
+            exact.append((identifier, match_class))
+    exact_ids = sorted({item[0] for item in exact})
+    if len(exact_ids) == 1:
+        match_classes = {item[1] for item in exact if item[0] == exact_ids[0]}
+        return {
+            "resolved_rsid": exact_ids[0],
+            "candidate_rsids": sorted(set(candidates)),
+            "status": "resolved_coordinate_exact",
+            "reason": next(iter(match_classes)),
+            "identity_match_class": next(iter(match_classes)),
+            "http_status": http_status,
+            "headers": headers,
+            "url": url,
+            "candidate_count": len(set(candidates)),
+        }
+    if len(exact_ids) > 1:
+        return {
+            "resolved_rsid": "",
+            "candidate_rsids": sorted(set(exact_ids)),
+            "status": "ambiguous_multiple_exact_rsids",
+            "reason": "multiple_coordinate_exact_rsids",
+            "identity_match_class": "ambiguous_identity",
+            "http_status": http_status,
+            "headers": headers,
+            "url": url,
+            "candidate_count": len(set(candidates)),
+        }
+    return {
+        "resolved_rsid": "",
+        "candidate_rsids": sorted(set(candidates)),
+        "status": "coordinate_no_exact_allele",
+        "reason": "coordinate_lookup_without_exact_allele",
+        "identity_match_class": "rsid_without_allele_confirmation" if candidates else "no_identity_match",
+        "http_status": http_status,
+        "headers": headers,
+        "url": url,
+        "candidate_count": len(set(candidates)),
+    }
+
+
+def myvariant_coordinate_hgvs(variant: dict) -> str:
+    chrom = clean(variant.get("chrom_vcf"))
+    pos = clean(variant.get("pos_vcf"))
+    ref = clean(variant.get("ref_vcf"))
+    alt = clean(variant.get("alt_vcf"))
+    return f"{chrom}:g.{pos}{ref}>{alt}"
+
+
+def resolve_myvariant_coordinate(variant: dict, timeout_seconds: int) -> dict:
+    """Query MyVariant's GRCh38 coordinate scope and validate returned HGVS."""
+    chrom = clean(variant.get("chrom_vcf")).removeprefix("chr")
+    pos = clean(variant.get("pos_vcf"))
+    params = urllib.parse.urlencode({
+        "q": f"{chrom}:{pos}",
+        "scopes": "dbsnp.hg38.position",
+        "fields": "dbsnp,clinvar,cadd,gnomad,dbnsfp,_id,_score",
+        "size": "20",
+    })
+    url = f"https://myvariant.info/v1/query?{params}"
+    payload, error, http_status, headers = get_json(url, timeout_seconds)
+    if error:
+        return {"status": "source_error", "reason": "myvariant_coordinate_lookup_failed", "error": error, "http_status": http_status, "headers": headers, "url": url}
+    hits = payload.get("hits") if isinstance(payload, dict) else []
+    exact_ids: list[str] = []
+    candidates: list[str] = []
+    variant_hgvs = myvariant_coordinate_hgvs(variant).upper()
+    for hit in hits or []:
+        if not isinstance(hit, dict):
+            continue
+        dbsnp = hit.get("dbsnp") or {}
+        rsid = normalize_rsid(dbsnp.get("rsid") or hit.get("_id"))
+        if rsid:
+            candidates.append(rsid)
+        hit_id = clean(hit.get("_id")).upper().replace(" ", "")
+        if hit_id == variant_hgvs.replace(" ", "") and rsid:
+            exact_ids.append(rsid)
+    exact_ids = sorted(set(exact_ids))
+    if len(exact_ids) == 1:
+        return {
+            "status": "resolved_coordinate_exact",
+            "reason": "myvariant_exact_hgvs",
+            "identity_match_class": "exact_coordinate_allele",
+            "resolved_rsid": exact_ids[0],
+            "candidate_rsids": sorted(set(candidates)),
+            "payload": payload,
+            "http_status": http_status,
+            "headers": headers,
+            "url": url,
+        }
+    return {
+        "status": "coordinate_no_exact_allele",
+        "reason": "myvariant_coordinate_without_exact_hgvs",
+        "identity_match_class": "rsid_without_allele_confirmation" if candidates else "no_identity_match",
+        "resolved_rsid": "",
+        "candidate_rsids": sorted(set(candidates)),
+        "payload": payload if isinstance(payload, dict) else {},
+        "http_status": http_status,
+        "headers": headers,
+        "url": url,
+    }
+
+
+def fetch_clinvar_coordinate(variant: dict, timeout_seconds: int) -> dict:
+    """Query ClinVar by GRCh38 position and retain evidence only on allele confirmation."""
+    chrom = clean(variant.get("chrom_vcf")).removeprefix("chr")
+    pos = clean(variant.get("pos_vcf"))
+    ref = clean(variant.get("ref_vcf"))
+    alt = clean(variant.get("alt_vcf"))
+    term_text = f"{chrom}:{pos}[chrpos38] AND human[orgn]"
+    search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?" + urllib.parse.urlencode({
+        "db": "clinvar", "retmode": "json", "retmax": "10", "tool": "heal_fon_service", "term": term_text,
+    })
+    search_payload, search_error, search_status, headers = get_json(search_url, timeout_seconds)
+    if search_error:
+        return {"status": "source_error", "reason": "clinvar_coordinate_esearch_failed", "error": search_error, "http_status": search_status}
+    ids = []
+    if isinstance(search_payload, dict):
+        ids = ((search_payload.get("esearchresult") or {}).get("idlist") or [])
+    if not ids:
+        return {"status": "not_found", "reason": "clinvar_coordinate_no_position_records", "payload": {"count": "0", "coordinate_query": term_text}}
+    summary_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?" + urllib.parse.urlencode({
+        "db": "clinvar", "retmode": "json", "tool": "heal_fon_service", "id": ",".join(ids[:5]),
+    })
+    summary_payload, summary_error, summary_status, _ = get_json(summary_url, timeout_seconds)
+    if summary_error:
+        return {"status": "source_error", "reason": "clinvar_coordinate_esummary_failed", "error": summary_error, "http_status": summary_status}
+    summary_result = (summary_payload or {}).get("result") or {} if isinstance(summary_payload, dict) else {}
+    items = [summary_result.get(str(item)) or {} for item in ids[:5]]
+    allele_token = f"{ref}>{alt}".upper()
+    exact_items = [item for item in items if allele_token in json.dumps(item, ensure_ascii=True).upper()]
+    payload = {
+        "count": str(len(exact_items)),
+        "ids": "|".join(str(item) for item in ids[:5]),
+        "coordinate_query": term_text,
+        "clinical_significance": legacy.unique_join([legacy.clinvar_classification(item) for item in exact_items], limit=8, sep=" | "),
+        "review_status": legacy.unique_join([legacy.clinvar_review_status(item) for item in exact_items], limit=8, sep=" | "),
+        "trait_names": legacy.unique_join([legacy.clinvar_trait_name(item) for item in exact_items], limit=8),
+        "coordinate_match": bool(exact_items),
+        "esearch_raw_json": legacy.compact_json(search_payload),
+        "esummary_raw_json": legacy.compact_json(summary_payload),
+    }
+    return {"status": "success" if exact_items else "not_found", "reason": "clinvar_coordinate_exact_allele" if exact_items else "clinvar_coordinate_allele_not_confirmed", "payload": payload}
+
+
 def exact_rsid(variant: dict, item: dict) -> tuple[str, str]:
     resolved = resolve_rsid(variant, item)
     return resolved["resolved_rsid"], resolved["status"]
@@ -568,7 +925,11 @@ def parse_vep_for_gene(item: dict, target_gene: str) -> dict:
 def secondary_source_status(source: str, payload: dict, error: str) -> str:
     if error:
         return "source_error"
+    if not isinstance(payload, dict) or not payload:
+        return "not_found"
     if source == "clinvar" and clean(payload.get("count")) in {"", "0"}:
+        return "not_found"
+    if source == "myvariant" and clean(payload.get("hits")) in {"", "0"}:
         return "not_found"
     if source == "gwas" and clean(payload.get("association_count")) in {"", "0"}:
         return "not_found"
@@ -577,28 +938,113 @@ def secondary_source_status(source: str, payload: dict, error: str) -> str:
     return "success"
 
 
-def cached_secondary(cache: EnrichmentCache, assembly: str, variant: dict, rsid: str, source: str, func, timeout_seconds: int) -> tuple[dict, str, bool, str, float]:
-    request = {"rsid": rsid, "source": source, "pipeline": PIPELINE_VERSION}
+def secondary_status_reason(source: str, payload: dict, error: str, status: str) -> str:
+    if error:
+        if "429" in error:
+            return "rate_limited"
+        if "timeout" in error.lower():
+            return "timeout"
+        return "provider_error"
+    if status == "not_found":
+        return "provider_returned_no_evidence"
+    if source in {"ensembl_variation", "myvariant"} and not payload:
+        return "empty_payload"
+    return "usable_payload"
+
+
+def cached_secondary(
+    cache: EnrichmentCache,
+    assembly: str,
+    variant: dict,
+    identifier: str,
+    source: str,
+    func,
+    timeout_seconds: int,
+    *,
+    query_mode: str = "exact_rsid",
+) -> tuple[dict, str, bool, str, str, float]:
+    request = {"identifier": identifier, "source": source, "query_mode": query_mode, "pipeline": PIPELINE_VERSION}
     key = fingerprint(request)
+    legacy_key = fingerprint({"rsid": identifier, "source": source, "pipeline": "gene-module-v2-enrichment-1"})
     started = time.perf_counter()
-    cached = cache.get(assembly, variant["variant_key"], source, key)
+    cached = cache.get(
+        assembly,
+        variant["variant_key"],
+        source,
+        key,
+        query_mode=query_mode,
+        legacy_fingerprint=legacy_key,
+    )
     if cached:
         cached_payload = cached["payload"] if isinstance(cached["payload"], dict) else {}
-        return cached_payload.get("data") or {}, clean(cached_payload.get("error")), True, cached.get("status") or "success", time.perf_counter() - started
-    payload, error = func(rsid, timeout_seconds)
+        return (
+            cached_payload.get("data") or {},
+            clean(cached_payload.get("error")),
+            True,
+            cached.get("status") or "success",
+            cached.get("status_reason") or "cached_result",
+            time.perf_counter() - started,
+        )
+    payload, error = func(identifier, timeout_seconds)
     status = secondary_source_status(source, payload, error)
-    cache.put(assembly, variant["variant_key"], source, key, {"data": payload, "error": error}, status, None)
-    return payload, error, False, status, time.perf_counter() - started
+    reason = secondary_status_reason(source, payload, error, status)
+    cache.put(
+        assembly,
+        variant["variant_key"],
+        source,
+        key,
+        {"data": payload, "error": error},
+        status,
+        None,
+        query_mode=query_mode,
+        identity_fingerprint=fingerprint({"assembly": assembly, "variant_key": variant["variant_key"]}),
+        status_reason=reason,
+    )
+    return payload, error, False, status, reason, time.perf_counter() - started
 
 
 def fetch_secondary_source(variant: dict, assembly: str, cache: EnrichmentCache, timeout_seconds: int, source: str, output_key: str, func) -> dict:
     rsid = clean(variant.get("resolved_rsid"))
     if not rsid:
-        return {"variant_key": variant["variant_key"], "source": source, "output_key": output_key, "payload": {}, "error": "", "cache_hit": False, "status": "not_queried", "elapsed_seconds": 0.0}
-    payload, error, cache_hit, status, elapsed = cached_secondary(cache, assembly, variant, rsid, source, func, timeout_seconds)
+        if source == "ensembl_variation" and variant.get("coordinate_identity_status"):
+            status = variant.get("coordinate_identity_status")
+            return {
+                "variant_key": variant["variant_key"], "source": source, "output_key": output_key,
+                "payload": variant.get("coordinate_identity_payload") or {}, "error": "" if status != "source_error" else variant.get("coordinate_identity_reason", ""),
+                "cache_hit": False, "status": "success" if status == "success" else "source_error" if status == "source_error" else "not_found",
+                "status_reason": variant.get("coordinate_identity_reason", "coordinate_identity_lookup"),
+                "query_mode": "coordinate", "elapsed_seconds": 0.0,
+            }
+        if source == "myvariant" and variant.get("myvariant_coordinate_status"):
+            status = variant.get("myvariant_coordinate_status")
+            return {
+                "variant_key": variant["variant_key"], "source": source, "output_key": output_key,
+                "payload": variant.get("myvariant_coordinate_payload") or {}, "error": "" if status != "source_error" else variant.get("myvariant_coordinate_reason", ""),
+                "cache_hit": False, "status": "success" if status == "success" else "source_error" if status == "source_error" else "not_found",
+                "status_reason": variant.get("myvariant_coordinate_reason", "myvariant_coordinate_lookup"),
+                "query_mode": "coordinate", "elapsed_seconds": 0.0,
+            }
+        if source == "clinvar" and variant.get("clinvar_coordinate_status"):
+            status = variant.get("clinvar_coordinate_status")
+            return {
+                "variant_key": variant["variant_key"], "source": source, "output_key": output_key,
+                "payload": variant.get("clinvar_coordinate_payload") or {}, "error": "" if status != "source_error" else variant.get("clinvar_coordinate_reason", ""),
+                "cache_hit": False, "status": status,
+                "status_reason": variant.get("clinvar_coordinate_reason", "clinvar_coordinate_lookup"),
+                "query_mode": "coordinate", "elapsed_seconds": 0.0,
+            }
+        return {
+            "variant_key": variant["variant_key"], "source": source, "output_key": output_key,
+            "payload": {}, "error": "", "cache_hit": False, "status": "not_queried",
+            "status_reason": "source_requires_confirmed_rsid", "query_mode": "coordinate_unavailable", "elapsed_seconds": 0.0,
+        }
+    payload, error, cache_hit, status, reason, elapsed = cached_secondary(
+        cache, assembly, variant, rsid, source, func, timeout_seconds, query_mode="exact_rsid"
+    )
     return {
         "variant_key": variant["variant_key"], "source": source, "output_key": output_key,
         "payload": payload, "error": error, "cache_hit": cache_hit, "status": status,
+        "status_reason": reason, "query_mode": "exact_rsid",
         "elapsed_seconds": elapsed,
     }
 
@@ -619,14 +1065,23 @@ def fetch_secondary_sources(
     }
     enrichments = {
         variant["variant_key"]: {
-            "errors": {}, "source_status": {source: "not_queried" for source in SECONDARY_SOURCE_ORDER},
+            "errors": {},
+            "source_status": {source: "not_queried" for source in SECONDARY_SOURCE_ORDER},
+            "source_status_reason": {source: "source_requires_confirmed_rsid" for source in SECONDARY_SOURCE_ORDER},
+            "source_query_mode": {source: "coordinate_unavailable" for source in SECONDARY_SOURCE_ORDER},
             "cache_hits": 0, "ensemblVariation": {}, "clinVar": {}, "myVariant": {}, "gwasCatalog": {}, "clinPgx": {},
         }
         for variant in variants
     }
     metrics = {
         "calls_total": len(variants) * len(calls), "calls_completed": 0, "cache_hits": 0,
-        "source_stats": {source: {"workers": SOURCE_WORKERS[source], "completed": 0, "cache_hits": 0, "network_calls": 0, "errors": 0, "not_found": 0, "elapsed_seconds": 0.0} for source in calls},
+        "source_stats": {
+            source: {
+                "workers": SOURCE_WORKERS[source], "completed": 0, "cache_hits": 0, "network_calls": 0,
+                "errors": 0, "not_found": 0, "not_queried": 0, "elapsed_seconds": 0.0,
+            }
+            for source in calls
+        },
     }
     secondary_started = time.perf_counter()
     for source, (output_key, func) in calls.items():
@@ -644,20 +1099,26 @@ def fetch_secondary_sources(
                 except Exception as error:  # Secondary sources must not erase VEP evidence.
                     result = {
                         "variant_key": variant["variant_key"], "source": source, "output_key": output_key,
-                        "payload": {}, "error": str(error), "cache_hit": False, "status": "source_error", "elapsed_seconds": 0.0,
+                        "payload": {}, "error": str(error), "cache_hit": False, "status": "source_error",
+                        "status_reason": "worker_error", "query_mode": "exact_rsid", "elapsed_seconds": 0.0,
                     }
                 target = enrichments[result["variant_key"]]
                 target[output_key] = result["payload"] or {}
                 target["source_status"][source] = result["status"]
+                target["source_status_reason"][source] = result.get("status_reason") or ""
+                target["source_query_mode"][source] = result.get("query_mode") or ""
                 target["cache_hits"] += int(result["cache_hit"])
                 if result["error"]:
                     target["errors"][source] = result["error"]
                 source_metrics = metrics["source_stats"][source]
                 source_metrics["completed"] += 1
                 source_metrics["cache_hits"] += int(result["cache_hit"])
-                source_metrics["network_calls"] += int(not result["cache_hit"])
+                source_metrics["network_calls"] += int(
+                    not result["cache_hit"] and result["status"] != "not_queried"
+                )
                 source_metrics["errors"] += int(result["status"] == "source_error")
                 source_metrics["not_found"] += int(result["status"] == "not_found")
+                source_metrics["not_queried"] += int(result["status"] == "not_queried")
                 source_metrics["elapsed_seconds"] += float(result["elapsed_seconds"] or 0.0)
                 metrics["calls_completed"] += 1
                 metrics["cache_hits"] += int(result["cache_hit"])
@@ -667,6 +1128,272 @@ def fetch_secondary_sources(
                 if on_progress:
                     on_progress(metrics, source)
     return enrichments, metrics
+
+
+def resolve_coordinate_variants(
+    variants: list[dict],
+    enrichments_by_variant: dict[str, dict],
+    assembly: str,
+    cache: EnrichmentCache,
+    timeout_seconds: int,
+    on_progress=None,
+) -> dict:
+    """Resolve rsIDs for VEP-unresolved variants using coordinate+allele overlap."""
+    candidates = [variant for variant in variants if not clean(variant.get("resolved_rsid"))]
+    metrics = {
+        "total": len(candidates),
+        "completed": 0,
+        "cache_hits": 0,
+        "network_calls": 0,
+        "resolved": 0,
+        "not_found": 0,
+        "source_errors": 0,
+        "elapsed_seconds": 0.0,
+        "source": "ensembl_variation",
+        "query_mode": "coordinate",
+    }
+    started = time.perf_counter()
+
+    def resolve_one(variant: dict) -> dict:
+        request = {
+            "assembly": assembly,
+            "variant_key": variant["variant_key"],
+            "region": coordinate_region(variant),
+            "ref": clean(variant.get("ref_vcf")),
+            "alt": clean(variant.get("alt_vcf")),
+            "pipeline": PIPELINE_VERSION,
+        }
+        key = fingerprint(request)
+        cached = cache.get(assembly, variant["variant_key"], "ensembl_variation", key, query_mode="coordinate")
+        if cached:
+            return {"variant": variant, "resolution": (cached.get("payload") or {}).get("resolution") or {}, "cache_hit": True}
+        resolution = resolve_coordinate_identity(variant, timeout_seconds)
+        status = "source_error" if resolution.get("status") == "source_error" else "success" if resolution.get("resolved_rsid") else "not_found"
+        reason = resolution.get("reason") or "coordinate_identity_lookup"
+        cache.put(
+            assembly,
+            variant["variant_key"],
+            "ensembl_variation",
+            key,
+            {"resolution": resolution},
+            status,
+            resolution.get("http_status"),
+            query_mode="coordinate",
+            identity_fingerprint=fingerprint({"assembly": assembly, "variant_key": variant["variant_key"]}),
+            status_reason=reason,
+        )
+        return {"variant": variant, "resolution": resolution, "cache_hit": False}
+
+    with ThreadPoolExecutor(max_workers=max(1, int(SOURCE_WORKERS["ensembl_variation"]))) as executor:
+        futures = {executor.submit(resolve_one, variant): variant for variant in candidates}
+        for future in as_completed(futures):
+            variant = futures[future]
+            try:
+                result = future.result()
+            except Exception as error:
+                result = {
+                    "variant": variant,
+                    "resolution": {"status": "source_error", "reason": "coordinate_worker_error", "error": str(error)},
+                    "cache_hit": False,
+                }
+            resolution = result.get("resolution") or {}
+            variant_key = variant["variant_key"]
+            enrichment = enrichments_by_variant[variant_key]
+            status = resolution.get("status") or "coordinate_no_exact_allele"
+            if resolution.get("resolved_rsid"):
+                variant["resolved_rsid"] = resolution["resolved_rsid"]
+                enrichment["resolved_rsid"] = resolution["resolved_rsid"]
+                enrichment["rsid_resolution_status"] = "coordinate_exact_allele"
+                enrichment["resolution_reason"] = resolution.get("reason") or "exact_coordinate_allele"
+                enrichment["identity_match_class"] = resolution.get("identity_match_class") or "exact_coordinate_allele"
+                enrichment["candidate_rsid"] = "|".join(resolution.get("candidate_rsids") or [])
+                metrics["resolved"] += 1
+            else:
+                enrichment["candidate_rsid"] = "|".join(resolution.get("candidate_rsids") or [])
+                enrichment["identity_match_class"] = resolution.get("identity_match_class") or "no_identity_match"
+                enrichment["identity_resolution_status"] = status
+                enrichment["identity_resolution_reason"] = resolution.get("reason") or "coordinate_identity_lookup"
+            variant["coordinate_identity_status"] = "source_error" if status == "source_error" else "success" if resolution.get("resolved_rsid") else "not_found"
+            variant["coordinate_identity_reason"] = resolution.get("reason") or ""
+            variant["coordinate_identity_payload"] = resolution
+            enrichment["coordinate_identity_status"] = "source_error" if status == "source_error" else "success" if resolution.get("resolved_rsid") else "not_found"
+            enrichment["coordinate_identity_reason"] = resolution.get("reason") or ""
+            enrichment["coordinate_identity_query_mode"] = "coordinate"
+            enrichment["ensemblVariation"] = {
+                **(enrichment.get("ensemblVariation") or {}),
+                "coordinate_candidate_rsids": enrichment.get("candidate_rsid", ""),
+                "coordinate_identity_status": enrichment.get("coordinate_identity_status", ""),
+                "coordinate_identity_reason": enrichment.get("coordinate_identity_reason", ""),
+            }
+            if status == "source_error":
+                enrichment.setdefault("errors", {})["ensembl_variation_coordinate"] = resolution.get("error", "coordinate identity lookup failed")
+                metrics["source_errors"] += 1
+            elif not resolution.get("resolved_rsid"):
+                metrics["not_found"] += 1
+            metrics["cache_hits"] += int(result.get("cache_hit"))
+            metrics["network_calls"] += int(
+                not result.get("cache_hit") and result.get("status") != "not_queried"
+            )
+            metrics["completed"] += 1
+            metrics["elapsed_seconds"] = round(time.perf_counter() - started, 3)
+            metrics["calls_per_second"] = round(metrics["completed"] / max(metrics["elapsed_seconds"], 0.001), 3)
+            if on_progress:
+                on_progress(metrics)
+    metrics["wall_seconds"] = round(time.perf_counter() - started, 3)
+    return metrics
+
+
+def resolve_myvariant_coordinate_variants(
+    variants: list[dict],
+    enrichments_by_variant: dict[str, dict],
+    assembly: str,
+    cache: EnrichmentCache,
+    timeout_seconds: int,
+    on_progress=None,
+) -> dict:
+    candidates = [variant for variant in variants if not clean(variant.get("resolved_rsid"))]
+    metrics = {"total": len(candidates), "completed": 0, "cache_hits": 0, "network_calls": 0, "resolved": 0, "not_found": 0, "source_errors": 0, "elapsed_seconds": 0.0, "source": "myvariant", "query_mode": "coordinate"}
+    started = time.perf_counter()
+
+    def resolve_one(variant: dict) -> dict:
+        request = {"assembly": assembly, "variant_key": variant["variant_key"], "query": myvariant_coordinate_hgvs(variant), "pipeline": PIPELINE_VERSION}
+        key = fingerprint(request)
+        cached = cache.get(assembly, variant["variant_key"], "myvariant", key, query_mode="coordinate")
+        if cached:
+            return {"variant": variant, "resolution": (cached.get("payload") or {}).get("resolution") or {}, "cache_hit": True}
+        resolution = resolve_myvariant_coordinate(variant, timeout_seconds)
+        status = "source_error" if resolution.get("status") == "source_error" else "success" if resolution.get("resolved_rsid") else "not_found"
+        cache.put(
+            assembly,
+            variant["variant_key"],
+            "myvariant",
+            key,
+            {"resolution": resolution},
+            status,
+            resolution.get("http_status"),
+            query_mode="coordinate",
+            identity_fingerprint=fingerprint({"assembly": assembly, "variant_key": variant["variant_key"]}),
+            status_reason=resolution.get("reason", "myvariant_coordinate_lookup"),
+        )
+        return {"variant": variant, "resolution": resolution, "cache_hit": False}
+
+    with ThreadPoolExecutor(max_workers=max(1, int(SOURCE_WORKERS["myvariant"]))) as executor:
+        futures = {executor.submit(resolve_one, variant): variant for variant in candidates}
+        for future in as_completed(futures):
+            variant = futures[future]
+            try:
+                result = future.result()
+            except Exception as error:
+                result = {"variant": variant, "resolution": {"status": "source_error", "reason": "myvariant_coordinate_worker_error", "error": str(error)}, "cache_hit": False}
+            resolution = result.get("resolution") or {}
+            key = variant["variant_key"]
+            enrichment = enrichments_by_variant[key]
+            if resolution.get("resolved_rsid"):
+                variant["resolved_rsid"] = resolution["resolved_rsid"]
+                enrichment["resolved_rsid"] = resolution["resolved_rsid"]
+                enrichment["rsid_resolution_status"] = "myvariant_coordinate_exact"
+                enrichment["resolution_reason"] = resolution.get("reason", "myvariant_exact_hgvs")
+                enrichment["identity_match_class"] = "exact_coordinate_allele"
+                enrichment["candidate_rsid"] = "|".join(resolution.get("candidate_rsids") or [])
+                metrics["resolved"] += 1
+            else:
+                enrichment["candidate_rsid"] = "|".join(sorted(set((enrichment.get("candidate_rsid", "").split("|") if enrichment.get("candidate_rsid") else []) + (resolution.get("candidate_rsids") or []))))
+                if resolution.get("identity_match_class") == "rsid_without_allele_confirmation" and enrichment.get("identity_match_class") == "no_identity_match":
+                    enrichment["identity_match_class"] = "rsid_without_allele_confirmation"
+            status = resolution.get("status") or "coordinate_no_exact_allele"
+            enrichment["myvariant_coordinate_status"] = "source_error" if status == "source_error" else "success" if resolution.get("resolved_rsid") else "not_found"
+            enrichment["myvariant_coordinate_reason"] = resolution.get("reason", "")
+            enrichment["myvariant_coordinate_payload"] = resolution.get("payload") or {}
+            variant["myvariant_coordinate_status"] = enrichment["myvariant_coordinate_status"]
+            variant["myvariant_coordinate_reason"] = enrichment["myvariant_coordinate_reason"]
+            variant["myvariant_coordinate_payload"] = enrichment["myvariant_coordinate_payload"]
+            if status == "source_error":
+                enrichment.setdefault("errors", {})["myvariant_coordinate"] = resolution.get("error", "myvariant coordinate lookup failed")
+                metrics["source_errors"] += 1
+            elif not resolution.get("resolved_rsid"):
+                metrics["not_found"] += 1
+            metrics["cache_hits"] += int(result.get("cache_hit"))
+            metrics["network_calls"] += int(
+                not result.get("cache_hit") and result.get("status") != "not_queried"
+            )
+            metrics["completed"] += 1
+            metrics["elapsed_seconds"] = round(time.perf_counter() - started, 3)
+            metrics["calls_per_second"] = round(metrics["completed"] / max(metrics["elapsed_seconds"], 0.001), 3)
+            if on_progress:
+                on_progress(metrics)
+    metrics["wall_seconds"] = round(time.perf_counter() - started, 3)
+    return metrics
+
+
+def fetch_clinvar_coordinate_variants(
+    variants: list[dict],
+    enrichments_by_variant: dict[str, dict],
+    assembly: str,
+    cache: EnrichmentCache,
+    timeout_seconds: int,
+    on_progress=None,
+) -> dict:
+    candidates = [variant for variant in variants if not clean(variant.get("resolved_rsid"))]
+    metrics = {"total": len(candidates), "completed": 0, "cache_hits": 0, "network_calls": 0, "success": 0, "not_found": 0, "source_errors": 0, "elapsed_seconds": 0.0, "source": "clinvar", "query_mode": "coordinate"}
+    started = time.perf_counter()
+
+    def fetch_one(variant: dict) -> dict:
+        request = {"assembly": assembly, "variant_key": variant["variant_key"], "query": f"{variant.get('chrom_vcf')}:{variant.get('pos_vcf')}:{variant.get('ref_vcf')}>{variant.get('alt_vcf')}", "pipeline": PIPELINE_VERSION}
+        key = fingerprint(request)
+        cached = cache.get(assembly, variant["variant_key"], "clinvar", key, query_mode="coordinate")
+        if cached:
+            return {"variant": variant, "result": (cached.get("payload") or {}).get("result") or {}, "cache_hit": True}
+        result = fetch_clinvar_coordinate(variant, timeout_seconds)
+        status = result.get("status") or "not_found"
+        cache.put(
+            assembly,
+            variant["variant_key"],
+            "clinvar",
+            key,
+            {"result": result},
+            status,
+            result.get("http_status"),
+            query_mode="coordinate",
+            identity_fingerprint=fingerprint({"assembly": assembly, "variant_key": variant["variant_key"]}),
+            status_reason=result.get("reason", "clinvar_coordinate_lookup"),
+        )
+        return {"variant": variant, "result": result, "cache_hit": False}
+
+    with ThreadPoolExecutor(max_workers=max(1, int(SOURCE_WORKERS["clinvar"]))) as executor:
+        futures = {executor.submit(fetch_one, variant): variant for variant in candidates}
+        for future in as_completed(futures):
+            variant = futures[future]
+            try:
+                result = future.result()
+            except Exception as error:
+                result = {"variant": variant, "result": {"status": "source_error", "reason": "clinvar_coordinate_worker_error", "error": str(error)}, "cache_hit": False}
+            item = result.get("result") or {}
+            key = variant["variant_key"]
+            enrichment = enrichments_by_variant[key]
+            status = item.get("status") or "not_found"
+            enrichment["clinvar_coordinate_status"] = status
+            enrichment["clinvar_coordinate_reason"] = item.get("reason", "")
+            enrichment["clinvar_coordinate_payload"] = item.get("payload") or {}
+            variant["clinvar_coordinate_status"] = status
+            variant["clinvar_coordinate_reason"] = item.get("reason", "")
+            variant["clinvar_coordinate_payload"] = item.get("payload") or {}
+            if status == "success":
+                metrics["success"] += 1
+            elif status == "source_error":
+                metrics["source_errors"] += 1
+                enrichment.setdefault("errors", {})["clinvar_coordinate"] = item.get("error", "clinvar coordinate lookup failed")
+            else:
+                metrics["not_found"] += 1
+            metrics["cache_hits"] += int(result.get("cache_hit"))
+            metrics["network_calls"] += int(
+                not result.get("cache_hit") and result.get("status") != "not_queried"
+            )
+            metrics["completed"] += 1
+            metrics["elapsed_seconds"] = round(time.perf_counter() - started, 3)
+            if on_progress:
+                on_progress(metrics)
+    metrics["wall_seconds"] = round(time.perf_counter() - started, 3)
+    return metrics
 
 
 def snake_case_only(row: dict) -> dict:
@@ -685,8 +1412,12 @@ def build_module_row(row: dict, enrichment: dict) -> dict:
         "assembly": clean(row.get("assembly_name") or row.get("assembly")),
         "variant_key": clean(row.get("variant_key")),
         "resolved_rsid": clean(enrichment.get("resolved_rsid")),
+        "candidate_rsid": clean(enrichment.get("candidate_rsid")),
         "rsid_resolution_status": clean(enrichment.get("rsid_resolution_status")),
         "vep_status": clean(enrichment.get("vep_status")),
+        "identity_match_class": clean(enrichment.get("identity_match_class")),
+        "identity_resolution_status": clean(enrichment.get("identity_resolution_status")),
+        "identity_resolution_reason": clean(enrichment.get("identity_resolution_reason")),
         "vep_target_gene_effect_status": clean(vep.get("status")),
         "vep_vrs": clean(vep.get("vrs")),
         "source_status_ensembl_vep": clean(statuses.get("ensembl_vep")),
@@ -695,6 +1426,14 @@ def build_module_row(row: dict, enrichment: dict) -> dict:
         "source_status_myvariant": clean(statuses.get("myvariant")),
         "source_status_gwas": clean(statuses.get("gwas")),
         "source_status_pharmgkb": clean(statuses.get("pharmgkb")),
+        **{
+            key: value
+            for source in SECONDARY_SOURCE_ORDER
+            for key, value in (
+                (f"source_status_reason_{source}", clean((enrichment.get("source_status_reason") or {}).get(source))),
+                (f"source_query_mode_{source}", clean((enrichment.get("source_query_mode") or {}).get(source))),
+            )
+        },
     }
 
 
@@ -721,8 +1460,14 @@ def build_variant_master_row(variant: dict, enrichment: dict, module_count: int)
         "variant_key": variant["variant_key"], "assembly": variant["assembly"], "chrom_vcf": variant["chrom_vcf"],
         "pos_vcf": variant["pos_vcf"], "ref_vcf": variant["ref_vcf"], "alt_vcf": variant["alt_vcf"],
         "id_vcf": variant.get("id_vcf", ""), "resolved_rsid": enrichment.get("resolved_rsid", ""),
+        "candidate_rsid": enrichment.get("candidate_rsid", ""),
         "rsid_resolution_status": resolution_status,
         "resolution_reason": enrichment.get("resolution_reason", ""),
+        "identity_match_class": enrichment.get("identity_match_class", ""),
+        "identity_resolution_status": enrichment.get("identity_resolution_status", ""),
+        "identity_resolution_reason": enrichment.get("identity_resolution_reason", ""),
+        "coordinate_identity_status": enrichment.get("coordinate_identity_status", ""),
+        "coordinate_identity_reason": enrichment.get("coordinate_identity_reason", ""),
         "vep_only_class": vep_only_class,
         "vep_only_fallback_query_mode": fallback_query_mode,
         "vep_colocated_count": enrichment.get("vep_colocated_count", ""),
@@ -734,6 +1479,9 @@ def build_variant_master_row(variant: dict, enrichment: dict, module_count: int)
         "vep_revel_score": vep.get("picked_revel_score", ""), "vep_spliceai": vep.get("picked_spliceai", ""),
         "ensembl_population_summary": variation.get("populations", ""),
         "source_error_sources": "|".join(sorted((enrichment.get("errors") or {}).keys())),
+        "source_status": json.dumps(enrichment.get("source_status") or {}, ensure_ascii=True, sort_keys=True),
+        "source_status_reason": json.dumps(enrichment.get("source_status_reason") or {}, ensure_ascii=True, sort_keys=True),
+        "source_query_mode": json.dumps(enrichment.get("source_query_mode") or {}, ensure_ascii=True, sort_keys=True),
     }
 
 
@@ -766,17 +1514,25 @@ def build_physical_matrix_row(
         "alt_vcf": variant["alt_vcf"],
         "id_vcf": variant.get("id_vcf", ""),
         "resolved_rsid": enrichment.get("resolved_rsid", ""),
+        "candidate_rsid": enrichment.get("candidate_rsid", ""),
         "rsid_resolution_status": clean(enrichment.get("rsid_resolution_status")),
         "resolution_reason": clean(enrichment.get("resolution_reason")),
+        "identity_match_class": clean(enrichment.get("identity_match_class")),
+        "identity_resolution_status": clean(enrichment.get("identity_resolution_status")),
+        "identity_resolution_reason": clean(enrichment.get("identity_resolution_reason")),
         "module_row_count": module_count,
         "secondary_query_eligible": "true" if clean(enrichment.get("resolved_rsid")) else "false",
-        "secondary_query_mode": "exact_rsid" if clean(enrichment.get("resolved_rsid")) else "not_queried_no_exact_rsid",
+        "secondary_query_mode": "exact_rsid" if clean(enrichment.get("resolved_rsid")) else "coordinate_unavailable",
+        "coordinate_identity_status": clean(enrichment.get("coordinate_identity_status")),
+        "coordinate_identity_reason": clean(enrichment.get("coordinate_identity_reason")),
         "vep_status": clean(enrichment.get("vep_status")),
         "source_error_sources": "|".join(sorted((enrichment.get("errors") or {}).keys())),
     }
     statuses = enrichment.get("source_status") or {}
     for source in SECONDARY_SOURCE_ORDER:
         row[f"source_status_{source}"] = clean(statuses.get(source) or "not_queried")
+        row[f"source_status_reason_{source}"] = clean((enrichment.get("source_status_reason") or {}).get(source))
+        row[f"source_query_mode_{source}"] = clean((enrichment.get("source_query_mode") or {}).get(source))
 
     # Keep biological summaries while excluding raw payloads and module-specific fields.
     prefixes = (
@@ -823,6 +1579,45 @@ def materialize_module_rows(
     return output_rows, evidence_rows
 
 
+def build_physical_evidence_row(variant: dict, enrichment: dict, vep_item: dict, module_count: int) -> dict:
+    """Compact, one-row-per-physical-variant evidence audit."""
+    vep = enrichment.get("ensemblVep") or {}
+    return {
+        "audit_schema_version": "v2_physical_1",
+        "variant_key": variant["variant_key"],
+        "assembly": variant["assembly"],
+        "chrom_vcf": variant["chrom_vcf"],
+        "pos_vcf": variant["pos_vcf"],
+        "ref_vcf": variant["ref_vcf"],
+        "alt_vcf": variant["alt_vcf"],
+        "id_vcf": variant.get("id_vcf", ""),
+        "module_row_count": module_count,
+        "resolved_rsid": enrichment.get("resolved_rsid", ""),
+        "candidate_rsid": enrichment.get("candidate_rsid", ""),
+        "rsid_resolution_status": enrichment.get("rsid_resolution_status", ""),
+        "identity_match_class": enrichment.get("identity_match_class", ""),
+        "identity_resolution_status": enrichment.get("identity_resolution_status", ""),
+        "identity_resolution_reason": enrichment.get("identity_resolution_reason", ""),
+        "vep_status": enrichment.get("vep_status", ""),
+        "vep_most_severe_consequence": vep.get("most_severe_consequence", ""),
+        "vep_gene_symbols": vep.get("gene_symbols", ""),
+        "vep_hgvsc": vep.get("picked_hgvsc", ""),
+        "vep_hgvsp": vep.get("picked_hgvsp", ""),
+        "vep_cadd_phred": vep.get("picked_cadd_phred", ""),
+        "vep_revel_score": vep.get("picked_revel_score", ""),
+        "vep_spliceai": vep.get("picked_spliceai", ""),
+        "vep_raw_available": "true" if vep_item else "false",
+        "source_status": enrichment.get("source_status") or {},
+        "source_status_reason": enrichment.get("source_status_reason") or {},
+        "source_query_mode": enrichment.get("source_query_mode") or {},
+        "source_errors": enrichment.get("errors") or {},
+        "secondary_evidence_usable": any(
+            (enrichment.get("source_status") or {}).get(source) == "success"
+            for source in SECONDARY_SOURCE_ORDER
+        ),
+    }
+
+
 def main_process(payload: dict) -> dict:
     started_at = utc_now()
     process_started = time.perf_counter()
@@ -834,7 +1629,13 @@ def main_process(payload: dict) -> dict:
     if assembly not in {"GRCh38", "GRCh37"}:
         raise ValueError("V2 enrichment requires an explicit supported assembly.")
     timeout_seconds = int(payload.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS)
-    cache = EnrichmentCache(cache_dir / "enrichment_cache.sqlite", int(payload.get("cacheTtlDays") or DEFAULT_CACHE_TTL_DAYS))
+    cache_path = Path(payload.get("cachePath") or cache_dir / "enrichment_cache_v2.sqlite")
+    legacy_cache_path = Path(payload.get("legacyCachePath") or cache_path.with_name("enrichment_cache.sqlite"))
+    cache = EnrichmentCache(
+        cache_path,
+        int(payload.get("cacheTtlDays") or DEFAULT_CACHE_TTL_DAYS),
+        legacy_path=legacy_cache_path,
+    )
     atexit.register(cache.close)
     rows = [row for row in read_csv(input_path) if clean(row.get("variant_key")) and clean(row.get("has_genotype")).lower() in {"true", "1", "yes"}]
     if not rows:
@@ -898,7 +1699,6 @@ def main_process(payload: dict) -> dict:
     vep_elapsed_seconds = time.perf_counter() - vep_started
 
     enrichments_by_variant: dict[str, dict] = {}
-    variants_for_secondary: list[dict] = []
     resolution_counts: dict[str, int] = {}
     for variant in physical_variants:
         raw = vep_raw.get(variant["variant_key"], {})
@@ -910,8 +1710,12 @@ def main_process(payload: dict) -> dict:
         resolution_counts[rsid_status] = resolution_counts.get(rsid_status, 0) + 1
         enrichment = {
             "resolved_rsid": rsid,
+            "candidate_rsid": "|".join(sorted({normalize_rsid(entry.get("id")) for entry in item.get("colocated_variants") or [] if isinstance(entry, dict) and normalize_rsid(entry.get("id"))})),
             "rsid_resolution_status": rsid_status,
             "resolution_reason": resolution["reason"],
+            "identity_match_class": "exact_coordinate_allele" if rsid else "ambiguous_identity" if rsid_status in {"vep_colocated_allele_mismatch", "ambiguous_multiple_exact_rsids"} else "no_identity_match",
+            "identity_resolution_status": rsid_status,
+            "identity_resolution_reason": resolution["reason"],
             "vep_colocated_count": resolution["colocated_count"],
             "vep_colocated_rsid_count": resolution["colocated_rsid_count"],
             "vep_status": clean(raw.get("status")) or "not_found",
@@ -920,20 +1724,84 @@ def main_process(payload: dict) -> dict:
                 "ensembl_vep": clean(raw.get("status")) or "not_found",
                 **{source: "not_queried" for source in SECONDARY_SOURCE_ORDER},
             },
+            "source_status_reason": {
+                "ensembl_vep": "vep_response" if clean(raw.get("status")) == "success" else "vep_request_error",
+                **{source: "pending_identity_resolution" for source in SECONDARY_SOURCE_ORDER},
+            },
+            "source_query_mode": {source: "pending_identity_resolution" for source in SECONDARY_SOURCE_ORDER},
             "ensemblVep": parse_vep_for_gene(item, ""),
             "cacheHit": bool(raw.get("cache_hit")),
         }
         enrichments_by_variant[variant["variant_key"]] = enrichment
-        if rsid:
-            variants_for_secondary.append(variant)
+
+    write_progress(
+        output_dir,
+        stage="enrichment_identity",
+        phase="identity_resolution",
+        substage="coordinate_overlap",
+        processed=0,
+        total=sum(1 for variant in physical_variants if not clean(variant.get("resolved_rsid"))),
+        unit="physical variants",
+        message="Resolving unresolved identities by GRCh coordinates and alleles",
+    )
+
+    def on_identity_progress(metrics: dict) -> None:
+        write_progress(
+            output_dir,
+            stage="enrichment_identity",
+            phase="identity_resolution",
+            substage="coordinate_overlap",
+            processed=int(metrics.get("completed") or 0),
+            total=int(metrics.get("total") or 0),
+            unit="physical variants",
+            message="Resolving unresolved identities by Ensembl variation overlap",
+            metrics=metrics,
+        )
+
+    identity_metrics = resolve_coordinate_variants(
+        physical_variants,
+        enrichments_by_variant,
+        assembly,
+        cache,
+        timeout_seconds,
+        on_progress=on_identity_progress,
+    )
+    myvariant_identity_metrics = resolve_myvariant_coordinate_variants(
+        physical_variants,
+        enrichments_by_variant,
+        assembly,
+        cache,
+        timeout_seconds,
+        on_progress=on_identity_progress,
+    )
+    clinvar_coordinate_metrics = fetch_clinvar_coordinate_variants(
+        physical_variants,
+        enrichments_by_variant,
+        assembly,
+        cache,
+        timeout_seconds,
+        on_progress=on_identity_progress,
+    )
+    resolution_counts["coordinate_exact_allele"] = int(identity_metrics.get("resolved") or 0) + int(myvariant_identity_metrics.get("resolved") or 0)
 
     base_rows, base_evidence_rows = materialize_module_rows(rows, variants, enrichments_by_variant, vep_raw)
     base_csv = output_dir / "v2_enrichment_vep_base.csv"
     resolution_audit_path = output_dir / "v2_enrichment_resolution_audit.jsonl"
     write_csv(base_csv, base_rows, source_fields(base_rows))
     with resolution_audit_path.open("w", encoding="utf-8") as handle:
-        for item in base_evidence_rows:
-            handle.write(json.dumps(item, ensure_ascii=True) + "\n")
+        for variant in physical_variants:
+            enrichment = enrichments_by_variant[variant["variant_key"]]
+            handle.write(json.dumps({
+                "variant_key": variant["variant_key"],
+                "resolved_rsid": enrichment.get("resolved_rsid", ""),
+                "candidate_rsid": enrichment.get("candidate_rsid", ""),
+                "rsid_resolution_status": enrichment.get("rsid_resolution_status", ""),
+                "identity_match_class": enrichment.get("identity_match_class", ""),
+                "identity_resolution_status": enrichment.get("identity_resolution_status", ""),
+                "identity_resolution_reason": enrichment.get("identity_resolution_reason", ""),
+                "coordinate_identity_status": enrichment.get("coordinate_identity_status", ""),
+                "coordinate_identity_reason": enrichment.get("coordinate_identity_reason", ""),
+            }, ensure_ascii=True) + "\n")
     write_json(
         output_dir / "enrichment_vep_base_summary.json",
         {
@@ -955,10 +1823,10 @@ def main_process(payload: dict) -> dict:
         phase="secondary_sources",
         substage="secondary_sources",
         processed=0,
-        total=len(variants_for_secondary) * len(SECONDARY_SOURCE_ORDER),
+        total=len(physical_variants) * len(SECONDARY_SOURCE_ORDER),
         unit="source calls",
-        message="Querying secondary sources for exact variant identities",
-        metrics={"eligibleVariants": len(variants_for_secondary), "resolutionCounts": resolution_counts},
+        message="Querying secondary sources with confirmed identities",
+        metrics={"eligibleVariants": len(physical_variants), "resolutionCounts": resolution_counts, "identity": identity_metrics, "myvariantIdentity": myvariant_identity_metrics, "clinvarCoordinate": clinvar_coordinate_metrics},
     )
 
     def on_secondary_progress(metrics: dict, source: str) -> None:
@@ -979,7 +1847,7 @@ def main_process(payload: dict) -> dict:
 
     secondary_started = time.perf_counter()
     secondary_enrichments, secondary_metrics = fetch_secondary_sources(
-        variants_for_secondary,
+        physical_variants,
         assembly,
         cache,
         timeout_seconds,
@@ -988,9 +1856,11 @@ def main_process(payload: dict) -> dict:
     secondary_metrics["wall_seconds"] = round(time.perf_counter() - secondary_started, 3)
     for variant_key, secondary in secondary_enrichments.items():
         enrichment = enrichments_by_variant[variant_key]
-        enrichment.update({key: value for key, value in secondary.items() if key not in {"errors", "source_status"}})
+        enrichment.update({key: value for key, value in secondary.items() if key not in {"errors", "source_status", "source_status_reason", "source_query_mode"}})
         enrichment["errors"].update(secondary.get("errors") or {})
         enrichment["source_status"].update(secondary.get("source_status") or {})
+        enrichment["source_status_reason"].update(secondary.get("source_status_reason") or {})
+        enrichment["source_query_mode"].update(secondary.get("source_query_mode") or {})
 
     complete_rows, _complete_evidence_rows = materialize_module_rows(rows, variants, enrichments_by_variant, vep_raw)
     complete_rows = [row for row in complete_rows if clean(row.get("resolved_rsid"))]
@@ -1002,10 +1872,10 @@ def main_process(payload: dict) -> dict:
         phase="vep_only_remediation",
         substage="audit_unresolved",
         processed=0,
-        total=len(physical_variants) - len(variants_for_secondary),
+        total=sum(1 for variant in physical_variants if not clean(variant.get("resolved_rsid"))),
         unit="physical variants",
         message="Auditing VEP-only, ambiguous and VEP-error variants",
-        metrics={"secondary": secondary_metrics, "resolutionCounts": resolution_counts},
+        metrics={"secondary": secondary_metrics, "identity": identity_metrics, "resolutionCounts": resolution_counts},
     )
 
     output_rows, evidence_rows = materialize_module_rows(rows, variants, enrichments_by_variant, vep_raw)
@@ -1031,7 +1901,7 @@ def main_process(payload: dict) -> dict:
         phase="vep_only_remediation",
         substage="complete",
         processed=len(vep_only_master_rows),
-        total=len(physical_variants) - len(variants_for_secondary),
+        total=len(vep_only_master_rows),
         unit="physical variants",
         message="VEP-only resolution audit completed",
         metrics={
@@ -1047,13 +1917,83 @@ def main_process(payload: dict) -> dict:
     plus_csv = output_dir / "heal_fon_interpretation_enrichment_plus_v2.csv"
     master_csv = output_dir / "v2_enrichment_variant_master.csv"
     evidence_path = output_dir / "v2_enrichment_evidence_audit.jsonl"
+    physical_evidence_path = output_dir / "v2_enrichment_physical_evidence_audit.jsonl.gz"
+    module_projection_path = output_dir / "v2_enrichment_module_projection.csv"
     write_csv(output_csv, output_rows, fields)
     write_csv(observed_csv, output_rows, fields)
     write_csv(plus_csv, output_rows, fields)
     write_csv(master_csv, master_rows, master_fields)
     with evidence_path.open("w", encoding="utf-8") as handle:
-        for item in evidence_rows:
-            handle.write(json.dumps(item, ensure_ascii=True) + "\n")
+        for item in output_rows:
+            handle.write(json.dumps({
+                "variant_key": item.get("variant_key", ""),
+                "gene": item.get("approved_symbol", ""),
+                "module_id": item.get("module_id", ""),
+                "resolved_rsid": item.get("resolved_rsid", ""),
+                "identity_match_class": item.get("identity_match_class", ""),
+                "source_status": {source: item.get(f"source_status_{source}", "") for source in SECONDARY_SOURCE_ORDER},
+                "source_status_reason": {source: item.get(f"source_status_reason_{source}", "") for source in SECONDARY_SOURCE_ORDER},
+            }, ensure_ascii=True) + "\n")
+    projection_rows = [
+        {key: value for key, value in row.items() if not key.endswith("_raw_json") and key not in {"raw_json", "vep_raw"}}
+        for row in output_rows
+    ]
+    write_csv(module_projection_path, projection_rows, source_fields(projection_rows))
+    with gzip.open(physical_evidence_path, "wt", encoding="utf-8") as handle:
+        for variant in physical_variants:
+            key = variant["variant_key"]
+            handle.write(json.dumps(
+                build_physical_evidence_row(
+                    variant,
+                    enrichments_by_variant[key],
+                    (vep_raw.get(key) or {}).get("item") or {},
+                    module_counts[key],
+                ),
+                ensure_ascii=True,
+            ) + "\n")
+
+    retry_queue_path = output_dir / "enrichment_retry_queue.jsonl"
+    with retry_queue_path.open("w", encoding="utf-8") as handle:
+        for variant in physical_variants:
+            key = variant["variant_key"]
+            enrichment = enrichments_by_variant[key]
+            for source in SECONDARY_SOURCE_ORDER:
+                status = (enrichment.get("source_status") or {}).get(source)
+                if status == "source_error":
+                    handle.write(json.dumps({
+                        "variant_key": key,
+                        "source": source,
+                        "query_mode": (enrichment.get("source_query_mode") or {}).get(source, ""),
+                        "reason": (enrichment.get("source_status_reason") or {}).get(source, "source_error"),
+                        "priority": "high" if source == "clinvar" else "normal",
+                    }, ensure_ascii=True) + "\n")
+            if enrichment.get("coordinate_identity_status") == "source_error":
+                handle.write(json.dumps({
+                    "variant_key": key,
+                    "source": "ensembl_variation",
+                    "query_mode": "coordinate",
+                    "reason": enrichment.get("coordinate_identity_reason", "coordinate_identity_error"),
+                    "priority": "high",
+                }, ensure_ascii=True) + "\n")
+
+    identity_summary = {
+        "schemaVersion": "gene_module_v2",
+        "physicalVariants": len(physical_variants),
+        "vepResolved": sum(1 for value in enrichments_by_variant.values() if clean(value.get("rsid_resolution_status", "")).startswith("vep_")),
+        "coordinateResolved": int(identity_metrics.get("resolved") or 0),
+        "ambiguous": sum(1 for value in enrichments_by_variant.values() if value.get("identity_match_class") == "ambiguous_identity"),
+        "candidateWithoutConfirmation": sum(1 for value in enrichments_by_variant.values() if value.get("identity_match_class") == "rsid_without_allele_confirmation"),
+        "crossAssembly": sum(1 for value in enrichments_by_variant.values() if value.get("identity_match_class") == "cross_assembly_match"),
+        "noIdentityMatch": sum(1 for value in enrichments_by_variant.values() if value.get("identity_match_class") == "no_identity_match"),
+        "coordinateMetrics": {
+            "ensembl": identity_metrics,
+            "myvariant": myvariant_identity_metrics,
+            "clinvar": clinvar_coordinate_metrics,
+        },
+        "outputs": {"physicalEvidenceAuditJsonlGz": str(physical_evidence_path), "retryQueueJsonl": str(retry_queue_path)},
+    }
+    identity_summary_path = output_dir / "enrichment_identity_resolution_summary.json"
+    write_json(identity_summary_path, identity_summary)
 
     performance = {
         "schemaVersion": "gene_module_v2",
@@ -1063,6 +2003,12 @@ def main_process(payload: dict) -> dict:
         "physicalVariants": len(physical_variants),
         "moduleRows": len(rows),
         "vepSeconds": vep_elapsed_seconds,
+        "identity": {
+            "ensembl": identity_metrics,
+            "myvariant": myvariant_identity_metrics,
+            "clinvar": clinvar_coordinate_metrics,
+        },
+        "cachePath": str(cache_path),
         "secondary": secondary_metrics,
         "secondaryWallSeconds": secondary_metrics.get("wall_seconds", 0),
         "resolutionCounts": resolution_counts,
@@ -1082,7 +2028,46 @@ def main_process(payload: dict) -> dict:
         for source in (value.get("errors") or {}):
             source_errors[source] = source_errors.get(source, 0) + 1
     minimum_vep_coverage = configured_min_vep_coverage()
-    gate_status = "pass" if normalization_rate >= 0.99 and vep_coverage >= minimum_vep_coverage else "fail"
+    matrix_keys = {row.get("variant_key") for row in physical_matrix_rows if row.get("variant_key")}
+    physical_keys = {variant["variant_key"] for variant in physical_variants}
+    status_complete = all(
+        all((enrichments_by_variant[key].get("source_status") or {}).get(source) in {"success", "not_found", "source_error", "not_queried"} for source in SECONDARY_SOURCE_ORDER)
+        for key in physical_keys
+    )
+    technical_gate = {
+        "status": "pass" if len(matrix_keys) == len(physical_keys) == len(physical_matrix_rows) and status_complete else "fail",
+        "physicalMatrixRows": len(physical_matrix_rows),
+        "physicalVariantKeys": len(physical_keys),
+        "matrixUniqueVariantKeys": len(matrix_keys),
+        "sourceStatusesComplete": status_complete,
+        "targetLeakageRows": int((normalization_summary.get("qualityGate") or {}).get("targetLeakageRows") or 0),
+    }
+    unresolved_identity_count = sum(
+        1 for value in enrichments_by_variant.values()
+        if not clean(value.get("resolved_rsid")) and value.get("identity_match_class") in {"ambiguous_identity", "rsid_without_allele_confirmation", "no_identity_match"}
+    )
+    retry_debt = sum(
+        1 for value in enrichments_by_variant.values()
+        for source in SECONDARY_SOURCE_ORDER
+        if (value.get("source_status") or {}).get(source) == "source_error"
+    )
+    evidence_readiness_gate = {
+        "status": "pass" if technical_gate["status"] == "pass" and normalization_rate >= 0.99 and vep_coverage >= minimum_vep_coverage and unresolved_identity_count == 0 and retry_debt == 0 else "fail",
+        "normalizationRetentionPassed": normalization_rate >= 0.99,
+        "vepCoveragePassed": vep_coverage >= minimum_vep_coverage,
+        "unresolvedIdentityCount": unresolved_identity_count,
+        "retryDebt": retry_debt,
+        "blockingReasons": [
+            reason for reason, condition in [
+                ("technical_gate_failed", technical_gate["status"] != "pass"),
+                ("normalization_retention_below_threshold", normalization_rate < 0.99),
+                ("vep_coverage_below_threshold", vep_coverage < minimum_vep_coverage),
+                ("unresolved_identity", unresolved_identity_count > 0),
+                ("source_retry_debt", retry_debt > 0),
+            ] if condition
+        ],
+    }
+    gate_status = technical_gate["status"]
     quality = {
         "schemaVersion": "gene_module_v2", "status": gate_status, "createdAt": utc_now(),
         "normalizationValidRate": normalization_rate, "minimumNormalizationValidRate": 0.99,
@@ -1091,10 +2076,19 @@ def main_process(payload: dict) -> dict:
         "exactRsidsResolved": sum(1 for value in enrichments_by_variant.values() if clean(value.get("resolved_rsid"))),
         "resolutionCounts": resolution_counts,
         "vepOnlyVariants": len(vep_only_master_rows),
+        "identityUnresolvedVariants": unresolved_identity_count,
         "secondaryMetrics": secondary_metrics,
+        "identityMetrics": {
+            "ensembl": identity_metrics,
+            "myvariant": myvariant_identity_metrics,
+            "clinvar": clinvar_coordinate_metrics,
+        },
         "vepCacheHits": vep_cache_hits, "vepNetworkVariants": vep_requests,
         "sourceErrors": source_errors, "warnings": warnings,
-        "decision": "pass" if gate_status == "pass" else "block_downstream_until_enrichment_is_remediated",
+        "technicalGate": technical_gate,
+        "evidenceReadinessGate": evidence_readiness_gate,
+        "evidenceReady": evidence_readiness_gate["status"] == "pass",
+        "decision": "pass" if evidence_readiness_gate["status"] == "pass" else "technical_pass_evidence_not_ready" if gate_status == "pass" else "block_downstream_until_enrichment_is_remediated",
         "provenance": provenance,
         "reference": normalization_summary.get("reference") or {},
     }
@@ -1109,6 +2103,10 @@ def main_process(payload: dict) -> dict:
         "v2EnrichmentVepBaseCsv": str(base_csv), "v2EnrichmentCompleteCsv": str(complete_csv),
         "v2EnrichmentVepOnlyAuditCsv": str(vep_only_csv), "v2EnrichmentResolutionAuditJsonl": str(resolution_audit_path),
         "v2EnrichmentPhysicalMatrixCsv": str(physical_matrix_csv),
+        "v2EnrichmentPhysicalEvidenceAuditJsonlGz": str(physical_evidence_path),
+        "v2EnrichmentModuleProjectionCsv": str(module_projection_path),
+        "enrichmentRetryQueueJsonl": str(retry_queue_path),
+        "enrichmentIdentityResolutionSummaryJson": str(identity_summary_path),
         "enrichmentPerformanceSummaryJson": str(performance_path),
         "metadata": {"qualityGate": quality, "downstreamSupported": False, "performance": performance},
     }
