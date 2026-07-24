@@ -1533,6 +1533,16 @@ function downstreamBlockedForJob(job) {
   return job?.result?.metadata?.downstream_supported === false;
 }
 
+function isVariantEnrichmentStage(stage) {
+  return [
+    "enriching",
+    "enrichment_vep",
+    "enrichment_complete",
+    "enrichment_vep_only",
+    "enrichment_quality_gate",
+  ].includes(stage || "");
+}
+
 function downstreamBlockedMessage(job) {
   return (
     job?.result?.metadata?.downstream_message ||
@@ -3032,7 +3042,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
       job.message =
         job.stage === "normalizing"
           ? "VCF normalization failed"
-          : job.stage === "enriching" || job.stage === "enrichment_quality_gate"
+          : isVariantEnrichmentStage(job.stage)
           ? "Variant enrichment failed"
           : job.stage === "grouping_preparation"
             ? "Grouped payload preparation failed"

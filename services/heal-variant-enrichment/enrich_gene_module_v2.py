@@ -73,11 +73,21 @@ def write_csv(path: Path, rows: list[dict], fields: list[str]) -> None:
         writer.writerows(rows)
 
 
-def write_json(path: Path, payload: dict) -> None:
+def write_json(path: Path, payload: dict, *, tolerate_replace_lock: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
-    temporary.replace(path)
+    for attempt in range(8):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            if attempt >= 7:
+                if tolerate_replace_lock:
+                    temporary.unlink(missing_ok=True)
+                    return
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def write_progress(
@@ -105,6 +115,8 @@ def write_progress(
             "metrics": metrics or {},
             "updatedAt": utc_now(),
         },
+        # Progress is advisory; a transient Windows reader lock must not abort enrichment.
+        tolerate_replace_lock=True,
     )
 
 

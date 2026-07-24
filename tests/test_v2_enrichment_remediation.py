@@ -365,6 +365,17 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
             self.assertEqual(row[f"source_status_{source}"], "success")
         self.assertFalse(any(key.endswith("_raw_json") for key in row))
 
+    def test_progress_write_ignores_transient_windows_replace_lock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(Path, "replace", side_effect=PermissionError("locked")):
+                enrichment.write_progress(
+                    Path(temporary),
+                    substage="secondary_sources",
+                    processed=1,
+                    total=2,
+                    message="test",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

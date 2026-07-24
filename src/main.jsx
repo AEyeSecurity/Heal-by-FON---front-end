@@ -58,6 +58,16 @@ function isLongPollingStage(stage) {
   ].includes(stage);
 }
 
+function isVariantEnrichmentStage(stage) {
+  return [
+    "enriching",
+    "enrichment_vep",
+    "enrichment_complete",
+    "enrichment_vep_only",
+    "enrichment_quality_gate",
+  ].includes(stage);
+}
+
 function readJobAccessTokens() {
   try {
     return JSON.parse(window.localStorage.getItem(JOB_ACCESS_TOKENS_KEY) || "{}");
@@ -2867,9 +2877,7 @@ function App() {
                 ? t.aiTriageFailed
               : job.stage === "individual_interpretation"
               ? t.individualInterpretationFailed
-              : job.stage === "enriching"
-                ? t.enrichmentFailed
-                : job.stage === "normalizing" || job.stage === "enrichment_quality_gate"
+              : isVariantEnrichmentStage(job.stage)
                   ? t.enrichmentFailed
                 : t.matchFailed),
         );
@@ -3302,7 +3310,7 @@ function App() {
       await runMatch(upload);
     } catch (caught) {
       setPhase("error");
-      if (caught.stage === "enriching") {
+      if (isVariantEnrichmentStage(caught.stage)) {
         setError(t.enrichmentFailed);
         setErrorDialog(true);
         setRetryEnrichmentJobId(caught.jobId || matchResult?.jobId || null);
