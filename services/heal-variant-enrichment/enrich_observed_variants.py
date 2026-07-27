@@ -556,7 +556,7 @@ def fetch_clinvar(rsid: str, timeout_seconds: int) -> tuple[dict, str]:
                 "ids": unique_join(ids, limit=5, sep=","),
                 "summary_error": summary_error,
                 "esearch_raw_json": compact_json(payload),
-            }, ""
+            }, f"esummary: {summary_error}"
     summary_items = []
     if isinstance(summary_payload, dict):
         summary_result = summary_payload.get("result") or {}

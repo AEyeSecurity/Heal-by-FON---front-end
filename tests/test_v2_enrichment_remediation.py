@@ -38,6 +38,19 @@ enrichment = load_module("heal_v2_enrichment_test", ENRICHMENT_PATH)
 
 
 class V2EnrichmentRemediationTests(unittest.TestCase):
+    def test_clinvar_esummary_failure_is_not_reported_as_success(self):
+        search_payload = {"esearchresult": {"idlist": ["123"]}}
+        with patch.object(
+            enrichment.legacy,
+            "json_get",
+            side_effect=[(search_payload, ""), ({}, "HTTP 429 rate limited")],
+        ):
+            payload, error = enrichment.legacy.fetch_clinvar("rs1", 1)
+
+        self.assertEqual(payload["count"], "1")
+        self.assertIn("esummary", error)
+        self.assertIn("429", error)
+
     def test_vep_quality_gate_threshold_is_configurable(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("HEAL_V2_MIN_VEP_COVERAGE", None)

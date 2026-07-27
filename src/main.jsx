@@ -36,6 +36,8 @@ const BUSY_PHASES = [
   "triaging",
   "enriching",
   "enrichment_quality_gate",
+  "evidence_refinement",
+  "evidence_refinement_quality_gate",
   "grouping_preparation",
   "grouped_individual_interpretation",
   "individual_interpretation",
@@ -50,6 +52,7 @@ function isBusyPhase(phase) {
 
 function isLongPollingStage(stage) {
   return [
+    "evidence_refinement",
     "grouped_individual_interpretation",
     "individual_interpretation",
     "interpretation_normalization",
@@ -65,6 +68,8 @@ function isVariantEnrichmentStage(stage) {
     "enrichment_complete",
     "enrichment_vep_only",
     "enrichment_quality_gate",
+    "evidence_refinement",
+    "evidence_refinement_quality_gate",
   ].includes(stage);
 }
 
@@ -158,6 +163,7 @@ const COPY = {
     aiTriageProgress: "Triage IA",
     enrichmentProgress: "Enriquecimiento externo",
     enrichmentQualityProgress: "QA de enrichment",
+    evidenceRefinementProgress: "Refinamiento de evidencia",
     groupingPreparationProgress: "Agrupacion gene+modulo",
     groupedInterpretationProgress: "Interpretacion individual agrupada",
     individualInterpretationProgress: "Interpretacion individual",
@@ -187,6 +193,7 @@ const COPY = {
     enrichmentCompleteProgress: "Enrichment completo",
     enrichmentVepOnlyProgress: "Identidad no resuelta / seguimiento por coordenadas",
     enrichmentQuality: "Validando cobertura y calidad del enrichment...",
+    evidenceRefining: "Curando ClinVar, ClinPGx, GWAS y publicaciones seleccionadas...",
     groupingPreparing: "Preparando payloads agrupados por gen y modulo...",
     groupedInterpretationStarting: "Iniciando interpretacion individual agrupada...",
     groupedInterpreting: "Interpretando grupos gen-modulo...",
@@ -229,6 +236,7 @@ const COPY = {
     aiTriageComplete: "Triage IA finalizado.",
     enrichmentComplete: "Enriquecimiento externo finalizado.",
     enrichmentQualityComplete: "QA de enrichment finalizado.",
+    evidenceRefinementComplete: "Refinamiento de evidencia finalizado.",
     resultValid: "VCF validado",
     resultWarning: "Validado con warnings",
     resultInvalid: "VCF invalido",
@@ -258,6 +266,7 @@ const COPY = {
     preparationTitle: "Preparacion del match",
     aiTriageTitle: "Triage deterministico IA",
     enrichmentTitle: "Enriquecimiento de variantes observadas",
+    evidenceRefinementTitle: "Contrato curado multifuente",
     groupingPreparationTitle: "Preparacion de grupos gene+modulo",
     preparationRows: "Filas preparadas",
     preparationObserved: "Con genotipo observado",
@@ -289,6 +298,15 @@ const COPY = {
     enrichmentSources: "Fuentes externas",
     enrichmentCacheHits: "Cache hits",
     enrichmentSourceErrors: "Errores de fuentes",
+    curatedRegistryVariants: "Variantes normalizadas conservadas",
+    curatedPhysicalVariants: "Variantes fisicas curadas",
+    curatedDeepVariants: "Curacion profunda",
+    curatedBenignVariants: "Benignas documentadas",
+    curatedAnnotationAbsent: "Sin anotacion externa",
+    curatedUnresolvedVariants: "Identidad no resuelta",
+    curatedFocusVariants: "Elegibles como foco",
+    curatedRetryRows: "Errores reintentables",
+    curatedPublications: "Publicaciones unicas",
     groupingPreparationGroups: "Grupos gene+modulo",
     groupingPreparationVariants: "Variantes fuente",
     groupingPreparationAverageSize: "Tamano promedio",
@@ -382,7 +400,7 @@ const COPY = {
     enrichmentQualityDownload: "Descargar resumen QA enrichment",
     enrichmentVepBaseDownload: "Descargar base VEP",
     enrichmentCompleteDownload: "Descargar enrichment completo",
-    enrichmentVepOnlyDownload: "Descargar auditoria VEP-only",
+    enrichmentVepOnlyDownload: "Descargar identidades no resueltas",
     enrichmentPhysicalMatrixDownload: "Descargar matriz fisica por variante",
     enrichmentResolutionAuditDownload: "Descargar auditoria de resolucion",
     enrichmentPhysicalEvidenceAuditDownload: "Descargar auditoria fisica compacta",
@@ -391,6 +409,19 @@ const COPY = {
     enrichmentIdentitySummaryDownload: "Descargar resumen de identidad",
     enrichmentPerformanceDownload: "Descargar metricas de rendimiento",
     enrichmentEvidenceAuditDownload: "Descargar evidencia enrichment",
+    curatedPhysicalMatrixDownload: "Descargar matriz fisica curada",
+    curatedPhysicalRegistryDownload: "Descargar registro fisico completo",
+    curatedModuleProjectionDownload: "Descargar proyeccion gen-modulo curada",
+    canonicalStatusDownload: "Descargar estado completo del canon",
+    clinvarAggregateDownload: "Descargar resumen ClinVar",
+    clinvarAssertionsDownload: "Descargar assertions ClinVar",
+    clinpgxClinicalDownload: "Descargar clinical annotations ClinPGx",
+    clinpgxVariantDownload: "Descargar variant annotations ClinPGx",
+    gwasAssociationsDownload: "Descargar asociaciones GWAS",
+    publicationEvidenceDownload: "Descargar evidencia bibliografica",
+    evidenceRefinementRawDownload: "Descargar evidencia publica raw",
+    evidenceRefinementRetryDownload: "Descargar retries de curacion",
+    evidenceRefinementSummaryDownload: "Descargar resumen de curacion",
     groupingPayloadsDownload: "Descargar payloads agrupados",
     groupingVariantDetailDownload: "Descargar detalle por variante",
     groupingSummaryDownload: "Descargar resumen de grupos",
@@ -462,6 +493,7 @@ const COPY = {
     aiTriageProgress: "AI triage",
     enrichmentProgress: "External enrichment",
     enrichmentQualityProgress: "Enrichment QA",
+    evidenceRefinementProgress: "Evidence refinement",
     groupingPreparationProgress: "Gene+module grouping",
     groupedInterpretationProgress: "Grouped individual interpretation",
     individualInterpretationProgress: "Individual interpretation",
@@ -491,6 +523,7 @@ const COPY = {
     enrichmentCompleteProgress: "Complete enrichment",
     enrichmentVepOnlyProgress: "Unresolved identity / coordinate follow-up",
     enrichmentQuality: "Checking enrichment coverage and quality...",
+    evidenceRefining: "Curating ClinVar, ClinPGx, GWAS, and selected publications...",
     groupingPreparing: "Preparing grouped gene-module payloads...",
     groupedInterpretationStarting: "Starting grouped individual interpretation...",
     groupedInterpreting: "Interpreting gene-module groups...",
@@ -533,6 +566,7 @@ const COPY = {
     aiTriageComplete: "AI triage finished.",
     enrichmentComplete: "External enrichment finished.",
     enrichmentQualityComplete: "Enrichment QA finished.",
+    evidenceRefinementComplete: "Evidence refinement finished.",
     resultValid: "VCF validated",
     resultWarning: "Validated with warnings",
     resultInvalid: "Invalid VCF",
@@ -562,6 +596,7 @@ const COPY = {
     preparationTitle: "Match preparation",
     aiTriageTitle: "Deterministic AI triage",
     enrichmentTitle: "Observed variant enrichment",
+    evidenceRefinementTitle: "Curated multisource contract",
     groupingPreparationTitle: "Gene+module group preparation",
     preparationRows: "Prepared rows",
     preparationObserved: "Observed genotypes",
@@ -593,6 +628,15 @@ const COPY = {
     enrichmentSources: "External sources",
     enrichmentCacheHits: "Cache hits",
     enrichmentSourceErrors: "Source errors",
+    curatedRegistryVariants: "Retained normalized variants",
+    curatedPhysicalVariants: "Curated physical variants",
+    curatedDeepVariants: "Deeply curated",
+    curatedBenignVariants: "Documented benign variants",
+    curatedAnnotationAbsent: "No external annotation",
+    curatedUnresolvedVariants: "Unresolved identity",
+    curatedFocusVariants: "Focus eligible",
+    curatedRetryRows: "Retryable errors",
+    curatedPublications: "Unique publications",
     groupingPreparationGroups: "Gene+module groups",
     groupingPreparationVariants: "Source variants",
     groupingPreparationAverageSize: "Average size",
@@ -686,7 +730,7 @@ const COPY = {
     enrichmentQualityDownload: "Download enrichment QA summary",
     enrichmentVepBaseDownload: "Download VEP base",
     enrichmentCompleteDownload: "Download complete enrichment",
-    enrichmentVepOnlyDownload: "Download VEP-only audit",
+    enrichmentVepOnlyDownload: "Download unresolved identity audit",
     enrichmentPhysicalMatrixDownload: "Download physical variant matrix",
     enrichmentResolutionAuditDownload: "Download resolution audit",
     enrichmentPhysicalEvidenceAuditDownload: "Download compact physical audit",
@@ -695,6 +739,19 @@ const COPY = {
     enrichmentIdentitySummaryDownload: "Download identity summary",
     enrichmentPerformanceDownload: "Download performance metrics",
     enrichmentEvidenceAuditDownload: "Download enrichment evidence audit",
+    curatedPhysicalMatrixDownload: "Download curated physical matrix",
+    curatedPhysicalRegistryDownload: "Download complete physical registry",
+    curatedModuleProjectionDownload: "Download curated gene-module projection",
+    canonicalStatusDownload: "Download complete canon status",
+    clinvarAggregateDownload: "Download ClinVar aggregate",
+    clinvarAssertionsDownload: "Download ClinVar assertions",
+    clinpgxClinicalDownload: "Download ClinPGx clinical annotations",
+    clinpgxVariantDownload: "Download ClinPGx variant annotations",
+    gwasAssociationsDownload: "Download GWAS associations",
+    publicationEvidenceDownload: "Download publication evidence",
+    evidenceRefinementRawDownload: "Download raw public evidence",
+    evidenceRefinementRetryDownload: "Download curation retry queue",
+    evidenceRefinementSummaryDownload: "Download curation summary",
     groupingPayloadsDownload: "Download grouped payloads",
     groupingVariantDetailDownload: "Download grouped variant detail",
     groupingSummaryDownload: "Download grouped summary",
@@ -1544,6 +1601,8 @@ function MatchResultPanel({ result, locale, t }) {
   const preparationReviewCounts = preparation.review_status_counts || {};
   const enrichment = result.variantEnrichment?.metadata || {};
   const enrichmentQuality = enrichment.qualityGate || metadata.enrichment_quality_gate || {};
+  const evidenceRefinement = result.evidenceRefinement || {};
+  const evidenceRefinementCounts = evidenceRefinement.counts || {};
   const groupingPreparation = result.groupPrep?.metadata || {};
   const groupedInterpretation = result.groupedIndividualInterpretation?.metadata || {};
   const individualInterpretation = result.individualInterpretation?.metadata || {};
@@ -1629,6 +1688,25 @@ function MatchResultPanel({ result, locale, t }) {
         [t.enrichmentSources, formatNumber(enrichment.sources?.length || 0, locale)],
         [t.enrichmentCacheHits, formatNumber(enrichment.cache_hits, locale)],
         [t.enrichmentSourceErrors, formatNumber(enrichmentSourceErrors, locale)],
+      ]
+    : [];
+  const evidenceRefinementCards = result.evidenceRefinement
+    ? [
+        [
+          t.curatedRegistryVariants,
+          formatNumber(
+            evidenceRefinementCounts.physicalRegistryRows ?? evidenceRefinementCounts.matchedPhysicalRegistryRows,
+            locale,
+          ),
+        ],
+        [t.curatedPhysicalVariants, formatNumber(evidenceRefinementCounts.enrichedPhysicalVariants, locale)],
+        [t.curatedDeepVariants, formatNumber(evidenceRefinementCounts.deepCuratedVariants, locale)],
+        [t.curatedBenignVariants, formatNumber(evidenceRefinementCounts.benignContextVariants, locale)],
+        [t.curatedAnnotationAbsent, formatNumber(evidenceRefinementCounts.annotationAbsentVariants, locale)],
+        [t.curatedUnresolvedVariants, formatNumber(evidenceRefinementCounts.unresolvedVariants, locale)],
+        [t.curatedFocusVariants, formatNumber(evidenceRefinementCounts.focusCandidateVariants, locale)],
+        [t.curatedRetryRows, formatNumber(evidenceRefinementCounts.retryQueueRows, locale)],
+        [t.curatedPublications, formatNumber(evidenceRefinementCounts.uniquePublications, locale)],
       ]
     : [];
   const groupingPreparationCards = result.groupPrep
@@ -1865,6 +1943,27 @@ function MatchResultPanel({ result, locale, t }) {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/enrichment-performance`, "enrichment_performance_summary.json");
   }
 
+  async function downloadCuratedArtifact(kind) {
+    const artifacts = {
+      physicalMatrix: ["curated-physical-matrix", "v2_curated_physical_variant_matrix.csv"],
+      physicalRegistry: ["curated-physical-registry", "v2_curated_physical_variant_registry.csv"],
+      moduleProjection: ["curated-module-projection", "v2_curated_gene_module_projection.csv"],
+      canonicalStatus: ["canonical-gene-module-status", "v2_canonical_gene_module_status.csv"],
+      clinvarAggregate: ["clinvar-aggregate", "clinvar_variant_aggregate.csv"],
+      clinvarAssertions: ["clinvar-assertions", "clinvar_submitter_assertions.csv"],
+      clinpgxClinical: ["clinpgx-clinical-annotations", "clinpgx_clinical_annotations.csv"],
+      clinpgxVariant: ["clinpgx-variant-annotations", "clinpgx_variant_annotations.csv"],
+      gwasAssociations: ["gwas-associations", "gwas_variant_associations.csv"],
+      publications: ["publication-evidence", "publication_evidence.csv"],
+      raw: ["evidence-refinement-raw", "evidence_refinement_raw.jsonl.gz"],
+      retryQueue: ["evidence-refinement-retry-queue", "evidence_refinement_retry_queue.jsonl"],
+      summary: ["evidence-refinement-summary", "evidence_refinement_summary.json"],
+    };
+    const artifact = artifacts[kind];
+    if (!artifact) return;
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/${artifact[0]}`, artifact[1]);
+  }
+
   async function downloadGroupedPayloads() {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/grouped-payloads`, "gene_module_group_payloads.csv");
   }
@@ -1984,6 +2083,16 @@ function MatchResultPanel({ result, locale, t }) {
           <h3 className="result-subtitle">{t.enrichmentTitle}</h3>
           <div className="metrics-grid">
             {enrichmentCards.map(([label, value]) => (
+              <MetricCard label={label} value={value} key={label} />
+            ))}
+          </div>
+        </>
+      )}
+      {evidenceRefinementCards.length > 0 && (
+        <>
+          <h3 className="result-subtitle">{t.evidenceRefinementTitle}</h3>
+          <div className="metrics-grid">
+            {evidenceRefinementCards.map(([label, value]) => (
               <MetricCard label={label} value={value} key={label} />
             ))}
           </div>
@@ -2146,6 +2255,58 @@ function MatchResultPanel({ result, locale, t }) {
           <Download size={17} />
           {t.enrichmentPerformanceDownload}
         </button>}
+        {isGeneModuleV2 && artifactReady.curatedPhysicalMatrix && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("physicalMatrix")}>
+          <Download size={17} />
+          {t.curatedPhysicalMatrixDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.curatedPhysicalRegistry && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("physicalRegistry")}>
+          <Download size={17} />
+          {t.curatedPhysicalRegistryDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.curatedModuleProjection && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("moduleProjection")}>
+          <Download size={17} />
+          {t.curatedModuleProjectionDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.canonicalGeneModuleStatus && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("canonicalStatus")}>
+          <Download size={17} />
+          {t.canonicalStatusDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.clinvarAggregate && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("clinvarAggregate")}>
+          <Download size={17} />
+          {t.clinvarAggregateDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.clinvarAssertions && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("clinvarAssertions")}>
+          <Download size={17} />
+          {t.clinvarAssertionsDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.clinpgxClinicalAnnotations && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("clinpgxClinical")}>
+          <Download size={17} />
+          {t.clinpgxClinicalDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.clinpgxVariantAnnotations && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("clinpgxVariant")}>
+          <Download size={17} />
+          {t.clinpgxVariantDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.gwasAssociations && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("gwasAssociations")}>
+          <Download size={17} />
+          {t.gwasAssociationsDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.publicationEvidence && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("publications")}>
+          <Download size={17} />
+          {t.publicationEvidenceDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.evidenceRefinementRaw && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("raw")}>
+          <Download size={17} />
+          {t.evidenceRefinementRawDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.evidenceRefinementRetryQueue && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("retryQueue")}>
+          <Download size={17} />
+          {t.evidenceRefinementRetryDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.evidenceRefinementSummary && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("summary")}>
+          <Download size={17} />
+          {t.evidenceRefinementSummaryDownload}
+        </button>}
         {isGeneModuleV2 && artifactReady.groupedPayloads && <button className="secondary-button match-download-button" type="button" onClick={downloadGroupedPayloads}>
           <Download size={17} />
           {t.groupingPayloadsDownload}
@@ -2257,6 +2418,7 @@ function App() {
   const [enrichmentCompleteProgress, setEnrichmentCompleteProgress] = useState(0);
   const [enrichmentVepOnlyProgress, setEnrichmentVepOnlyProgress] = useState(0);
   const [enrichmentQualityProgress, setEnrichmentQualityProgress] = useState(0);
+  const [evidenceRefinementProgress, setEvidenceRefinementProgress] = useState(0);
   const [groupingPreparationProgress, setGroupingPreparationProgress] = useState(0);
   const [groupedInterpretationProgress, setGroupedInterpretationProgress] = useState(0);
   const [individualInterpretationProgress, setIndividualInterpretationProgress] = useState(0);
@@ -2298,6 +2460,19 @@ function App() {
     enrichmentInterpretive: false,
     enrichmentPlus: false,
     enrichmentQuality: false,
+    curatedPhysicalMatrix: false,
+    curatedPhysicalRegistry: false,
+    curatedModuleProjection: false,
+    canonicalGeneModuleStatus: false,
+    clinvarAggregate: false,
+    clinvarAssertions: false,
+    clinpgxClinicalAnnotations: false,
+    clinpgxVariantAnnotations: false,
+    gwasAssociations: false,
+    publicationEvidence: false,
+    evidenceRefinementRaw: false,
+    evidenceRefinementRetryQueue: false,
+    evidenceRefinementSummary: false,
     groupedPayloads: false,
     groupedVariantDetail: false,
     groupedInterpretation: false,
@@ -2357,6 +2532,7 @@ function App() {
     setEnrichmentCompleteProgress(0);
     setEnrichmentVepOnlyProgress(0);
     setEnrichmentQualityProgress(0);
+    setEvidenceRefinementProgress(0);
     setGroupingPreparationProgress(0);
     setGroupedInterpretationProgress(0);
     setIndividualInterpretationProgress(0);
@@ -2388,6 +2564,19 @@ function App() {
       enrichmentInterpretive: false,
       enrichmentPlus: false,
       enrichmentQuality: false,
+      curatedPhysicalMatrix: false,
+      curatedPhysicalRegistry: false,
+      curatedModuleProjection: false,
+      canonicalGeneModuleStatus: false,
+      clinvarAggregate: false,
+      clinvarAssertions: false,
+      clinpgxClinicalAnnotations: false,
+      clinpgxVariantAnnotations: false,
+      gwasAssociations: false,
+      publicationEvidence: false,
+      evidenceRefinementRaw: false,
+      evidenceRefinementRetryQueue: false,
+      evidenceRefinementSummary: false,
       groupedPayloads: false,
       groupedVariantDetail: false,
       groupedInterpretation: false,
@@ -2579,6 +2768,11 @@ function App() {
         );
       } else if (kind === "enrichmentPerformance") {
         await downloadCsv(`/api/vcf-canon-matches/${matchResult.jobId}/enrichment-performance`, "enrichment_performance_summary.json");
+      } else if (kind === "curatedPhysicalMatrix") {
+        await downloadCsv(
+          `/api/vcf-canon-matches/${matchResult.jobId}/curated-physical-matrix`,
+          "v2_curated_physical_variant_matrix.csv",
+        );
       } else if (kind === "groupedPayloads") {
         await downloadCsv(
           `/api/vcf-canon-matches/${matchResult.jobId}/grouped-payloads`,
@@ -2750,6 +2944,19 @@ function App() {
       enrichmentInterpretive: Boolean(ready.enrichmentInterpretive),
       enrichmentPlus: Boolean(ready.enrichmentPlus),
       enrichmentQuality: Boolean(ready.enrichmentQuality),
+      curatedPhysicalMatrix: Boolean(ready.curatedPhysicalMatrix),
+      curatedPhysicalRegistry: Boolean(ready.curatedPhysicalRegistry),
+      curatedModuleProjection: Boolean(ready.curatedModuleProjection),
+      canonicalGeneModuleStatus: Boolean(ready.canonicalGeneModuleStatus),
+      clinvarAggregate: Boolean(ready.clinvarAggregate),
+      clinvarAssertions: Boolean(ready.clinvarAssertions),
+      clinpgxClinicalAnnotations: Boolean(ready.clinpgxClinicalAnnotations),
+      clinpgxVariantAnnotations: Boolean(ready.clinpgxVariantAnnotations),
+      gwasAssociations: Boolean(ready.gwasAssociations),
+      publicationEvidence: Boolean(ready.publicationEvidence),
+      evidenceRefinementRaw: Boolean(ready.evidenceRefinementRaw),
+      evidenceRefinementRetryQueue: Boolean(ready.evidenceRefinementRetryQueue),
+      evidenceRefinementSummary: Boolean(ready.evidenceRefinementSummary),
       groupedPayloads: Boolean(ready.groupedPayloads),
       groupedVariantDetail: Boolean(ready.groupedVariantDetail),
       groupedInterpretation: Boolean(ready.groupedInterpretation),
@@ -2782,6 +2989,10 @@ function App() {
       ready.enrichmentInterpretive ||
       ready.enrichmentPlus ||
       ready.enrichmentQuality ||
+      ready.curatedPhysicalMatrix ||
+      ready.curatedPhysicalRegistry ||
+      ready.curatedModuleProjection ||
+      ready.evidenceRefinementSummary ||
       ready.groupedPayloads ||
       ready.groupedVariantDetail ||
       ready.groupedInterpretation ||
@@ -2915,6 +3126,19 @@ function App() {
         setEnrichmentProgress(100);
         setEnrichmentQualityProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.enrichmentQuality);
+      } else if (job.stage === "evidence_refinement" || job.stage === "evidence_refinement_quality_gate") {
+        setPhase(job.stage);
+        setMatchProgress(100);
+        setNormalizationProgress(100);
+        setPreparationProgress(100);
+        setAiTriageProgress(100);
+        setEnrichmentVepBaseProgress(100);
+        setEnrichmentCompleteProgress(100);
+        setEnrichmentVepOnlyProgress(100);
+        setEnrichmentProgress(100);
+        setEnrichmentQualityProgress(100);
+        setEvidenceRefinementProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.evidenceRefining);
       } else if (job.stage === "grouping_preparation") {
         setPhase("grouping_preparation");
         setMatchProgress(100);
@@ -2923,6 +3147,7 @@ function App() {
         setAiTriageProgress(100);
         setEnrichmentProgress(100);
         setEnrichmentQualityProgress(100);
+        setEvidenceRefinementProgress(100);
         setGroupingPreparationProgress(job.stageProgress ?? job.progress ?? 0);
         setCustomMessage(job.message || t.groupingPreparing);
       } else if (job.stage === "grouped_individual_interpretation") {
@@ -2933,6 +3158,7 @@ function App() {
         setAiTriageProgress(100);
         setEnrichmentProgress(100);
         setEnrichmentQualityProgress(100);
+        setEvidenceRefinementProgress(100);
         setGroupingPreparationProgress(100);
         setGroupedInterpretationProgress(job.stageProgress ?? job.progress ?? 0);
         setGroupedInterpretationDetail(groupedInterpretationDetailFromMessage(job.message, t));
@@ -3020,6 +3246,9 @@ function App() {
         if (job.artifactsReady?.enrichmentQuality || job.result?.metadata?.enrichment_quality_gate) {
           setEnrichmentQualityProgress(100);
         }
+        if (job.artifactsReady?.evidenceRefinementSummary || job.result?.evidenceRefinement) {
+          setEvidenceRefinementProgress(100);
+        }
         if (job.artifactsReady?.groupedPayloads || job.result?.groupPrep) {
           setGroupingPreparationProgress(100);
         }
@@ -3105,6 +3334,7 @@ function App() {
           setEnrichmentCompleteProgress(0);
           setEnrichmentVepOnlyProgress(0);
           setEnrichmentQualityProgress(0);
+          setEvidenceRefinementProgress(0);
           setGroupingPreparationProgress(0);
           setGroupedInterpretationProgress(0);
           setIndividualInterpretationProgress(0);
@@ -3129,6 +3359,19 @@ function App() {
             enrichmentInterpretive: false,
             enrichmentPlus: false,
             enrichmentQuality: false,
+            curatedPhysicalMatrix: false,
+            curatedPhysicalRegistry: false,
+            curatedModuleProjection: false,
+            canonicalGeneModuleStatus: false,
+            clinvarAggregate: false,
+            clinvarAssertions: false,
+            clinpgxClinicalAnnotations: false,
+            clinpgxVariantAnnotations: false,
+            gwasAssociations: false,
+            publicationEvidence: false,
+            evidenceRefinementRaw: false,
+            evidenceRefinementRetryQueue: false,
+            evidenceRefinementSummary: false,
             groupedPayloads: false,
             groupedVariantDetail: false,
             groupedInterpretation: false,
@@ -3192,6 +3435,7 @@ function App() {
     setAiTriageProgress(0);
     setEnrichmentProgress(0);
     setEnrichmentQualityProgress(0);
+    setEvidenceRefinementProgress(0);
     setGroupingPreparationProgress(0);
     setGroupedInterpretationProgress(0);
     setIndividualInterpretationProgress(0);
@@ -3213,6 +3457,8 @@ function App() {
     setMessageKey(
       downstreamSupported
         ? "enrichmentComplete"
+        : nextMatchResult?.evidenceRefinement
+          ? "evidenceRefinementComplete"
         : nextMatchResult?.variantEnrichment
           ? "enrichmentQualityComplete"
         : nextMatchResult?.groupedIndividualInterpretation
@@ -3242,6 +3488,9 @@ function App() {
     }
     if (nextMatchResult?.artifactsReady?.enrichmentQuality || nextMatchResult?.metadata?.enrichment_quality_gate) {
       setEnrichmentQualityProgress(100);
+    }
+    if (nextMatchResult?.artifactsReady?.evidenceRefinementSummary || nextMatchResult?.evidenceRefinement) {
+      setEvidenceRefinementProgress(100);
     }
     if (nextMatchResult?.artifactsReady?.groupedPayloads || nextMatchResult?.groupPrep) {
       setGroupingPreparationProgress(100);
@@ -3598,6 +3847,19 @@ function App() {
       enrichmentInterpretive: false,
       enrichmentPlus: false,
       enrichmentQuality: false,
+      curatedPhysicalMatrix: false,
+      curatedPhysicalRegistry: false,
+      curatedModuleProjection: false,
+      canonicalGeneModuleStatus: false,
+      clinvarAggregate: false,
+      clinvarAssertions: false,
+      clinpgxClinicalAnnotations: false,
+      clinpgxVariantAnnotations: false,
+      gwasAssociations: false,
+      publicationEvidence: false,
+      evidenceRefinementRaw: false,
+      evidenceRefinementRetryQueue: false,
+      evidenceRefinementSummary: false,
       groupedPayloads: false,
       groupedVariantDetail: false,
       groupedInterpretation: false,
@@ -3618,6 +3880,7 @@ function App() {
     setAiTriageProgress(0);
     setEnrichmentProgress(0);
     setEnrichmentQualityProgress(0);
+    setEvidenceRefinementProgress(0);
     setGroupingPreparationProgress(0);
     setGroupedInterpretationProgress(0);
     setIndividualInterpretationProgress(0);
@@ -3652,7 +3915,7 @@ function App() {
       setTurnstileResetKey((current) => current + 1);
     } catch (caught) {
       setPhase("error");
-      if (caught.stage === "enriching") {
+      if (isVariantEnrichmentStage(caught.stage)) {
         setError(t.enrichmentFailed);
         setErrorDialog(true);
         setRetryEnrichmentJobId(caught.jobId || matchResult?.jobId || null);
@@ -3944,6 +4207,17 @@ function App() {
             downloadLabel={t.enrichmentQualityDownload}
             onDownload={matchResult?.jobId ? () => downloadMatchArtifact("enrichmentQuality") : null}
             downloadReady={matchArtifactsReady.enrichmentQuality}
+          />
+        )}
+        {isGeneModuleV2 && (
+          <ProgressBar
+            label={t.evidenceRefinementProgress}
+            value={evidenceRefinementProgress}
+            detail={stageProgressDetails.evidence_refinement || stageProgressDetails.evidence_refinement_quality_gate || ""}
+            tone="green"
+            downloadLabel={t.curatedPhysicalMatrixDownload}
+            onDownload={matchResult?.jobId ? () => downloadMatchArtifact("curatedPhysicalMatrix") : null}
+            downloadReady={matchArtifactsReady.curatedPhysicalMatrix}
           />
         )}
         {isGeneModuleV2 && v2DownstreamBlocked && (
