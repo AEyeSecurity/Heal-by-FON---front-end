@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -57,7 +58,15 @@ def write_progress(output_dir: Path, *, stage: str, substage: str, processed: in
         ),
         encoding="utf-8",
     )
-    temporary.replace(path)
+    for attempt in range(8):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            if attempt >= 7:
+                temporary.unlink(missing_ok=True)
+                return
+            time.sleep(0.05 * (attempt + 1))
 
 
 def clean_str(value) -> str:

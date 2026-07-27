@@ -21,6 +21,7 @@ import shlex
 import subprocess
 import sys
 import shutil
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -53,11 +54,21 @@ def write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
         writer.writerows(rows)
 
 
-def write_json(path: Path, payload: dict) -> None:
+def write_json(path: Path, payload: dict, *, tolerate_replace_lock: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
-    temporary.replace(path)
+    for attempt in range(8):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            if attempt >= 7:
+                if tolerate_replace_lock:
+                    temporary.unlink(missing_ok=True)
+                    return
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def write_progress(output_dir: Path, *, stage: str, substage: str, processed: int = 0, total: int = 0, unit: str = "items", message: str = "") -> None:
@@ -72,6 +83,8 @@ def write_progress(output_dir: Path, *, stage: str, substage: str, processed: in
             "message": message,
             "updatedAt": utc_now(),
         },
+        # Progress is advisory; a transient Windows reader lock must not abort normalization.
+        tolerate_replace_lock=True,
     )
 
 

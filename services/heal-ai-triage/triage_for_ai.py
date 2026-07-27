@@ -9,6 +9,7 @@ import csv
 import datetime as dt
 import json
 import os
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -48,7 +49,15 @@ def write_progress(output_dir: Path, *, substage: str, processed: int = 0, total
         ),
         encoding="utf-8",
     )
-    temporary.replace(path)
+    for attempt in range(8):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            if attempt >= 7:
+                temporary.unlink(missing_ok=True)
+                return
+            time.sleep(0.05 * (attempt + 1))
 
 
 def is_missing(value) -> bool:
