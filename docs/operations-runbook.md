@@ -237,7 +237,7 @@ The manifest records the source URL, retrieval time and SHA-256 hashes. To provi
 F:\Heal by FON\app\services\heal-vcf-normalization\provision_grch38_reference.ps1
 ```
 
-V2 uses the local coordinate enrichment service rather than the legacy n8n rsID workflow. Jobs now finish by generating all 180 `llm1_group_payload_v4` dry-run groups without OpenAI calls. `HEAL_V2_LLM1_PILOT_ENABLED=false` is the safe default; the separate pilot endpoint accepts at most 20 groups only when their mechanism registry rows and pilot manifest are professionally approved. The default VEP quality threshold is `0.90`, configurable through `HEAL_V2_MIN_VEP_COVERAGE`.
+V2 uses the local coordinate enrichment service rather than the legacy n8n rsID workflow. Jobs now retain v3/v4 and finish by generating all 180 bounded `llm1_group_payload_v5` dry-run groups without OpenAI calls. The complete evidence ledger remains outside the token-limited payload and is reconciled through coverage and token audits. `HEAL_V2_LLM1_PILOT_ENABLED=false` is the safe default; the separate pilot endpoint accepts at most 20 groups only when their mechanism registry rows and v2 pilot manifest are professionally approved. Optional public-text digest generation also remains disabled through `HEAL_V2_EVIDENCE_DIGEST_ENABLED=false` and requires its own model. The default VEP quality threshold is `0.90`, configurable through `HEAL_V2_MIN_VEP_COVERAGE`.
 
 Professional curation inputs are stored outside the repository at `F:\Heal by FON\config\mechanism_registry_v1.csv` and `F:\Heal by FON\config\gwas_trait_module_relevance_v1.csv`. A run emits review templates when these files are absent. Do not enable the pilot merely because a template exists.
 

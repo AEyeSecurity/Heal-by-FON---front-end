@@ -62,6 +62,9 @@ $env:HEAL_V2_LLM1_ENABLED = "false"
 if ([string]::IsNullOrWhiteSpace($env:HEAL_V2_LLM1_PILOT_ENABLED)) {
     $env:HEAL_V2_LLM1_PILOT_ENABLED = "false"
 }
+if ([string]::IsNullOrWhiteSpace($env:HEAL_V2_EVIDENCE_DIGEST_ENABLED)) {
+    $env:HEAL_V2_EVIDENCE_DIGEST_ENABLED = "false"
+}
 $env:HEAL_MECHANISM_REGISTRY_PATH = Join-Path $configRoot "mechanism_registry_v1.csv"
 $env:HEAL_GWAS_TRAIT_MODULE_MAP_PATH = Join-Path $configRoot "gwas_trait_module_relevance_v1.csv"
 # V2 QA remains conservative but allows the known test VCF's VEP coverage.
@@ -112,6 +115,7 @@ if ($ValidateOnly) {
         deploymentSha = $env:HEAL_DEPLOYMENT_SHA
         v2Llm1Enabled = $env:HEAL_V2_LLM1_ENABLED
         v2Llm1PilotEnabled = $env:HEAL_V2_LLM1_PILOT_ENABLED
+        v2EvidenceDigestEnabled = $env:HEAL_V2_EVIDENCE_DIGEST_ENABLED
     } | ConvertTo-Json -Depth 3
     exit 0
 }

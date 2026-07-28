@@ -60,6 +60,8 @@ export const SERVICE_SCRIPTS = {
   geneModuleEnrichment: serviceScript("heal-variant-enrichment", "enrich_gene_module_v2.py"),
   evidenceRefinement: serviceScript("heal-evidence-refinement", "refine_multisource_v2.py"),
   groupedPrep: serviceScript("heal-grouped-interpretation-prep", "prepare_gene_module_group_payloads.py"),
+  groupedPayloadV5: serviceScript("heal-llm1-payload-v5", "build_llm1_payload_v5.py"),
+  evidenceDigest: serviceScript("heal-evidence-digest", "digest_public_evidence.py"),
   groupedInterpretation: serviceScript("heal-grouped-individual-interpretation", "interpret_gene_module_groups.py"),
   individualInterpretation: serviceScript("heal-individual-interpretation", "interpret_observed_variants.py"),
   interpretationNormalization: serviceScript("heal-interpretation-normalization", "normalize_individual_interpretations.py"),

@@ -93,6 +93,8 @@ const ALLOWED_LLM2_MODELS = new Set(
 const ALLOW_LLM_DRY_RUN = process.env.HEAL_ALLOW_LLM_DRY_RUN === "true";
 const HEAL_V2_LLM1_ENABLED = process.env.HEAL_V2_LLM1_ENABLED === "true";
 const HEAL_V2_LLM1_PILOT_ENABLED = process.env.HEAL_V2_LLM1_PILOT_ENABLED === "true";
+const HEAL_V2_EVIDENCE_DIGEST_ENABLED = process.env.HEAL_V2_EVIDENCE_DIGEST_ENABLED === "true";
+const HEAL_V2_EVIDENCE_DIGEST_MODEL = process.env.HEAL_V2_EVIDENCE_DIGEST_MODEL || "";
 const HEAL_MECHANISM_REGISTRY_PATH =
   process.env.HEAL_MECHANISM_REGISTRY_PATH || path.join(CONFIG_ROOT, "mechanism_registry_v1.csv");
 const HEAL_GWAS_TRAIT_MODULE_MAP_PATH =
@@ -695,8 +697,18 @@ function publicArtifactsReady(job) {
     evidenceRefinementSummary: artifactExists(artifacts.evidenceRefinementSummaryJson),
     groupedPayloads: artifactExists(artifacts.groupPayloadsCsv || artifacts.groupPayloadsJsonl),
     groupedPayloadsV4: artifactExists(artifacts.groupPayloadsCsvV4 || artifacts.groupPayloadsJsonlV4),
+    groupedPayloadsV5: artifactExists(artifacts.groupPayloadsCsvV5 || artifacts.groupPayloadsJsonlV5),
+    groupEvidencePackets: artifactExists(artifacts.groupEvidencePacketsJsonlGz),
+    groupEvidenceDigests: artifactExists(artifacts.groupEvidenceDigestsJsonl),
+    groupEvidenceDigestErrors: artifactExists(artifacts.groupEvidenceDigestErrorsCsv),
+    groupTokenBudgetAudit: artifactExists(artifacts.groupTokenBudgetAuditCsv),
+    groupEvidenceCoverageAudit: artifactExists(artifacts.groupEvidenceCoverageAuditCsv),
+    groupCompressionErrors: artifactExists(artifacts.groupCompressionErrorsCsv),
+    groupCompressionSummary: artifactExists(artifacts.groupCompressionSummaryJson),
+    groupPayloadSchemaV5: artifactExists(artifacts.groupPayloadSchemaV5Json),
     mechanismRegistry: artifactExists(artifacts.mechanismRegistryV1Csv),
     llm1PilotManifest: artifactExists(artifacts.llm1PilotManifestCsv),
+    llm1PilotCandidateManifestV2: artifactExists(artifacts.llm1PilotCandidateManifestV2Csv),
     groupedVariantDetail: artifactExists(artifacts.groupVariantDetailCsv),
     groupedInterpretation: artifactExists(artifacts.groupInterpretationsCsv),
     individualInterpretation: artifactExists(artifacts.individualVariantInterpretationsCsv),
@@ -1457,6 +1469,14 @@ async function processVariantEnrichmentWithRetry(payload, job, attempts = 3) {
   throw new Error(`Variant enrichment failed after ${attempts} attempts: ${errors.join(" | ")}`);
 }
 
+async function processGroupedPayloadV5(payload) {
+  return await runBase64JsonScript(SERVICE_SCRIPTS.groupedPayloadV5, payload);
+}
+
+async function processEvidenceDigest(payload) {
+  return await runBase64JsonScript(SERVICE_SCRIPTS.evidenceDigest, payload);
+}
+
 async function runEvidenceRefinementForJob({
   job,
   runId,
@@ -2036,6 +2056,8 @@ app.get("/api/health", async (_req, res) => {
     n8nVariantEnrichmentWebhookConfigured: Boolean(N8N_VARIANT_ENRICHMENT_WEBHOOK_URL),
     v2Llm1Enabled: HEAL_V2_LLM1_ENABLED,
     v2Llm1PilotEnabled: HEAL_V2_LLM1_PILOT_ENABLED,
+    v2EvidenceDigestEnabled: HEAL_V2_EVIDENCE_DIGEST_ENABLED,
+    v2EvidenceDigestModelConfigured: Boolean(HEAL_V2_EVIDENCE_DIGEST_MODEL),
     v2MechanismRegistryConfigured: existsSync(HEAL_MECHANISM_REGISTRY_PATH),
     v2GwasTraitModuleMapConfigured: existsSync(HEAL_GWAS_TRAIT_MODULE_MAP_PATH),
     v2MinVepCoverage: HEAL_V2_MIN_VEP_COVERAGE,
@@ -3268,24 +3290,73 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         job.artifacts.groupingSummaryJsonV4 = groupedPrepSummary.outputs?.groupingSummaryJsonV4 || "";
         job.artifacts.mechanismRegistryV1Csv = groupedPrepSummary.outputs?.mechanismRegistryV1Csv || "";
         job.artifacts.llm1PilotManifestCsv = groupedPrepSummary.outputs?.llm1PilotManifestCsv || "";
+        job.stageProgress = 70;
+        job.message = "Building bounded LLM1 v5 payloads and evidence coverage audits";
+        job.updatedAt = new Date().toISOString();
+        await persistVcfCanonJob(job);
+        const groupedV5Summary = await processGroupedPayloadV5({
+          event: "heal.grouped_payload_v5.requested",
+          runId: `group-payload-v5-${runId}`,
+          detailPath: groupedPrepSummary.outputs?.groupVariantDetailCsvV4,
+          canonicalStatusPath: job.artifacts.canonicalGeneModuleStatusCsv,
+          mechanismRegistryPath: groupedPrepSummary.outputs?.mechanismRegistryV1Csv,
+          clinvarAssertionsPath: job.artifacts.clinvarSubmitterAssertionsCsv,
+          gwasClustersPath: job.artifacts.gwasEvidenceClustersCsv,
+          publicationsPath: job.artifacts.publicationEvidenceCsv,
+          outputDir: groupedPrepOutputDir,
+          tokenizerModel: LLM1_MODEL,
+          requestedAt: new Date().toISOString(),
+        });
+        const requiredGroupedV5Artifacts = [
+          groupedV5Summary.outputs?.groupPayloadsJsonlV5,
+          groupedV5Summary.outputs?.groupPayloadsCsvV5,
+          groupedV5Summary.outputs?.groupEvidencePacketsJsonlGz,
+          groupedV5Summary.outputs?.groupEvidenceDigestsJsonl,
+          groupedV5Summary.outputs?.groupTokenBudgetAuditCsv,
+          groupedV5Summary.outputs?.groupEvidenceCoverageAuditCsv,
+          groupedV5Summary.outputs?.groupCompressionErrorsCsv,
+          groupedV5Summary.outputs?.groupCompressionSummaryJson,
+          groupedV5Summary.outputs?.llm1PilotCandidateManifestV2Csv,
+          groupedV5Summary.outputs?.groupPayloadSchemaV5Json,
+        ];
+        if (requiredGroupedV5Artifacts.some((artifactPath) => !artifactPath || !existsSync(artifactPath))) {
+          throw new Error("Grouped interpretation prep did not produce its required v5 compression artifacts.");
+        }
+        job.artifacts.groupPayloadsJsonlV5 = groupedV5Summary.outputs?.groupPayloadsJsonlV5 || "";
+        job.artifacts.groupPayloadsCsvV5 = groupedV5Summary.outputs?.groupPayloadsCsvV5 || "";
+        job.artifacts.groupEvidencePacketsJsonlGz = groupedV5Summary.outputs?.groupEvidencePacketsJsonlGz || "";
+        job.artifacts.groupEvidenceDigestsJsonl = groupedV5Summary.outputs?.groupEvidenceDigestsJsonl || "";
+        job.artifacts.groupTokenBudgetAuditCsv = groupedV5Summary.outputs?.groupTokenBudgetAuditCsv || "";
+        job.artifacts.groupEvidenceCoverageAuditCsv = groupedV5Summary.outputs?.groupEvidenceCoverageAuditCsv || "";
+        job.artifacts.groupCompressionErrorsCsv = groupedV5Summary.outputs?.groupCompressionErrorsCsv || "";
+        job.artifacts.groupCompressionSummaryJson = groupedV5Summary.outputs?.groupCompressionSummaryJson || "";
+        job.artifacts.llm1PilotCandidateManifestV2Csv = groupedV5Summary.outputs?.llm1PilotCandidateManifestV2Csv || "";
+        job.artifacts.groupPayloadSchemaV5Json = groupedV5Summary.outputs?.groupPayloadSchemaV5Json || "";
         job.result = {
           ...job.result,
-          groupPrep: sanitizeGroupedInterpretationPrepResult(groupedPrepSummary),
+          groupPrep: {
+            ...sanitizeGroupedInterpretationPrepResult(groupedPrepSummary),
+            payloadV5: sanitizeGroupedInterpretationPrepResult(groupedV5Summary),
+            metadata: {
+              ...(groupedPrepSummary.metadata || {}),
+              ...(groupedV5Summary.metadata || {}),
+            },
+          },
         };
 
         job.status = "complete";
         job.progress = 100;
         job.stage = "grouping_preparation";
         job.stageProgress = 100;
-        job.message = "Grouped payload v4 dry-run completed; LLM1 pilot requires explicit approval";
+        job.message = "Grouped payload v5 dry-run completed; LLM1 pilot requires explicit approval";
         job.result = {
           ...job.result,
           metadata: {
             ...(job.result?.metadata || {}),
             downstream_supported: false,
-            downstream_input: "llm1_group_payload_v4_dry_run",
+            downstream_input: "llm1_group_payload_v5_dry_run",
             downstream_message:
-              "All grouped payload v4 artifacts were generated without LLM calls. The pilot remains blocked until mechanism curation, manifest approval, and explicit pilot enablement.",
+              "All grouped payload v5 artifacts were generated without LLM calls. The pilot remains blocked until mechanism curation, manifest approval, and explicit pilot enablement.",
           },
         };
         return;
@@ -3407,6 +3478,41 @@ app.get("/api/vcf-canon-matches/:jobId/logs", async (req, res) => {
   res.json({ jobId: job.id, logs });
 });
 
+function parseCsvRecords(raw) {
+  const rows = [];
+  let row = [];
+  let field = "";
+  let quoted = false;
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (char === '"') {
+      if (quoted && raw[index + 1] === '"') {
+        field += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (char === "," && !quoted) {
+      row.push(field);
+      field = "";
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && raw[index + 1] === "\n") index += 1;
+      row.push(field);
+      if (row.some((value) => value !== "")) rows.push(row);
+      row = [];
+      field = "";
+    } else {
+      field += char;
+    }
+  }
+  if (field || row.length) {
+    row.push(field);
+    rows.push(row);
+  }
+  const headers = (rows.shift() || []).map((value) => value.replace(/^\uFEFF/, "").trim());
+  return rows.map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] || ""])));
+}
+
 app.post("/api/vcf-canon-matches/:jobId/llm1-pilot", async (req, res) => {
   if (REQUIRE_ORIGIN && !req.headers.origin) {
     res.status(403).json({ error: "Origin header is required." });
@@ -3421,18 +3527,25 @@ app.post("/api/vcf-canon-matches/:jobId/llm1-pilot", async (req, res) => {
     res.status(404).json({ error: "VCF-canon match job not found." });
     return;
   }
-  const payloadPath = path.resolve(job.artifacts?.groupPayloadsJsonlV4 || "");
-  const manifestPath = path.resolve(job.artifacts?.llm1PilotManifestCsv || "");
-  const groupedRoot = groupedInterpretationPrepPaths().root;
-  if (!isPathInside(groupedRoot, payloadPath) || !existsSync(payloadPath) || !isPathInside(groupedRoot, manifestPath) || !existsSync(manifestPath)) {
-    res.status(409).json({ error: "Grouped payload v4 or its pilot manifest is not available." });
+  if (job.status === "running") {
+    res.status(409).json({ error: "This job is already running." });
     return;
   }
-  const manifestLines = (await readFile(manifestPath, "utf8")).split(/\r?\n/).filter(Boolean);
-  const headers = (manifestLines.shift() || "").split(",").map((value) => value.trim());
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload && !canAccessUpload(req, upload)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+  const payloadPath = path.resolve(job.artifacts?.groupPayloadsJsonlV5 || "");
+  const manifestPath = path.resolve(job.artifacts?.llm1PilotCandidateManifestV2Csv || "");
+  const groupedRoot = groupedInterpretationPrepPaths().root;
+  if (!isPathInside(groupedRoot, payloadPath) || !existsSync(payloadPath) || !isPathInside(groupedRoot, manifestPath) || !existsSync(manifestPath)) {
+    res.status(409).json({ error: "Grouped payload v5 or its pilot candidate manifest is not available." });
+    return;
+  }
+  const manifestRows = parseCsvRecords(await readFile(manifestPath, "utf8"));
   const approvedIds = new Set(
-    manifestLines
-      .map((line) => Object.fromEntries(line.split(",").map((value, index) => [headers[index], value.trim()])))
+    manifestRows
       .filter((row) => row.approved_for_pilot === "true" && row.approval_reviewer && row.approval_timestamp)
       .map((row) => row.group_id),
   );
@@ -3444,9 +3557,16 @@ app.post("/api/vcf-canon-matches/:jobId/llm1-pilot", async (req, res) => {
   const selected = payloads.filter(
     (payload) =>
       approvedIds.has(payload.group_id) &&
+      payload.payload_schema_version === "llm1_group_payload_v5" &&
+      payload.execution_mode === "dry_run" &&
+      Number(payload.compression_metadata?.estimated_tokens || 0) <= 25000 &&
       payload.gates?.group_payload_ready === true &&
       (requestedIds.size === 0 || requestedIds.has(payload.group_id)),
-  );
+  ).map((payload) => ({
+    ...payload,
+    execution_mode: "pilot",
+    gates: { ...payload.gates, llm1_pilot_ready: true },
+  }));
   if (selected.length === 0) {
     res.status(409).json({ error: "No professionally approved, payload-ready groups are present in the pilot manifest." });
     return;
@@ -3457,7 +3577,7 @@ app.post("/api/vcf-canon-matches/:jobId/llm1-pilot", async (req, res) => {
   }
   const outputDir = jobStageDirectory(job.id, "llm1-pilot");
   await mkdir(outputDir, { recursive: true });
-  const selectedPath = path.join(outputDir, "llm1_pilot_selected_payloads_v4.jsonl");
+  const selectedPath = path.join(outputDir, "llm1_pilot_selected_payloads_v5.jsonl");
   await writeFile(selectedPath, `${selected.map((payload) => JSON.stringify(payload)).join("\n")}\n`, "utf8");
   job.stage = "grouped_individual_interpretation";
   job.stageProgress = 1;
@@ -3502,6 +3622,106 @@ app.post("/api/vcf-canon-matches/:jobId/llm1-pilot", async (req, res) => {
     }
   })();
   res.status(202).json({ jobId: job.id, status: "running", selectedGroups: selected.length });
+});
+
+app.post("/api/vcf-canon-matches/:jobId/evidence-digest", async (req, res) => {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+  if (!HEAL_V2_EVIDENCE_DIGEST_ENABLED || !HEAL_V2_EVIDENCE_DIGEST_MODEL) {
+    res.status(409).json({
+      error: "Evidence digest is disabled. Configure HEAL_V2_EVIDENCE_DIGEST_ENABLED=true and an explicit HEAL_V2_EVIDENCE_DIGEST_MODEL.",
+    });
+    return;
+  }
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  if (job.status === "running") {
+    res.status(409).json({ error: "This job is already running." });
+    return;
+  }
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload && !canAccessUpload(req, upload)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+  const groupedRoot = groupedInterpretationPrepPaths().root;
+  const packetsPath = path.resolve(job.artifacts?.groupEvidencePacketsJsonlGz || "");
+  const tokenAuditPath = path.resolve(job.artifacts?.groupTokenBudgetAuditCsv || "");
+  const detailPath = path.resolve(job.artifacts?.groupVariantDetailCsvV4 || "");
+  if (
+    ![packetsPath, tokenAuditPath, detailPath].every((artifactPath) => isPathInside(groupedRoot, artifactPath) && existsSync(artifactPath))
+  ) {
+    res.status(409).json({ error: "V5 evidence packets, token audit, or grouped detail are unavailable." });
+    return;
+  }
+  const outputDir = path.dirname(packetsPath);
+  const requestedGroupIds = Array.isArray(req.body?.groupIds) ? req.body.groupIds.map(String) : [];
+  job.status = "running";
+  job.stage = "evidence_digest";
+  job.stageProgress = 1;
+  job.message = "Generating citation-bound public evidence digests";
+  job.updatedAt = new Date().toISOString();
+  await persistVcfCanonJob(job);
+  void (async () => {
+    try {
+      const digestSummary = await processEvidenceDigest({
+        packetsPath,
+        tokenAuditPath,
+        outputDir,
+        groupIds: requestedGroupIds,
+        model: HEAL_V2_EVIDENCE_DIGEST_MODEL,
+        cachePath: path.join(RUNTIME_PATHS.enrichmentCache, "evidence_digest_cache.sqlite"),
+      });
+      const digestPath = digestSummary.outputs?.groupEvidenceDigestsJsonl || job.artifacts.groupEvidenceDigestsJsonl;
+      const v5Summary = await processGroupedPayloadV5({
+        detailPath,
+        canonicalStatusPath: job.artifacts.canonicalGeneModuleStatusCsv,
+        mechanismRegistryPath: job.artifacts.mechanismRegistryV1Csv,
+        clinvarAssertionsPath: job.artifacts.clinvarSubmitterAssertionsCsv,
+        gwasClustersPath: job.artifacts.gwasEvidenceClustersCsv,
+        publicationsPath: job.artifacts.publicationEvidenceCsv,
+        digestPath,
+        outputDir,
+        tokenizerModel: LLM1_MODEL,
+      });
+      job.artifacts.groupPayloadsJsonlV5 = v5Summary.outputs?.groupPayloadsJsonlV5 || job.artifacts.groupPayloadsJsonlV5;
+      job.artifacts.groupPayloadsCsvV5 = v5Summary.outputs?.groupPayloadsCsvV5 || job.artifacts.groupPayloadsCsvV5;
+      job.artifacts.groupEvidenceDigestsJsonl = digestPath || "";
+      job.artifacts.groupEvidenceDigestErrorsCsv = digestSummary.outputs?.groupEvidenceDigestErrorsCsv || "";
+      job.artifacts.groupCompressionSummaryJson = v5Summary.outputs?.groupCompressionSummaryJson || "";
+      job.artifacts.groupTokenBudgetAuditCsv = v5Summary.outputs?.groupTokenBudgetAuditCsv || "";
+      job.artifacts.groupEvidenceCoverageAuditCsv = v5Summary.outputs?.groupEvidenceCoverageAuditCsv || "";
+      job.artifacts.llm1PilotCandidateManifestV2Csv = v5Summary.outputs?.llm1PilotCandidateManifestV2Csv || "";
+      job.artifacts.groupPayloadSchemaV5Json = v5Summary.outputs?.groupPayloadSchemaV5Json || "";
+      job.result = {
+        ...job.result,
+        groupPrep: {
+          ...(job.result?.groupPrep || {}),
+          payloadV5: sanitizeGroupedInterpretationPrepResult(v5Summary),
+          evidenceDigest: digestSummary,
+          metadata: { ...(job.result?.groupPrep?.metadata || {}), ...(v5Summary.metadata || {}) },
+        },
+      };
+      job.status = "complete";
+      job.stage = "grouping_preparation";
+      job.stageProgress = 100;
+      job.message = "Evidence digest and bounded v5 payload regeneration completed";
+    } catch (error) {
+      job.status = "complete";
+      job.stageProgress = 100;
+      job.message = "Evidence digest failed; deterministic evidence and v5 payloads remain valid";
+      job.result = { ...job.result, evidenceDigest: { status: "failed", error: error.message || String(error) } };
+    } finally {
+      job.updatedAt = new Date().toISOString();
+      await persistVcfCanonJob(job);
+    }
+  })();
+  res.status(202).json({ jobId: job.id, status: "running", requestedGroups: requestedGroupIds.length });
 });
 
 app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
@@ -4323,12 +4543,18 @@ async function downloadGroupedArtifact(req, res, artifactKey, suffix, { json = f
     return;
   }
   const artifactStat = await stat(artifactPath).catch(() => null);
-  if (!artifactStat || artifactStat.size <= 0) {
+  if (!artifactStat || (artifactStat.size <= 0 && artifactKey !== "groupEvidenceDigestsJsonl")) {
     res.status(404).json({ error: "Grouped interpretation artifact was not found." });
     return;
   }
 
   const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
+  const gzipEncoded = artifactPath.toLowerCase().endsWith(".gz");
+  if (gzipEncoded) {
+    res.setHeader("Content-Type", "application/gzip");
+    res.download(artifactPath, `${baseName}_${suffix}.${jsonl ? "jsonl" : json ? "json" : "csv"}.gz`);
+    return;
+  }
   if (json) {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.download(artifactPath, `${baseName}_${suffix}.json`);
@@ -4623,6 +4849,50 @@ app.get("/api/vcf-canon-matches/:jobId/grouped-payloads-v4", async (req, res) =>
 
 app.get("/api/vcf-canon-matches/:jobId/grouped-payloads-v4-jsonl", async (req, res) => {
   await downloadGroupedArtifact(req, res, "groupPayloadsJsonlV4", "gene_module_group_payloads_v4", { jsonl: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-payloads-v5", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadsCsvV5", "llm1_group_payloads_v5");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-payloads-v5-jsonl", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadsJsonlV5", "llm1_group_payloads_v5", { jsonl: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/group-evidence-packets", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupEvidencePacketsJsonlGz", "group_evidence_packets", { jsonl: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/group-evidence-digests", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupEvidenceDigestsJsonl", "group_evidence_digests", { jsonl: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/group-evidence-digest-errors", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupEvidenceDigestErrorsCsv", "group_evidence_digest_errors");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/group-token-budget-audit", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupTokenBudgetAuditCsv", "group_token_budget_audit");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/group-evidence-coverage-audit", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupEvidenceCoverageAuditCsv", "group_evidence_coverage_audit");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/group-compression-errors", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupCompressionErrorsCsv", "group_compression_errors");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/group-compression-summary", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupCompressionSummaryJson", "group_compression_summary", { json: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/llm1-pilot-candidate-manifest-v2", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "llm1PilotCandidateManifestV2Csv", "llm1_pilot_candidate_manifest_v2");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-payload-v5-schema", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadSchemaV5Json", "llm1_group_payload_v5_schema", { json: true });
 });
 
 app.get("/api/vcf-canon-matches/:jobId/mechanism-registry", async (req, res) => {

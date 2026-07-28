@@ -433,6 +433,23 @@ const COPY = {
     evidenceRefinementSummaryDownload: "Descargar resumen de curacion",
     groupingPayloadsDownload: "Descargar payloads agrupados",
     groupingPayloadsV4Download: "Descargar payloads agrupados v4",
+    groupingPayloadsV5Download: "Descargar payloads acotados v5",
+    groupEvidencePacketsDownload: "Descargar ledger por grupo",
+    groupEvidenceDigestsDownload: "Descargar digests de evidencia",
+    groupEvidenceDigestErrorsDownload: "Descargar errores de digest",
+    groupTokenBudgetDownload: "Descargar auditoria de tokens",
+    groupEvidenceCoverageDownload: "Descargar auditoria de cobertura",
+    groupCompressionErrorsDownload: "Descargar errores de compresion",
+    groupCompressionSummaryDownload: "Descargar resumen de compresion",
+    llm1PilotCandidateManifestV2Download: "Descargar candidatos del piloto v2",
+    groupPayloadSchemaV5Download: "Descargar schema del payload v5",
+    evidenceDigestStart: "Generar digest de evidencia publica",
+    groupingMaxTokens: "Maximo de tokens por grupo",
+    groupingWithinLimit: "Grupos dentro del limite",
+    groupingCompressionReview: "Grupos que requieren revision",
+    groupingCoverageRecords: "Registros de evidencia auditados",
+    groupingCoverageReconciled: "Cobertura reconciliada",
+    groupingPilotCandidates: "Candidatos de piloto",
     mechanismRegistryDownload: "Descargar registro de mecanismos",
     llm1PilotManifestDownload: "Descargar manifest del piloto LLM1",
     llm1PilotStart: "Ejecutar piloto LLM1 aprobado",
@@ -776,6 +793,23 @@ const COPY = {
     evidenceRefinementSummaryDownload: "Download curation summary",
     groupingPayloadsDownload: "Download grouped payloads",
     groupingPayloadsV4Download: "Download grouped payloads v4",
+    groupingPayloadsV5Download: "Download bounded v5 payloads",
+    groupEvidencePacketsDownload: "Download group evidence ledger",
+    groupEvidenceDigestsDownload: "Download evidence digests",
+    groupEvidenceDigestErrorsDownload: "Download digest errors",
+    groupTokenBudgetDownload: "Download token budget audit",
+    groupEvidenceCoverageDownload: "Download coverage audit",
+    groupCompressionErrorsDownload: "Download compression errors",
+    groupCompressionSummaryDownload: "Download compression summary",
+    llm1PilotCandidateManifestV2Download: "Download pilot candidate manifest v2",
+    groupPayloadSchemaV5Download: "Download v5 payload schema",
+    evidenceDigestStart: "Generate public evidence digest",
+    groupingMaxTokens: "Maximum tokens per group",
+    groupingWithinLimit: "Groups within hard limit",
+    groupingCompressionReview: "Groups requiring review",
+    groupingCoverageRecords: "Evidence records audited",
+    groupingCoverageReconciled: "Coverage reconciled",
+    groupingPilotCandidates: "Pilot candidates",
     mechanismRegistryDownload: "Download mechanism registry",
     llm1PilotManifestDownload: "Download LLM1 pilot manifest",
     llm1PilotStart: "Run approved LLM1 pilot",
@@ -1746,6 +1780,12 @@ function MatchResultPanel({ result, locale, t }) {
         [t.groupingPreparationVariants, formatNumber(groupingPreparation.source_variants_total, locale)],
         [t.groupingPreparationAverageSize, formatNumber(groupingPreparation.average_group_size, locale)],
         [t.groupingPreparationLargeGroups, formatNumber(groupingPreparation.groups_gt_25, locale)],
+        [t.groupingMaxTokens, formatNumber(groupingPreparation.max_estimated_tokens, locale)],
+        [t.groupingWithinLimit, formatNumber(groupingPreparation.groups_within_hard_limit, locale)],
+        [t.groupingCompressionReview, formatNumber(groupingPreparation.groups_requiring_compression_review, locale)],
+        [t.groupingCoverageRecords, formatNumber(groupingPreparation.coverage_records, locale)],
+        [t.groupingCoverageReconciled, groupingPreparation.coverage_reconciled ? "true" : "false"],
+        [t.groupingPilotCandidates, formatNumber(groupingPreparation.pilot_candidates, locale)],
       ]
     : [];
   const groupedInterpretationCards = result.groupedIndividualInterpretation
@@ -2012,6 +2052,37 @@ function MatchResultPanel({ result, locale, t }) {
     };
     const artifact = artifacts[kind];
     if (artifact) await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/${artifact[0]}`, artifact[1]);
+  }
+
+  async function downloadGroupedV5Artifact(kind) {
+    const artifacts = {
+      payloads: ["grouped-payloads-v5", "llm1_group_payloads_v5.csv"],
+      packets: ["group-evidence-packets", "group_evidence_packets.jsonl.gz"],
+      digests: ["group-evidence-digests", "group_evidence_digests.jsonl"],
+      digestErrors: ["group-evidence-digest-errors", "group_evidence_digest_errors.csv"],
+      tokens: ["group-token-budget-audit", "group_token_budget_audit.csv"],
+      coverage: ["group-evidence-coverage-audit", "group_evidence_coverage_audit.csv"],
+      errors: ["group-compression-errors", "group_compression_errors.csv"],
+      summary: ["group-compression-summary", "group_compression_summary.json"],
+      manifest: ["llm1-pilot-candidate-manifest-v2", "llm1_pilot_candidate_manifest_v2.csv"],
+      schema: ["grouped-payload-v5-schema", "llm1_group_payload_v5.schema.json"],
+    };
+    const artifact = artifacts[kind];
+    if (artifact) await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/${artifact[0]}`, artifact[1]);
+  }
+
+  async function startEvidenceDigest() {
+    try {
+      const response = await fetch(`/api/vcf-canon-matches/${result.jobId}/evidence-digest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...accessHeaders(result.accessToken || getJobAccessToken(result.jobId)) },
+        body: JSON.stringify({}),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Could not start evidence digest generation.");
+    } catch (error) {
+      setDownloadError(error.message || String(error));
+    }
   }
 
   async function startLlm1Pilot() {
@@ -2395,6 +2466,17 @@ function MatchResultPanel({ result, locale, t }) {
           <Download size={17} />
           {t.groupingPayloadsV4Download}
         </button>}
+        {isGeneModuleV2 && artifactReady.groupedPayloadsV5 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV5Artifact("payloads")}><Download size={17} />{t.groupingPayloadsV5Download}</button>}
+        {isGeneModuleV2 && artifactReady.groupEvidencePackets && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV5Artifact("packets")}><Download size={17} />{t.groupEvidencePacketsDownload}</button>}
+        {isGeneModuleV2 && artifactReady.groupEvidenceDigests && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV5Artifact("digests")}><Download size={17} />{t.groupEvidenceDigestsDownload}</button>}
+        {isGeneModuleV2 && artifactReady.groupEvidenceDigestErrors && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV5Artifact("digestErrors")}><Download size={17} />{t.groupEvidenceDigestErrorsDownload}</button>}
+        {isGeneModuleV2 && artifactReady.groupTokenBudgetAudit && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV5Artifact("tokens")}><Download size={17} />{t.groupTokenBudgetDownload}</button>}
+        {isGeneModuleV2 && artifactReady.groupEvidenceCoverageAudit && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV5Artifact("coverage")}><Download size={17} />{t.groupEvidenceCoverageDownload}</button>}
+        {isGeneModuleV2 && artifactReady.groupCompressionErrors && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV5Artifact("errors")}><Download size={17} />{t.groupCompressionErrorsDownload}</button>}
+        {isGeneModuleV2 && artifactReady.groupCompressionSummary && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV5Artifact("summary")}><Download size={17} />{t.groupCompressionSummaryDownload}</button>}
+        {isGeneModuleV2 && artifactReady.llm1PilotCandidateManifestV2 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV5Artifact("manifest")}><Download size={17} />{t.llm1PilotCandidateManifestV2Download}</button>}
+        {isGeneModuleV2 && artifactReady.groupPayloadSchemaV5 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV5Artifact("schema")}><Download size={17} />{t.groupPayloadSchemaV5Download}</button>}
+        {isGeneModuleV2 && Number(groupingPreparation.groups_requiring_compression_review || 0) > 0 && artifactReady.groupEvidencePackets && <button className="secondary-button match-download-button" type="button" onClick={startEvidenceDigest}>{t.evidenceDigestStart}</button>}
         {isGeneModuleV2 && artifactReady.mechanismRegistry && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV4Artifact("mechanisms")}>
           <Download size={17} />
           {t.mechanismRegistryDownload}
@@ -2403,7 +2485,7 @@ function MatchResultPanel({ result, locale, t }) {
           <Download size={17} />
           {t.llm1PilotManifestDownload}
         </button>}
-        {isGeneModuleV2 && artifactReady.llm1PilotManifest && <button className="secondary-button match-download-button" type="button" onClick={startLlm1Pilot}>
+        {isGeneModuleV2 && artifactReady.llm1PilotCandidateManifestV2 && <button className="secondary-button match-download-button" type="button" onClick={startLlm1Pilot}>
           {t.llm1PilotStart}
         </button>}
         {isGeneModuleV2 && artifactReady.groupedVariantDetail && <button className="secondary-button match-download-button" type="button" onClick={downloadGroupedVariantDetail}>
@@ -2575,8 +2657,18 @@ function App() {
     evidenceRefinementSummary: false,
     groupedPayloads: false,
     groupedPayloadsV4: false,
+    groupedPayloadsV5: false,
+    groupEvidencePackets: false,
+    groupEvidenceDigests: false,
+    groupEvidenceDigestErrors: false,
+    groupTokenBudgetAudit: false,
+    groupEvidenceCoverageAudit: false,
+    groupCompressionErrors: false,
+    groupCompressionSummary: false,
+    groupPayloadSchemaV5: false,
     mechanismRegistry: false,
     llm1PilotManifest: false,
+    llm1PilotCandidateManifestV2: false,
     groupedVariantDetail: false,
     groupedInterpretation: false,
     individualInterpretation: false,
@@ -2681,6 +2773,19 @@ function App() {
       evidenceRefinementRetryQueue: false,
       evidenceRefinementSummary: false,
       groupedPayloads: false,
+      groupedPayloadsV4: false,
+      groupedPayloadsV5: false,
+      groupEvidencePackets: false,
+      groupEvidenceDigests: false,
+      groupEvidenceDigestErrors: false,
+      groupTokenBudgetAudit: false,
+      groupEvidenceCoverageAudit: false,
+      groupCompressionErrors: false,
+      groupCompressionSummary: false,
+      groupPayloadSchemaV5: false,
+      mechanismRegistry: false,
+      llm1PilotManifest: false,
+      llm1PilotCandidateManifestV2: false,
       groupedVariantDetail: false,
       groupedInterpretation: false,
       individualInterpretation: false,
@@ -3067,8 +3172,18 @@ function App() {
       evidenceRefinementSummary: Boolean(ready.evidenceRefinementSummary),
       groupedPayloads: Boolean(ready.groupedPayloads),
       groupedPayloadsV4: Boolean(ready.groupedPayloadsV4),
+      groupedPayloadsV5: Boolean(ready.groupedPayloadsV5),
+      groupEvidencePackets: Boolean(ready.groupEvidencePackets),
+      groupEvidenceDigests: Boolean(ready.groupEvidenceDigests),
+      groupEvidenceDigestErrors: Boolean(ready.groupEvidenceDigestErrors),
+      groupTokenBudgetAudit: Boolean(ready.groupTokenBudgetAudit),
+      groupEvidenceCoverageAudit: Boolean(ready.groupEvidenceCoverageAudit),
+      groupCompressionErrors: Boolean(ready.groupCompressionErrors),
+      groupCompressionSummary: Boolean(ready.groupCompressionSummary),
+      groupPayloadSchemaV5: Boolean(ready.groupPayloadSchemaV5),
       mechanismRegistry: Boolean(ready.mechanismRegistry),
       llm1PilotManifest: Boolean(ready.llm1PilotManifest),
+      llm1PilotCandidateManifestV2: Boolean(ready.llm1PilotCandidateManifestV2),
       groupedVariantDetail: Boolean(ready.groupedVariantDetail),
       groupedInterpretation: Boolean(ready.groupedInterpretation),
       individualInterpretation: Boolean(ready.individualInterpretation),
@@ -3484,6 +3599,19 @@ function App() {
             evidenceRefinementRetryQueue: false,
             evidenceRefinementSummary: false,
             groupedPayloads: false,
+            groupedPayloadsV4: false,
+            groupedPayloadsV5: false,
+            groupEvidencePackets: false,
+            groupEvidenceDigests: false,
+            groupEvidenceDigestErrors: false,
+            groupTokenBudgetAudit: false,
+            groupEvidenceCoverageAudit: false,
+            groupCompressionErrors: false,
+            groupCompressionSummary: false,
+            groupPayloadSchemaV5: false,
+            mechanismRegistry: false,
+            llm1PilotManifest: false,
+            llm1PilotCandidateManifestV2: false,
             groupedVariantDetail: false,
             groupedInterpretation: false,
             individualInterpretation: false,
@@ -3972,6 +4100,19 @@ function App() {
       evidenceRefinementRetryQueue: false,
       evidenceRefinementSummary: false,
       groupedPayloads: false,
+      groupedPayloadsV4: false,
+      groupedPayloadsV5: false,
+      groupEvidencePackets: false,
+      groupEvidenceDigests: false,
+      groupEvidenceDigestErrors: false,
+      groupTokenBudgetAudit: false,
+      groupEvidenceCoverageAudit: false,
+      groupCompressionErrors: false,
+      groupCompressionSummary: false,
+      groupPayloadSchemaV5: false,
+      mechanismRegistry: false,
+      llm1PilotManifest: false,
+      llm1PilotCandidateManifestV2: false,
       groupedVariantDetail: false,
       groupedInterpretation: false,
       individualInterpretation: false,

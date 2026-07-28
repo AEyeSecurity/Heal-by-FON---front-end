@@ -26,7 +26,9 @@ OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROMPT_PATH = SCRIPT_DIR / "prompt_grouped_llm1.md"
 PROMPT_V4_PATH = SCRIPT_DIR / "prompt_grouped_llm1_v4.md"
+PROMPT_V5_PATH = SCRIPT_DIR / "prompt_grouped_llm1_v5.md"
 SCHEMA_PATH = SCRIPT_DIR / "grouped_gene_module_interpretation_schema.json"
+SCHEMA_V5_PATH = SCRIPT_DIR / "grouped_gene_module_interpretation_v5_schema.json"
 
 OUTPUT_FIELDS = [
     "group_id",
@@ -134,6 +136,61 @@ def read_payloads(path: Path) -> list[dict]:
         return rows
 
 
+def v5_evidence_ids(payload: dict) -> set[str]:
+    ids: set[str] = set()
+
+    def visit(value) -> None:
+        if isinstance(value, dict):
+            if clean_str(value.get("evidence_id")):
+                ids.add(clean_str(value["evidence_id"]))
+            ids.update(clean_str(ref) for ref in value.get("evidence_refs") or [] if clean_str(ref))
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(payload)
+    return ids
+
+
+def validate_v5_payload(payload: dict, *, dry_run: bool) -> None:
+    if payload.get("payload_schema_version") != "llm1_group_payload_v5":
+        return
+    if not dry_run and payload.get("execution_mode") != "pilot":
+        raise ValueError("V5 LLM execution requires execution_mode=pilot.")
+    if int(payload.get("compression_metadata", {}).get("estimated_tokens", 0) or 0) > 25_000:
+        raise ValueError("V5 payload exceeds the 25,000 token hard limit.")
+    gates = payload.get("gates") or {}
+    if not gates.get("token_budget_ready"):
+        raise ValueError("V5 payload did not pass its deterministic token budget gate.")
+    if not dry_run and not gates.get("group_payload_ready"):
+        raise ValueError("V5 payload did not pass its deterministic payload gates.")
+    if not dry_run and not gates.get("llm1_pilot_ready"):
+        raise ValueError("V5 payload was not approved for the controlled LLM1 pilot.")
+    if not payload.get("evidence_coverage", {}).get("reconciled"):
+        raise ValueError("V5 evidence coverage is not reconciled.")
+
+
+def validate_v5_interpretation(item: dict, payload: dict) -> None:
+    allowed_evidence = v5_evidence_ids(payload)
+    allowed_variants = {
+        clean_str(row.get("variant_ref"))
+        for row in payload.get("focus_variant_evidence") or []
+        if clean_str(row.get("variant_ref"))
+    }
+    for evidence in item.get("evidence_used") or []:
+        evidence_id = clean_str(evidence.get("evidence_id"))
+        variant_ref = clean_str(evidence.get("variant_ref"))
+        if not evidence_id or evidence_id not in allowed_evidence:
+            raise ValueError(f"Interpretation cited an unknown evidence_id: {evidence_id or '<empty>'}")
+        if variant_ref and variant_ref not in allowed_variants:
+            raise ValueError(f"Interpretation cited an unknown focus variant_ref: {variant_ref}")
+    unknown_focus = set(item.get("focus_variant_refs") or []) - allowed_variants
+    if unknown_focus:
+        raise ValueError(f"Interpretation introduced unknown focus variant refs: {sorted(unknown_focus)}")
+
+
 def output_text_from_response(response: dict) -> str:
     texts = []
     for item in response.get("output") or []:
@@ -225,6 +282,32 @@ def call_openai_with_retries(
 
 
 def dry_run_interpretation(payload: dict) -> dict:
+    if payload.get("payload_schema_version") == "llm1_group_payload_v5":
+        focus = payload.get("focus_variant_evidence") or []
+        context = payload.get("group_context") or {}
+        conflict = bool(payload.get("clinical_evidence_summary", {}).get("conflicting_variant_keys"))
+        first_evidence = next((row for row in focus if row.get("evidence_id")), {})
+        return {
+            "group_id": payload.get("group_id", ""), "gene": payload.get("gene", ""),
+            "module_id": payload.get("module_id", ""), "module_name": context.get("module_name", ""),
+            "system_within_module": context.get("system_within_module", ""),
+            "group_size_total": int(payload.get("deterministic_summary", {}).get("group_size_total", 0) or 0),
+            "focus_variant_count": len(focus), "interpretation_scope": "conflicting_group_review_needed" if conflict else "limited_group_signal",
+            "interpretation_one_sentence_en": "Dry-run placeholder; no model call was made.",
+            "interpretation_one_sentence_es": "Placeholder dry-run; no se realizo una llamada al modelo.",
+            "interpretation_long_en": "The bounded v5 payload and its evidence references were validated only.",
+            "interpretation_long_es": "Solo se validaron el payload v5 acotado y sus referencias de evidencia.",
+            "technical_interpretation_en": "No biological interpretation was generated.",
+            "technical_interpretation_es": "No se genero interpretacion biologica.",
+            "final_confidence_level": "Abstain", "confidence_rationale_en": "Dry-run mode.",
+            "confidence_rationale_es": "Modo dry-run.", "family_notes_en": "Not for individual use.",
+            "family_notes_es": "No apto para uso individual.", "recommended_next_review_step_en": "Professional payload review.",
+            "recommended_next_review_step_es": "Revision profesional del payload.",
+            "requires_professional_review": True, "group_conflict_flag": conflict,
+            "focus_variant_refs": [row.get("variant_ref", "") for row in focus if row.get("variant_ref")],
+            "evidence_used": ([{"evidence_id": first_evidence.get("evidence_id"), "variant_ref": first_evidence.get("variant_ref", ""), "source": "v5_payload", "field": "payload_validation", "value": "validated"}] if first_evidence else []),
+            "evidence_limitations": ["Dry-run output is not a model interpretation."],
+        }
     group_conflict = int(payload.get("group_counts", {}).get("clinvar_conflict_rows", 0) or 0) > 0
     confidence = "Conflicting" if group_conflict else "Moderate"
     scope = "conflicting_group_review_needed" if group_conflict else "mixed_signal_with_priority_variants"
@@ -277,7 +360,7 @@ def normalize_output(item: dict, payload: dict, model: str, dry_run: bool) -> di
     out["model"] = model
     out["dry_run"] = str(dry_run).lower()
     out["source_group_id"] = payload.get("group_id", "")
-    out["variant_detail_artifact"] = payload.get("variant_detail_artifact", "")
+    out["variant_detail_artifact"] = payload.get("variant_detail_artifact", "") or payload.get("provenance", {}).get("variant_detail_artifact", "")
     return {key: ascii_text(value) if isinstance(value, str) else value for key, value in out.items()}
 
 
@@ -299,9 +382,21 @@ def process(payload: dict) -> dict:
     if not dry_run and not api_key:
         raise RuntimeError("HEAL_OPENAI_API_KEY or OPENAI_API_KEY must be configured for grouped interpretation.")
 
-    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     payloads = read_payloads(input_path)
-    prompt_path = PROMPT_V4_PATH if payloads and payloads[0].get("payload_schema_version") == "llm1_group_payload_v4" else PROMPT_PATH
+    versions = {item.get("payload_schema_version") for item in payloads}
+    if len(versions) > 1:
+        raise ValueError("Grouped interpretation input cannot mix payload schema versions.")
+    version = next(iter(versions), "")
+    if version == "llm1_group_payload_v5":
+        schema_path = SCHEMA_V5_PATH
+        prompt_path = PROMPT_V5_PATH
+    elif version == "llm1_group_payload_v4":
+        schema_path = SCHEMA_PATH
+        prompt_path = PROMPT_V4_PATH
+    else:
+        schema_path = SCHEMA_PATH
+        prompt_path = PROMPT_PATH
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
     system_prompt = prompt_path.read_text(encoding="utf-8")
     if max_groups > 0:
         payloads = payloads[:max_groups]
@@ -367,6 +462,7 @@ def process(payload: dict) -> dict:
 
     def interpret_one(index: int, item: dict) -> tuple[int, dict | None, dict | None]:
         try:
+            validate_v5_payload(item, dry_run=dry_run)
             if dry_run:
                 parsed = dry_run_interpretation(item)
             else:
@@ -379,6 +475,8 @@ def process(payload: dict) -> dict:
                     timeout_seconds=timeout_seconds,
                     group_attempts=group_attempts,
                 )
+            if item.get("payload_schema_version") == "llm1_group_payload_v5":
+                validate_v5_interpretation(parsed, item)
             return index, normalize_output(parsed, item, model, dry_run), None
         except Exception as error:  # noqa: BLE001
             return index, None, {
