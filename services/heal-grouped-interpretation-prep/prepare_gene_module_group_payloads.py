@@ -9,11 +9,13 @@ import csv
 import datetime as dt
 import hashlib
 import json
+import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
 
 PAYLOAD_VERSION = "llm1_group_payload_v3"
+PAYLOAD_VERSION_V4 = "llm1_group_payload_v4"
 BASE_SCORES = {
     "mane_cds_overlap": 100,
     "splice_region_candidate": 95,
@@ -73,6 +75,42 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def merge_projection_with_physical(projection_rows: list[dict], physical_rows: list[dict]) -> list[dict]:
+    if not physical_rows:
+        return projection_rows
+    physical_by_key = {clean(row.get("variant_key")): row for row in physical_rows if clean(row.get("variant_key"))}
+    missing = sorted({clean(row.get("variant_key")) for row in projection_rows if clean(row.get("variant_key")) not in physical_by_key})
+    if missing:
+        raise ValueError(f"Grouped payload projection has {len(missing)} variants without physical evidence.")
+    return [{**physical_by_key[clean(row.get("variant_key"))], **row} for row in projection_rows]
+
+
+def mechanism_registry_rows(groups: list[tuple[str, str]], existing_rows: list[dict]) -> list[dict]:
+    existing = {(clean(row.get("gene") or row.get("approved_symbol")), clean(row.get("module_id"))): row for row in existing_rows}
+    output = []
+    for gene, module_id in sorted(groups):
+        row = existing.get((gene, module_id), {})
+        output.append(
+            {
+                "mechanism_registry_version": clean(row.get("mechanism_registry_version")) or "mechanism_registry_v1",
+                "gene": gene,
+                "module_id": module_id,
+                "curation_status": clean(row.get("curation_status")) or "draft",
+                "biological_function": clean(row.get("biological_function")),
+                "pathway": clean(row.get("pathway")),
+                "directionality": clean(row.get("directionality")),
+                "related_systems": clean(row.get("related_systems")),
+                "related_modules": clean(row.get("related_modules")),
+                "mechanism_evidence_tier": clean(row.get("mechanism_evidence_tier")),
+                "source_ids_or_urls": clean(row.get("source_ids_or_urls")),
+                "reviewer": clean(row.get("reviewer")),
+                "reviewed_at": clean(row.get("reviewed_at")),
+                "review_notes": clean(row.get("review_notes")),
+            }
+        )
+    return output
 
 
 def sha256(path: Path | None) -> str:
@@ -424,9 +462,217 @@ def build_payload(rows: list[dict], canonical: list[dict], mechanism: dict, prov
     }
 
 
-def process(input_path: Path, output_dir: Path, canonical_path: Path | None = None, mechanism_path: Path | None = None, provenance_path: Path | None = None) -> dict:
+def v4_focus_rows(rows: list[dict], group_gwas_focus_keys: set[str] | None = None) -> list[dict]:
+    eligible = [row for row in rows if row["focus_eligible"] and clean(row.get("downstream_role")) != "unresolved_review"]
+    focus: list[dict] = []
+    gwas_only = 0
+    for row in eligible:
+        clinvar_primary = clean(row.get("curated_clinvar_classification")) in {
+            "pathogenic_or_likely_pathogenic", "conflicting_pathogenicity", "uncertain_significance", "risk_factor", "drug_response"
+        }
+        functional_primary = clean(row.get("local_region_class")) in {
+            "mane_cds_overlap", "splice_region_candidate", "alternative_protein_coding_cds_overlap"
+        }
+        has_group_gwas_focus = (
+            clean(row.get("variant_key")) in group_gwas_focus_keys
+            if group_gwas_focus_keys is not None
+            else as_int(row.get("curated_gwas_high_confidence_cluster_count")) > 0
+        )
+        is_gwas_only = has_group_gwas_focus and not (clinvar_primary or functional_primary)
+        if is_gwas_only and gwas_only >= 6:
+            continue
+        if len(focus) < 12:
+            focus.append(row)
+            gwas_only += int(is_gwas_only)
+            continue
+        if len(focus) < 20 and row["attention_score"] == focus[11]["attention_score"]:
+            focus.append(row)
+            gwas_only += int(is_gwas_only)
+            continue
+        break
+    return focus
+
+
+def build_payload_v4(
+    rows: list[dict],
+    canonical: list[dict],
+    mechanism: dict,
+    provenance: dict,
+    detail_path: Path,
+    assertions: list[dict],
+    gwas_clusters: list[dict],
+    publications: list[dict],
+) -> dict:
+    base = build_payload(rows, canonical, mechanism, provenance, detail_path)
+    prioritized_clusters = [row for row in gwas_clusters if clean(row.get("evidence_band")) == "high_confidence_replicated"]
+    group_gwas_focus_keys = {
+        item.strip()
+        for cluster in prioritized_clusters
+        for item in clean(cluster.get("variant_keys")).split("|")
+        if item.strip()
+    }
+    focus = v4_focus_rows(rows, group_gwas_focus_keys)
+    focus_keys = {clean(row.get("variant_key")) for row in focus}
+    focus_assertions = [row for row in assertions if clean(row.get("variant_key")) in focus_keys]
+    selected_pmids = {
+        pmid
+        for assertion in focus_assertions
+        for pmid in re.findall(r"\d+", clean(assertion.get("pmids")))
+    }
+    selected_pmids.update(
+        pmid.strip()
+        for cluster in prioritized_clusters
+        for pmid in clean(cluster.get("publication_ids")).split("|")
+        if pmid.strip()
+    )
+    selected_publications = [
+        {
+            "pmid": clean(row.get("pmid")),
+            "title": clean(row.get("title")),
+            "publication_year": clean(row.get("publication_year")),
+            "source_families": clean(row.get("source_families")),
+            "retrieval_status": clean(row.get("retrieval_status")),
+            "pmc_open_access": clean(row.get("pmc_open_access")),
+        }
+        for row in publications
+        if clean(row.get("pmid")) in selected_pmids
+    ]
+    context = [
+        row
+        for row in rows
+        if clean(row.get("variant_key")) not in focus_keys
+        and row["focus_eligible"]
+        and clean(row.get("downstream_role")) != "unresolved_review"
+    ]
+    unresolved = [row for row in rows if not row["focus_eligible"] or clean(row.get("downstream_role")) == "unresolved_review"]
+    primary = [
+        row
+        for row in focus
+        if clean(row.get("curated_clinvar_classification")) in NON_BENIGN_CLINVAR_CLASSES_V4
+        or clean(row.get("local_region_class")) in {"mane_cds_overlap", "splice_region_candidate", "alternative_protein_coding_cds_overlap"}
+    ]
+    group_id = base["group_id"]
+    payload_ready = bool(mechanism.get("usable_by_llm")) and not any(
+        clean(row.get("identity_match_class")) not in CONFIRMED_IDENTITIES for row in focus
+    )
+    return {
+        **base,
+        "payload_schema_version": PAYLOAD_VERSION_V4,
+        "genetic_facts": [genetic_fact(row) for row in focus],
+        "scientific_evidence": [evidence_for_variant(row) for row in focus],
+        "deterministic_summary": {
+            **base["deterministic_summary"],
+            "focus_variant_count": len(focus),
+            "context_variant_count": len(context),
+            "unresolved_or_failed_count": len(unresolved),
+            "evidence_layer_counts": {
+                "primary": len(primary),
+                "prioritized_gwas_clusters": len(prioritized_clusters),
+                "context_variants": len(context),
+                "unresolved": len(unresolved),
+            },
+        },
+        "focus_variants": [compact_variant(row) for row in focus],
+        "context_variants": {
+            "count": len(context),
+            "benign_count": sum(clean(row.get("downstream_role")) == "benign_context" for row in context),
+            "annotation_absent_count": sum(clean(row.get("downstream_role")) == "annotation_absent_context" for row in context),
+            "pharmgkb_unconfirmed_context_count": sum(clean(row.get("source_evidence_status")) == "pharmacogenomic_context_unconfirmed" for row in context),
+            "by_local_region": count_values(context, "local_region_class"),
+            "variant_refs_for_audit": [variant_ref(row) for row in context[:40]],
+        },
+        "unresolved_and_failed": {
+            "count": len(unresolved),
+            "by_identity": count_values(unresolved, "identity_match_class"),
+            "items": base["unresolved_and_failed"]["items"],
+        },
+        "evidence_layers": {
+            "primary_variant_refs": [variant_ref(row) for row in primary],
+            "prioritized_gwas_clusters": prioritized_clusters,
+            "context_gwas_clusters": {
+                "count": len(gwas_clusters) - len(prioritized_clusters),
+                "by_evidence_band": dict(Counter(clean(row.get("evidence_band")) for row in gwas_clusters if row not in prioritized_clusters)),
+                "trait_ids": [clean(row.get("trait_id")) for row in gwas_clusters if row not in prioritized_clusters][:40],
+                "cluster_ids_for_audit": [clean(row.get("cluster_id")) for row in gwas_clusters if row not in prioritized_clusters][:40],
+                "complete_artifact": "gwas_evidence_clusters.csv",
+            },
+            "clinvar_assertions": focus_assertions,
+            "publication_records": selected_publications,
+            "limitations": [
+                "GWAS associations are population-level context and do not establish individual causality.",
+                "PharmGKB base records have unconfirmed observed-allele applicability.",
+                "Unresolved identities are retained for audit and cannot become focus variants.",
+            ],
+        },
+        "gates": {
+            "technical_pipeline_ready": True,
+            "annotation_ready": not any(clean(row.get("vep_status")) == "source_error" for row in focus),
+            "evidence_curation_ready": True,
+            "mechanism_registry_ready": bool(mechanism.get("usable_by_llm")),
+            "group_payload_ready": payload_ready,
+            "llm1_pilot_ready": False,
+        },
+        "provenance": {**base["provenance"], "payload_hash_scope": group_id},
+    }
+
+
+NON_BENIGN_CLINVAR_CLASSES_V4 = {
+    "pathogenic_or_likely_pathogenic",
+    "uncertain_significance",
+    "conflicting_pathogenicity",
+    "risk_factor",
+    "drug_response",
+    "other_or_association",
+}
+
+
+def pilot_stratum(payload: dict) -> str:
+    layer_counts = payload.get("deterministic_summary", {}).get("evidence_layer_counts", {})
+    if as_int(layer_counts.get("primary")) > 0:
+        return "functional_or_clinvar_strong"
+    if as_int(layer_counts.get("prioritized_gwas_clusters")) > 0:
+        return "gwas_replicated_relevant"
+    if as_int(payload.get("context_variants", {}).get("pharmgkb_unconfirmed_context_count")) > 0:
+        return "pharmgkb_contextual"
+    if as_int(payload.get("context_variants", {}).get("benign_count")) > 0 or payload.get("focus_variants"):
+        return "benign_or_functional_only"
+    return "abstention_or_conflict"
+
+
+def select_pilot_candidates(payloads: list[dict]) -> list[dict]:
+    quotas = {
+        "functional_or_clinvar_strong": 6,
+        "gwas_replicated_relevant": 5,
+        "pharmgkb_contextual": 3,
+        "benign_or_functional_only": 3,
+        "abstention_or_conflict": 3,
+    }
+    buckets: dict[str, list[dict]] = defaultdict(list)
+    for payload in payloads:
+        if payload.get("gates", {}).get("group_payload_ready"):
+            buckets[pilot_stratum(payload)].append(payload)
+    selected = []
+    for stratum, limit in quotas.items():
+        selected.extend(sorted(buckets[stratum], key=lambda row: row["group_id"])[:limit])
+    return selected
+
+
+def process(
+    input_path: Path,
+    output_dir: Path,
+    canonical_path: Path | None = None,
+    mechanism_path: Path | None = None,
+    provenance_path: Path | None = None,
+    physical_path: Path | None = None,
+    clinvar_assertions_path: Path | None = None,
+    gwas_clusters_path: Path | None = None,
+    publications_path: Path | None = None,
+) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
-    source_rows = read_csv(input_path)
+    projection_rows = read_csv(input_path)
+    if projection_rows and "triage_universe" in projection_rows[0]:
+        projection_rows = [row for row in projection_rows if as_bool(row.get("triage_universe"))]
+    source_rows = merge_projection_with_physical(projection_rows, read_csv(physical_path))
     if not source_rows:
         raise ValueError("Enrichment module projection CSV is empty.")
     required = {"variant_key", "approved_symbol", "module_id", "local_region_class", "identity_match_class", "vep_status"}
@@ -436,15 +682,22 @@ def process(input_path: Path, output_dir: Path, canonical_path: Path | None = No
 
     canonical_rows = read_csv(canonical_path)
     mechanism_rows = read_csv(mechanism_path)
+    group_keys = sorted({(clean(row.get("approved_symbol")), clean(row.get("module_id"))) for row in source_rows if clean(row.get("approved_symbol")) and clean(row.get("module_id"))})
+    mechanism_rows = mechanism_registry_rows(group_keys, mechanism_rows)
+    mechanism_registry_path = output_dir / "mechanism_registry_v1.csv"
+    write_csv(mechanism_registry_path, mechanism_rows, list(mechanism_rows[0]) if mechanism_rows else ["gene", "module_id"])
+    assertion_rows = read_csv(clinvar_assertions_path)
+    gwas_cluster_rows = read_csv(gwas_clusters_path)
+    publication_rows = read_csv(publications_path)
     canonical_index: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for row in canonical_rows:
-        canonical_index[(clean(row.get("gene")), clean(row.get("module_id")))].append(row)
+        canonical_index[(clean(row.get("gene") or row.get("approved_symbol")), clean(row.get("module_id")))].append(row)
     mechanism_index = {(clean(row.get("gene")), clean(row.get("module_id"))): row for row in mechanism_rows}
     provenance = {
         "generated_at": utc_now(),
         "input_sha256": sha256(input_path),
         "canonical_status_sha256": sha256(canonical_path),
-        "mechanism_registry_sha256": sha256(mechanism_path),
+        "mechanism_registry_sha256": sha256(mechanism_registry_path),
         "pipeline_version": PAYLOAD_VERSION,
     }
     if provenance_path and provenance_path.exists():
@@ -462,11 +715,31 @@ def process(input_path: Path, output_dir: Path, canonical_path: Path | None = No
 
     detail_path = output_dir / "gene_module_group_variant_detail_v3.csv"
     payloads = []
+    payloads_v4 = []
     summary_rows = []
     for key, rows in sorted(groups.items()):
         rows.sort(key=lambda row: (-row["focus_eligible"], -row["attention_score"], as_int(row.get("variant_start") or row.get("pos_vcf"), 10**15), variant_ref(row)))
         payload = build_payload(rows, canonical_index.get(key, []), mechanism_for_group(mechanism_index, key), provenance, detail_path)
         payloads.append(payload)
+        variant_keys = {clean(row.get("variant_key")) for row in rows}
+        group_assertions = [row for row in assertion_rows if clean(row.get("variant_key")) in variant_keys]
+        group_clusters = [row for row in gwas_cluster_rows if clean(row.get("approved_symbol")) == key[0] and clean(row.get("module_id")) == key[1]]
+        group_publications = [
+            row
+            for row in publication_rows
+            if variant_keys.intersection({item.strip() for item in clean(row.get("variant_keys")).split("|") if item.strip()})
+        ]
+        payload_v4 = build_payload_v4(
+            rows,
+            canonical_index.get(key, []),
+            mechanism_for_group(mechanism_index, key),
+            provenance,
+            output_dir / "gene_module_group_variant_detail_v4.csv",
+            group_assertions,
+            group_clusters,
+            group_publications,
+        )
+        payloads_v4.append(payload_v4)
         for rank, row in enumerate(rows, 1):
             detail_rows.append({
                 **row,
@@ -486,23 +759,62 @@ def process(input_path: Path, output_dir: Path, canonical_path: Path | None = No
             "unresolved_or_failed_count": payload["deterministic_summary"]["unresolved_or_failed_count"],
             "mechanism_curation_status": payload["curated_mechanisms"]["curation_status"],
             "payload_ready": str(payload["curated_mechanisms"]["usable_by_llm"] and not payload["unresolved_and_failed"]["count"]).lower(),
+            "payload_v4_ready": str(payload_v4["gates"]["group_payload_ready"]).lower(),
         })
 
     jsonl_path = output_dir / "gene_module_group_payloads_v3.jsonl"
     csv_path = output_dir / "gene_module_group_payloads_v3.csv"
     summary_path = output_dir / "gene_module_grouping_summary_v3.json"
+    jsonl_v4_path = output_dir / "gene_module_group_payloads_v4.jsonl"
+    csv_v4_path = output_dir / "gene_module_group_payloads_v4.csv"
+    detail_v4_path = output_dir / "gene_module_group_variant_detail_v4.csv"
+    summary_v4_path = output_dir / "gene_module_grouping_summary_v4.json"
+    pilot_manifest_path = output_dir / "llm1_pilot_manifest_v1.csv"
     write_jsonl(jsonl_path, payloads)
+    write_jsonl(jsonl_v4_path, payloads_v4)
     write_csv(csv_path, [{**row, "payload_json": json.dumps(payloads[index], ensure_ascii=False, separators=(",", ":"))} for index, row in enumerate(summary_rows)], list(summary_rows[0]) + ["payload_json"])
     detail_fields = list(source_rows[0]) + ["group_id", "attention_score", "attention_rank", "attention_reasons_json", "focus_eligible", "transcript_concordance"]
     write_csv(detail_path, detail_rows, detail_fields)
+    write_csv(detail_v4_path, detail_rows, detail_fields)
+    write_csv(
+        csv_v4_path,
+        [{**row, "payload_json": json.dumps(payloads_v4[index], ensure_ascii=False, separators=(",", ":"))} for index, row in enumerate(summary_rows)],
+        list(summary_rows[0]) + ["payload_json"],
+    )
+    pilot_candidates = select_pilot_candidates(payloads_v4)
+    pilot_rows = [
+        {
+            "group_id": payload["group_id"],
+            "gene": payload["gene"],
+            "module_id": payload["module_id"],
+            "approved_for_pilot": "false",
+            "selection_category": pilot_stratum(payload),
+            "approval_reviewer": "",
+            "approval_timestamp": "",
+        }
+        for payload in pilot_candidates[:20]
+    ]
+    write_csv(
+        pilot_manifest_path,
+        pilot_rows,
+        ["group_id", "gene", "module_id", "approved_for_pilot", "selection_category", "approval_reviewer", "approval_timestamp"],
+    )
     metadata = {
         "source_rows": len(source_rows),
+        "source_variants_total": len({clean(row.get("variant_key")) for row in source_rows}),
         "total_groups": len(payloads),
+        "average_group_size": round(len(source_rows) / max(len(payloads), 1), 2),
+        "groups_gt_25": sum(len(rows) > 25 for rows in groups.values()),
         "focus_variants_total": sum(row["focus_variant_count"] for row in summary_rows),
         "context_variants_total": sum(row["context_variant_count"] for row in summary_rows),
         "unresolved_or_failed_total": sum(row["unresolved_or_failed_count"] for row in summary_rows),
         "groups_with_approved_mechanism": sum(1 for row in summary_rows if row["mechanism_curation_status"] == "approved"),
         "groups_payload_ready": sum(1 for row in summary_rows if row["payload_ready"] == "true"),
+        "groups_payload_v4_ready": sum(1 for row in summary_rows if row["payload_v4_ready"] == "true"),
+        "focus_variants_v4_total": sum(len(payload["focus_variants"]) for payload in payloads_v4),
+        "context_variants_v4_total": sum(payload["context_variants"]["count"] for payload in payloads_v4),
+        "unresolved_or_failed_v4_total": sum(payload["unresolved_and_failed"]["count"] for payload in payloads_v4),
+        "pilot_candidates": len(pilot_rows),
         "llm_calls": 0,
         "dry_run_only": True,
     }
@@ -525,8 +837,31 @@ def process(input_path: Path, output_dir: Path, canonical_path: Path | None = No
         "timestamps": {"completedAt": utc_now()},
     }
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps(summary, ensure_ascii=False))
-    return summary
+    summary_v4 = {
+        **summary,
+        "payloadSchemaVersion": PAYLOAD_VERSION_V4,
+        "outputs": {
+            **summary["outputs"],
+            "groupPayloadsJsonlV4": str(jsonl_v4_path),
+            "groupPayloadsCsvV4": str(csv_v4_path),
+            "groupVariantDetailCsvV4": str(detail_v4_path),
+            "groupingSummaryJsonV4": str(summary_v4_path),
+            "mechanismRegistryV1Csv": str(mechanism_registry_path),
+            "llm1PilotManifestCsv": str(pilot_manifest_path),
+        },
+        "gates": {
+            "technicalPipelineReady": "pass",
+            "annotationReady": "pass" if all(payload["gates"]["annotation_ready"] for payload in payloads_v4) else "review_required",
+            "evidenceCurationReady": "pass",
+            "mechanismRegistryReady": "pass" if all(payload["gates"]["mechanism_registry_ready"] for payload in payloads_v4) else "blocked",
+            "groupPayloadReady": "pass" if all(payload["gates"]["group_payload_ready"] for payload in payloads_v4) else "blocked",
+            "llm1PilotReady": "blocked",
+            "llm1PilotReason": "pending_explicit_manifest_approval",
+        },
+    }
+    summary_v4_path.write_text(json.dumps(summary_v4, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(summary_v4, ensure_ascii=False))
+    return summary_v4
 
 
 def parse_args() -> argparse.Namespace:
@@ -536,6 +871,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--canonical-status")
     parser.add_argument("--mechanism-registry")
     parser.add_argument("--provenance")
+    parser.add_argument("--physical-matrix")
+    parser.add_argument("--clinvar-assertions")
+    parser.add_argument("--gwas-clusters")
+    parser.add_argument("--publications")
     parser.add_argument("--input-json-base64", default="")
     args = parser.parse_args()
     if args.input_json_base64:
@@ -545,6 +884,10 @@ def parse_args() -> argparse.Namespace:
         args.canonical_status = payload.get("canonicalStatusPath")
         args.mechanism_registry = payload.get("mechanismRegistryPath")
         args.provenance = payload.get("provenancePath")
+        args.physical_matrix = payload.get("physicalMatrixPath")
+        args.clinvar_assertions = payload.get("clinvarAssertionsPath")
+        args.gwas_clusters = payload.get("gwasClustersPath")
+        args.publications = payload.get("publicationsPath")
     if not args.input or not args.output_dir:
         parser.error("--input and --output-dir are required")
     return args
@@ -558,6 +901,10 @@ def main() -> int:
         Path(args.canonical_status) if args.canonical_status else None,
         Path(args.mechanism_registry) if args.mechanism_registry else None,
         Path(args.provenance) if args.provenance else None,
+        Path(args.physical_matrix) if args.physical_matrix else None,
+        Path(args.clinvar_assertions) if args.clinvar_assertions else None,
+        Path(args.gwas_clusters) if args.gwas_clusters else None,
+        Path(args.publications) if args.publications else None,
     )
     return 0
 

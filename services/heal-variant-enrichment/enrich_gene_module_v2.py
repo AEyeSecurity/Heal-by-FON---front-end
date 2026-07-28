@@ -516,6 +516,84 @@ def fetch_vep_batch(batch: list[dict], assembly: str, cache: EnrichmentCache, ti
     return resolved, cache_hits, len(misses), errors
 
 
+def _vep_failure_can_split(result: dict) -> bool:
+    if clean(result.get("status")) != "source_error":
+        return False
+    error = clean(result.get("error")).lower()
+    if "429" in error or "too many requests" in error or "retry-after" in error:
+        return False
+    return any(
+        token in error
+        for token in (
+            "timed out",
+            "timeout",
+            "connection reset",
+            "remote end closed",
+            "http error 413",
+            "http error 500",
+            "http error 502",
+            "http error 503",
+            "http error 504",
+        )
+    )
+
+
+def fetch_vep_adaptive(
+    batch: list[dict],
+    assembly: str,
+    cache: EnrichmentCache,
+    timeout_seconds: int,
+    provenance: dict,
+) -> tuple[dict[str, dict], int, int, list[str]]:
+    """Recover transient failed VEP batches without losing successful rows.
+
+    Failed 200-row requests are retried as 50, then 10, then individual
+    variants. Rate-limit responses are intentionally left for the run retry
+    queue instead of multiplying traffic against an already throttled source.
+    """
+
+    network_variant_keys: set[str] = set()
+
+    def fetch(candidates: list[dict]) -> tuple[dict[str, dict], int]:
+        response, cache_hits, network_variants, _warnings = fetch_vep_batch(
+            candidates,
+            assembly,
+            cache,
+            timeout_seconds,
+            provenance,
+        )
+        if network_variants:
+            network_variant_keys.update(
+                clean(variant.get("variant_key"))
+                for variant in candidates
+                if not response.get(clean(variant.get("variant_key")), {}).get("cache_hit")
+            )
+        failed = [
+            variant
+            for variant in candidates
+            if _vep_failure_can_split(response.get(clean(variant.get("variant_key")), {}))
+        ]
+        if len(failed) <= 1:
+            return response, cache_hits
+        split_size = 50 if len(failed) > 50 else 10 if len(failed) > 10 else 1
+        for offset in range(0, len(failed), split_size):
+            child_response, child_hits = fetch(failed[offset : offset + split_size])
+            response.update(child_response)
+            cache_hits += child_hits
+        return response, cache_hits
+
+    resolved, cache_hits = fetch(batch)
+    unresolved_errors = sorted(
+        {
+            clean(result.get("error"))
+            for result in resolved.values()
+            if clean(result.get("status")) == "source_error" and clean(result.get("error"))
+        }
+    )
+    warnings = [f"ensembl_vep_region: {error}" for error in unresolved_errors]
+    return resolved, cache_hits, len(network_variant_keys), warnings
+
+
 def as_text(value: object) -> str:
     if isinstance(value, (dict, list)):
         return legacy.compact_json(value)
@@ -1678,7 +1756,13 @@ def main_process(payload: dict) -> dict:
     vep_requests = 0
     warnings: list[str] = []
     for offset in range(0, len(physical_variants), VEP_BATCH_SIZE):
-        response, cache_hits, requests, batch_warnings = fetch_vep_batch(physical_variants[offset : offset + VEP_BATCH_SIZE], assembly, cache, timeout_seconds, provenance)
+        response, cache_hits, requests, batch_warnings = fetch_vep_adaptive(
+            physical_variants[offset : offset + VEP_BATCH_SIZE],
+            assembly,
+            cache,
+            timeout_seconds,
+            provenance,
+        )
         vep_raw.update(response)
         vep_cache_hits += cache_hits
         vep_requests += requests

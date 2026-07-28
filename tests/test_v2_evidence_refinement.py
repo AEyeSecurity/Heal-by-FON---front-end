@@ -160,6 +160,45 @@ class V2EvidenceRefinementTests(unittest.TestCase):
         self.assertEqual(mismatched["focus_eligible"], "false")
         self.assertEqual(mismatched["evidence_scope"], "population_association_not_individual_causality")
 
+    def test_gwas_beta_is_typed_without_losing_raw_value(self):
+        parsed = refinement.parse_gwas_association(
+            {
+                "association_id": 1,
+                "accession_id": "GCST1",
+                "p_value": 1e-10,
+                "beta": "-0.42 log(odds)",
+                "snp_allele": [{"rs_id": "rs1", "effect_allele": "G"}],
+            },
+            {"variant_key": "v1", "resolved_rsid": "rs1", "ref_vcf": "A", "alt_vcf": "G"},
+        )
+
+        self.assertEqual(parsed["beta"], "-0.42 log(odds)")
+        self.assertEqual(parsed["beta_value"], "-0.42")
+        self.assertEqual(parsed["beta_unit"], "log(odds")
+        self.assertEqual(parsed["beta_direction"], "negative")
+
+    def test_gwas_cluster_requires_approved_module_relevance_for_high_confidence(self):
+        rows = [
+            {
+                "variant_key": "v1", "mapped_trait_ids": "EFO_1", "mapped_traits": "Trait", "focus_eligible": "true",
+                "pubmed_id": "1", "study_accession": "S1", "beta_direction": "positive", "p_value": "1e-9",
+            },
+            {
+                "variant_key": "v2", "mapped_trait_ids": "EFO_1", "mapped_traits": "Trait", "focus_eligible": "true",
+                "pubmed_id": "2", "study_accession": "S2", "beta_direction": "positive", "p_value": "1e-10",
+            },
+        ]
+        _, _, unreviewed = refinement.build_gwas_summaries(rows, {"v1": [("GENE", "T1")], "v2": [("GENE", "T1")]}, {})
+        _, _, approved = refinement.build_gwas_summaries(
+            rows,
+            {"v1": [("GENE", "T1")], "v2": [("GENE", "T1")]},
+            {("GENE", "T1", "EFO_1"): "approved"},
+        )
+
+        self.assertEqual(unreviewed[0]["evidence_band"], "moderate_contextual")
+        self.assertEqual(approved[0]["evidence_band"], "high_confidence_replicated")
+        self.assertEqual(approved[0]["independent_publication_count"], 2)
+
     def test_process_preserves_all_contracts_and_deduplicates_publications(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -255,7 +294,7 @@ class V2EvidenceRefinementTests(unittest.TestCase):
                 return {"pmid": pmid, "title": "Fixture", "pmc_open_access": "false"}, {"status": "success", "status_reason": "fixture"}
 
             with patch.object(refinement, "fetch_clinvar_records", side_effect=fake_clinvar), \
-                patch.object(refinement, "fetch_clinpgx_bundle", side_effect=fake_clinpgx), \
+                patch.object(refinement, "fetch_clinpgx_bundle", side_effect=fake_clinpgx) as clinpgx_fetch, \
                 patch.object(refinement, "fetch_publication", side_effect=fake_publication):
                 summary = refinement.process({
                     "physicalMatrixPath": str(physical_path),
@@ -277,6 +316,7 @@ class V2EvidenceRefinementTests(unittest.TestCase):
             self.assertEqual(summary["counts"]["benignContextVariants"], 1)
             self.assertEqual(summary["gates"]["conservationGate"]["status"], "pass")
             self.assertEqual(publication_calls, ["123"])
+            clinpgx_fetch.assert_not_called()
             self.assertEqual(len(refinement.read_csv(output_dir / "v2_curated_physical_variant_matrix.csv")), 4)
             registry = refinement.read_csv(output_dir / "v2_curated_physical_variant_registry.csv")
             self.assertEqual(len(registry), 6)

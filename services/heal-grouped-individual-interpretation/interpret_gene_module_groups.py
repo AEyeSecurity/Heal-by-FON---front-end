@@ -25,6 +25,7 @@ DEFAULT_MAX_WORKERS = 3
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROMPT_PATH = SCRIPT_DIR / "prompt_grouped_llm1.md"
+PROMPT_V4_PATH = SCRIPT_DIR / "prompt_grouped_llm1_v4.md"
 SCHEMA_PATH = SCRIPT_DIR / "grouped_gene_module_interpretation_schema.json"
 
 OUTPUT_FIELDS = [
@@ -298,9 +299,10 @@ def process(payload: dict) -> dict:
     if not dry_run and not api_key:
         raise RuntimeError("HEAL_OPENAI_API_KEY or OPENAI_API_KEY must be configured for grouped interpretation.")
 
-    system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     payloads = read_payloads(input_path)
+    prompt_path = PROMPT_V4_PATH if payloads and payloads[0].get("payload_schema_version") == "llm1_group_payload_v4" else PROMPT_PATH
+    system_prompt = prompt_path.read_text(encoding="utf-8")
     if max_groups > 0:
         payloads = payloads[:max_groups]
 

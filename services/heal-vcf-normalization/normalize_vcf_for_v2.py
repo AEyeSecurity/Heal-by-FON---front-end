@@ -544,16 +544,19 @@ def run_bcftools(
     # Keep the VCF filter inside the container. Creating an uncompressed host copy
     # was the main source of avoidable disk pressure for multi-gigabyte VCFs.
     sample_filter = f" -s {shlex.quote(sample_name)}" if sample_name else ""
+    # Use bcftools' native streaming target parser. The previous AWK stream filter
+    # looked correct but leaked nearly the full VCF on the production Windows /
+    # Docker path, forcing normalization and matching to scan millions of rows.
+    # --regions-overlap 0 intentionally matches source_alleles(): source POS must
+    # fall inside a candidate envelope before reference normalization.
     command_parts = [
         "set -o pipefail;",
-        f"bcftools view{sample_filter} -i 'GT=\"alt\"' -Ov /input/{input_name}",
-        "|",
-        "awk -F '\\t'",
-        "-v",
-        f"regions=/output/{region_name}",
-        shlex.quote(
-            "BEGIN { while ((getline < regions) > 0) { count[$1]++; start[$1, count[$1]] = $2; stop[$1, count[$1]] = $3 } } /^#/ { print; next } { for (i = 1; i <= count[$1]; i++) if ($2 >= start[$1, i] && $2 <= stop[$1, i]) { print; next } next }"
-        ),
+        f"bcftools view{sample_filter} -i 'GT=\"alt\"'",
+        "--targets-overlap 0",
+        "-T",
+        f"/output/{region_name}",
+        "-Ou",
+        f"/input/{input_name}",
         "|",
     ]
     if contig_rename_path.stat().st_size > 0:

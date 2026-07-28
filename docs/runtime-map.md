@@ -18,7 +18,7 @@ HEAL owns only `F:\Heal by FON`. The project must not write to `C:` or `D:` afte
 | Frontend/API | `F:\Heal by FON\app\server`, `app\src` | `data\uploads`, `data\jobs`, `data\runs` | `config\heal-vcf-api.env` | Task `HEAL VCF API` -> `ops\Start-HealApi.ps1`; `GET /api/health` | uploads 24h; jobs/runs 14d | legacy and v2 |
 | Canon intake | `app\services\heal-canon-intake` | `data\canon\incoming`, `runs`, `current` | `HEAL_CANON_ROOT` | API child process; active canon reported by health | active canon protected | legacy and v2 |
 | Legacy rsID | `app\services\heal-rsid-resolution`, legacy matcher/enricher | `data\legacy-rsid`, `data\runs` | `HEAL_RSID_RESOLUTION_ROOT` | API local fallback during migration; two HEAL-only n8n workflows after their path update | active resolution protected | legacy only |
-| V2 normalization/match/enrichment/curation | `app\services\heal-vcf-normalization`, `heal-vcf-canon-match`, `heal-variant-enrichment`, `heal-evidence-refinement` | `data\runs\<job-id>\<stage>`, `data\enrichment-cache`, `data\references\GRCh38` | `HEAL_RUN_ROOT`, `HEAL_REFERENCE_DATA_ROOT`, optional `HEAL_NCBI_API_KEY` | API child processes; health checks reference and normalizer image | VCF scratch 24h; audit 14d; public-source caches protected | v2; LLM1 blocked pending professional approval |
+| V2 normalization/match/enrichment/curation | `app\services\heal-vcf-normalization`, `heal-vcf-canon-match`, `heal-variant-enrichment`, `heal-evidence-refinement`, `heal-grouped-interpretation-prep` | `data\runs\<job-id>\<stage>`, `data\enrichment-cache`, `data\references\GRCh38` | `HEAL_RUN_ROOT`, `HEAL_REFERENCE_DATA_ROOT`, optional `HEAL_NCBI_API_KEY`; professional registries in `config\mechanism_registry_v1.csv` and `config\gwas_trait_module_relevance_v1.csv` | API child processes; health checks reference, normalizer image and registry availability | VCF scratch 24h; audit 14d; public-source caches protected | v2; automatic output ends at LLM1 v4 dry-run; pilot separately gated |
 | API tunnel | `ops\Start-HealCloudflared.ps1` | none | `config\cloudflared-token.txt` | Task `Cloudflared HEAL API`; metrics `127.0.0.1:20243` | log rotation | all schemas |
 
 All v2 stages use the same run tree:
@@ -31,9 +31,10 @@ F:\Heal by FON\data\runs\<job-id>\
   ai-triage\
   enrichment\
   evidence-refinement\
+  group-prep\
 ```
 
-The evidence-refinement stage preserves three cardinalities separately: the complete normalized physical registry, the enriched physical matrix, and the full gene-module projection. Deep ClinVar/ClinPGx/GWAS curation never removes benign, unannotated, unresolved, unmatched, or background variants from their audit contracts.
+The evidence-refinement stage preserves three cardinalities separately: the complete normalized physical registry, the enriched physical matrix, and the full gene-module projection. Deep ClinVar and evidence-based GWAS curation never remove benign, unannotated, unresolved, unmatched, or background variants from their audit contracts. PharmGKB remains base context with unconfirmed observed-allele applicability; deep ClinPGx calls are disabled in both analysis modes.
 
 `normalization_input.vcf` is no longer created. The normalizer filters supported contigs inside the Docker container and writes its artifacts directly under the job stage.
 

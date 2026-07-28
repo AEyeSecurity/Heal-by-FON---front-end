@@ -113,6 +113,37 @@ class GroupPayloadV3Tests(unittest.TestCase):
             self.assertEqual(summary["gates"]["llm1PilotReady"], "blocked")
             self.assertEqual(payload["canonical_status"][0]["hom_ref"], "unknown")
             self.assertFalse(payload["curated_mechanisms"]["usable_by_llm"])
+            payload_v4 = json.loads((root / "out" / "gene_module_group_payloads_v4.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(payload_v4["payload_schema_version"], "llm1_group_payload_v4")
+            self.assertFalse(payload_v4["gates"]["llm1_pilot_ready"])
+            self.assertEqual(
+                payload_v4["deterministic_summary"]["group_size_total"],
+                len(payload_v4["focus_variants"])
+                + payload_v4["context_variants"]["count"]
+                + payload_v4["unresolved_and_failed"]["count"],
+            )
+            self.assertTrue((root / "out" / "mechanism_registry_v1.csv").is_file())
+            self.assertTrue((root / "out" / "llm1_pilot_manifest_v1.csv").is_file())
+
+    def test_v4_focus_has_absolute_twenty_and_six_gwas_only_caps(self):
+        rows = []
+        for index in range(30):
+            row = base_row(f"v{index}", str(100 + index), "protein_coding_exon_non_cds_overlap")
+            row.update(
+                {
+                    "attention_score": 100,
+                    "attention_reasons": ["fixture"],
+                    "focus_eligible": True,
+                    "downstream_role": "focus_candidate",
+                    "curated_gwas_high_confidence_cluster_count": "1",
+                }
+            )
+            rows.append(row)
+
+        focus = grouping.v4_focus_rows(rows)
+
+        self.assertEqual(len(focus), 6)
+        self.assertLessEqual(len(focus), 20)
 
 
 class ReadinessAuditTests(unittest.TestCase):

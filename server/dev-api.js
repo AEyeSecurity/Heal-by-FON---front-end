@@ -92,6 +92,11 @@ const ALLOWED_LLM2_MODELS = new Set(
 );
 const ALLOW_LLM_DRY_RUN = process.env.HEAL_ALLOW_LLM_DRY_RUN === "true";
 const HEAL_V2_LLM1_ENABLED = process.env.HEAL_V2_LLM1_ENABLED === "true";
+const HEAL_V2_LLM1_PILOT_ENABLED = process.env.HEAL_V2_LLM1_PILOT_ENABLED === "true";
+const HEAL_MECHANISM_REGISTRY_PATH =
+  process.env.HEAL_MECHANISM_REGISTRY_PATH || path.join(CONFIG_ROOT, "mechanism_registry_v1.csv");
+const HEAL_GWAS_TRAIT_MODULE_MAP_PATH =
+  process.env.HEAL_GWAS_TRAIT_MODULE_MAP_PATH || path.join(CONFIG_ROOT, "gwas_trait_module_relevance_v1.csv");
 const HEAL_V2_MIN_VEP_COVERAGE = Math.min(
   1,
   Math.max(0, Number.parseFloat(process.env.HEAL_V2_MIN_VEP_COVERAGE || "0.90") || 0.90),
@@ -679,11 +684,19 @@ function publicArtifactsReady(job) {
     clinpgxClinicalAnnotations: artifactExists(artifacts.clinpgxClinicalAnnotationsCsv),
     clinpgxVariantAnnotations: artifactExists(artifacts.clinpgxVariantAnnotationsCsv),
     gwasAssociations: artifactExists(artifacts.gwasVariantAssociationsCsv),
+    gwasVariantTraitSummary: artifactExists(artifacts.gwasVariantTraitSummaryCsv),
+    gwasGeneModuleSummary: artifactExists(artifacts.gwasGeneModuleSummaryCsv),
+    gwasEvidenceClusters: artifactExists(artifacts.gwasEvidenceClustersCsv),
+    gwasTraitModuleRelevanceTemplate: artifactExists(artifacts.gwasTraitModuleRelevanceTemplateCsv),
+    gwasMetadataRetryQueue: artifactExists(artifacts.gwasMetadataRetryQueueJsonl),
     publicationEvidence: artifactExists(artifacts.publicationEvidenceCsv),
     evidenceRefinementRaw: artifactExists(artifacts.evidenceRefinementRawJsonlGz),
     evidenceRefinementRetryQueue: artifactExists(artifacts.evidenceRefinementRetryQueueJsonl),
     evidenceRefinementSummary: artifactExists(artifacts.evidenceRefinementSummaryJson),
     groupedPayloads: artifactExists(artifacts.groupPayloadsCsv || artifacts.groupPayloadsJsonl),
+    groupedPayloadsV4: artifactExists(artifacts.groupPayloadsCsvV4 || artifacts.groupPayloadsJsonlV4),
+    mechanismRegistry: artifactExists(artifacts.mechanismRegistryV1Csv),
+    llm1PilotManifest: artifactExists(artifacts.llm1PilotManifestCsv),
     groupedVariantDetail: artifactExists(artifacts.groupVariantDetailCsv),
     groupedInterpretation: artifactExists(artifacts.groupInterpretationsCsv),
     individualInterpretation: artifactExists(artifacts.individualVariantInterpretationsCsv),
@@ -1371,6 +1384,11 @@ function evidenceRefinementOutputs(summary) {
     clinpgxClinicalAnnotationsCsv: outputs.clinpgxClinicalAnnotationsCsv || "",
     clinpgxVariantAnnotationsCsv: outputs.clinpgxVariantAnnotationsCsv || "",
     gwasVariantAssociationsCsv: outputs.gwasVariantAssociationsCsv || "",
+    gwasVariantTraitSummaryCsv: outputs.gwasVariantTraitSummaryCsv || "",
+    gwasGeneModuleSummaryCsv: outputs.gwasGeneModuleSummaryCsv || "",
+    gwasEvidenceClustersCsv: outputs.gwasEvidenceClustersCsv || "",
+    gwasTraitModuleRelevanceTemplateCsv: outputs.gwasTraitModuleRelevanceTemplateCsv || "",
+    gwasMetadataRetryQueueJsonl: outputs.gwasMetadataRetryQueueJsonl || "",
     publicationEvidenceCsv: outputs.publicationEvidenceCsv || "",
     evidenceRefinementRawJsonlGz: outputs.evidenceRefinementRawJsonlGz || "",
     evidenceRefinementRetryQueueJsonl: outputs.evidenceRefinementRetryQueueJsonl || "",
@@ -1477,6 +1495,11 @@ async function runEvidenceRefinementForJob({
     clinpgxClinicalAnnotationsCsv: path.join(outputDir, "clinpgx_clinical_annotations.csv"),
     clinpgxVariantAnnotationsCsv: path.join(outputDir, "clinpgx_variant_annotations.csv"),
     gwasVariantAssociationsCsv: path.join(outputDir, "gwas_variant_associations.csv"),
+    gwasVariantTraitSummaryCsv: path.join(outputDir, "gwas_variant_trait_summary.csv"),
+    gwasGeneModuleSummaryCsv: path.join(outputDir, "gwas_gene_module_summary.csv"),
+    gwasEvidenceClustersCsv: path.join(outputDir, "gwas_evidence_clusters.csv"),
+    gwasTraitModuleRelevanceTemplateCsv: path.join(outputDir, "gwas_trait_module_relevance_template.csv"),
+    gwasMetadataRetryQueueJsonl: path.join(outputDir, "gwas_metadata_retry_queue.jsonl"),
     publicationEvidenceCsv: path.join(outputDir, "publication_evidence.csv"),
     evidenceRefinementRawJsonlGz: path.join(outputDir, "evidence_refinement_raw.jsonl.gz"),
     evidenceRefinementRetryQueueJsonl: path.join(outputDir, "evidence_refinement_retry_queue.jsonl"),
@@ -1484,7 +1507,7 @@ async function runEvidenceRefinementForJob({
   });
   job.stage = "evidence_refinement";
   job.stageProgress = 2;
-  job.message = "Curating ClinVar, ClinPGx, GWAS and selected publications";
+  job.message = "Curating ClinVar, PharmGKB context, GWAS evidence clusters and selected publications";
   job.updatedAt = new Date().toISOString();
   await persistVcfCanonJob(job);
   const summary = await processEvidenceRefinement(
@@ -1501,6 +1524,7 @@ async function runEvidenceRefinementForJob({
       triageExcludedPath: triageExcludedPath || "",
       canonCleanPath: resolvedCanonPath,
       normalizedVariantsPath: normalizedVariantsPath || "",
+      gwasTraitModuleMapPath: existsSync(HEAL_GWAS_TRAIT_MODULE_MAP_PATH) ? HEAL_GWAS_TRAIT_MODULE_MAP_PATH : "",
       outputDir,
       cachePath: refinementPaths.cachePath,
       requestedAt: new Date().toISOString(),
@@ -2011,6 +2035,9 @@ app.get("/api/health", async (_req, res) => {
     n8nVcfCanonMatchWebhookConfigured: Boolean(N8N_VCF_CANON_MATCH_WEBHOOK_URL),
     n8nVariantEnrichmentWebhookConfigured: Boolean(N8N_VARIANT_ENRICHMENT_WEBHOOK_URL),
     v2Llm1Enabled: HEAL_V2_LLM1_ENABLED,
+    v2Llm1PilotEnabled: HEAL_V2_LLM1_PILOT_ENABLED,
+    v2MechanismRegistryConfigured: existsSync(HEAL_MECHANISM_REGISTRY_PATH),
+    v2GwasTraitModuleMapConfigured: existsSync(HEAL_GWAS_TRAIT_MODULE_MAP_PATH),
     v2MinVepCoverage: HEAL_V2_MIN_VEP_COVERAGE,
     n8nIndividualInterpretationWebhookConfigured: Boolean(N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL),
     n8nGlobalInterpretationWebhookConfigured: Boolean(N8N_GLOBAL_INTERPRETATION_WEBHOOK_URL),
@@ -3165,16 +3192,12 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         const refinementTechnicalPassed =
           refinementGates.conservationGate?.status === "pass" &&
           refinementGates.attributionGate?.status === "pass";
-        const llm1PilotReady = refinementGates.llm1PilotReady === true;
-        const qualityPassed = technicalPassed && evidenceReady && refinementTechnicalPassed && llm1PilotReady;
-        if (!HEAL_V2_LLM1_ENABLED || !qualityPassed) {
+        if (!refinementTechnicalPassed) {
           job.status = "complete";
           job.progress = 100;
           job.stage = "evidence_refinement_quality_gate";
           job.stageProgress = 100;
-          job.message = refinementTechnicalPassed
-            ? "Curated evidence contracts completed; grouped LLM1 remains blocked pending professional approval"
-            : "Evidence refinement contract failed; review conservation and attribution artifacts";
+          job.message = "Evidence refinement contract failed; review conservation and attribution artifacts";
           job.result = {
             ...job.result,
             metadata: {
@@ -3187,9 +3210,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
               evidence_readiness_gate: qualityGate.evidenceReadinessGate || { status: evidenceReady ? "pass" : "fail" },
               curation_conservation_gate: refinementGates.conservationGate || { status: "fail" },
               curation_attribution_gate: refinementGates.attributionGate || { status: "fail" },
-              downstream_message: refinementTechnicalPassed
-                ? "All variants remain available in curated physical and gene-module contracts. Grouped LLM1 is blocked until professional approval and explicit enablement."
-                : "Curated evidence contracts did not reconcile. Grouped LLM1 is blocked until conservation and attribution gates pass.",
+              downstream_message: "Curated evidence contracts did not reconcile. Grouped LLM1 is blocked until conservation and attribution gates pass.",
             },
           };
           return;
@@ -3205,13 +3226,8 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         const groupedPrepRunId = `group-prep-${runId}`;
         const groupedPrepOutputDir = jobStageDirectory(job.id, "group-prep");
         await mkdir(groupedPrepOutputDir, { recursive: true });
-        const enrichmentPlusPath = path.resolve(
-          job.artifacts.curatedGeneModuleProjectionCsv ||
-            job.artifacts.v2EnrichmentModuleProjectionCsv ||
-            job.artifacts.observedVariantEnrichmentPlusCsv ||
-            "",
-        );
-        if (!isPathInside(enrichmentPaths.root, enrichmentPlusPath)) {
+        const enrichmentPlusPath = path.resolve(job.artifacts.curatedGeneModuleProjectionCsv || "");
+        if (!isPathInside(RUNTIME_PATHS.runs, enrichmentPlusPath)) {
           throw new Error("Grouped interpretation prep input is outside the allowed enrichment root.");
         }
         const groupedPrepPayload = {
@@ -3219,6 +3235,12 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           runId: groupedPrepRunId,
           matchRunId: runId,
           inputPath: enrichmentPlusPath,
+          physicalMatrixPath: job.artifacts.curatedPhysicalMatrixCsv,
+          canonicalStatusPath: job.artifacts.canonicalGeneModuleStatusCsv,
+          clinvarAssertionsPath: job.artifacts.clinvarSubmitterAssertionsCsv,
+          gwasClustersPath: job.artifacts.gwasEvidenceClustersCsv,
+          publicationsPath: job.artifacts.publicationEvidenceCsv,
+          mechanismRegistryPath: existsSync(HEAL_MECHANISM_REGISTRY_PATH) ? HEAL_MECHANISM_REGISTRY_PATH : "",
           outputDir: groupedPrepOutputDir,
           requestedAt: new Date().toISOString(),
         };
@@ -3226,84 +3248,44 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         if (metadataCount(groupedPrepSummary, "total_groups") <= 0) {
           throw new Error("Grouped interpretation prep produced zero gene-module groups for canon schema v2.");
         }
+        const requiredGroupedV4Artifacts = [
+          groupedPrepSummary.outputs?.groupPayloadsJsonlV4,
+          groupedPrepSummary.outputs?.groupPayloadsCsvV4,
+          groupedPrepSummary.outputs?.groupingSummaryJsonV4,
+          groupedPrepSummary.outputs?.mechanismRegistryV1Csv,
+          groupedPrepSummary.outputs?.llm1PilotManifestCsv,
+        ];
+        if (requiredGroupedV4Artifacts.some((artifactPath) => !artifactPath || !existsSync(artifactPath))) {
+          throw new Error("Grouped interpretation prep did not produce its required v4 dry-run artifacts.");
+        }
         job.artifacts.groupPayloadsJsonl = groupedPrepSummary.outputs?.groupPayloadsJsonl || "";
         job.artifacts.groupPayloadsCsv = groupedPrepSummary.outputs?.groupPayloadsCsv || "";
         job.artifacts.groupVariantDetailCsv = groupedPrepSummary.outputs?.groupVariantDetailCsv || "";
         job.artifacts.groupingSummaryJson = groupedPrepSummary.outputs?.groupingSummaryJson || "";
+        job.artifacts.groupPayloadsJsonlV4 = groupedPrepSummary.outputs?.groupPayloadsJsonlV4 || "";
+        job.artifacts.groupPayloadsCsvV4 = groupedPrepSummary.outputs?.groupPayloadsCsvV4 || "";
+        job.artifacts.groupVariantDetailCsvV4 = groupedPrepSummary.outputs?.groupVariantDetailCsvV4 || "";
+        job.artifacts.groupingSummaryJsonV4 = groupedPrepSummary.outputs?.groupingSummaryJsonV4 || "";
+        job.artifacts.mechanismRegistryV1Csv = groupedPrepSummary.outputs?.mechanismRegistryV1Csv || "";
+        job.artifacts.llm1PilotManifestCsv = groupedPrepSummary.outputs?.llm1PilotManifestCsv || "";
         job.result = {
           ...job.result,
           groupPrep: sanitizeGroupedInterpretationPrepResult(groupedPrepSummary),
         };
 
-        if (groupedPrepSummary.gates?.groupPayloadReady !== "pass") {
-          job.status = "complete";
-          job.progress = 100;
-          job.stage = "grouping_preparation";
-          job.stageProgress = 100;
-          job.message = "Grouped payload v3 dry-run completed; professional curation gates remain blocked";
-          job.result = {
-            ...job.result,
-            metadata: {
-              ...(job.result?.metadata || {}),
-              downstream_supported: false,
-              downstream_input: "llm1_group_payload_v3_dry_run",
-              downstream_message:
-                "Grouped payload v3 was generated without LLM calls. LLM1 remains blocked until canonical status, annotation, mechanism curation, and professional approval gates pass.",
-            },
-          };
-          return;
-        }
-
-        job.progress = 97;
-        job.stage = "grouped_individual_interpretation";
-        job.stageProgress = 8;
-        job.message = "Interpreting grouped gene-module payloads";
-        job.updatedAt = new Date().toISOString();
-        const groupedInterpretationPathsRoot = groupedIndividualInterpretationPaths();
-        await mkdir(groupedInterpretationPathsRoot.runs, { recursive: true });
-        const groupedInterpretationRunId = `grouped-interpretation-${runId}`;
-        const groupedInterpretationOutputDir = jobStageDirectory(job.id, "grouped-interpretation");
-        await mkdir(groupedInterpretationOutputDir, { recursive: true });
-        const groupPayloadsJsonlPath = path.resolve(job.artifacts.groupPayloadsJsonl || "");
-        if (!isPathInside(groupedPrepPathsRoot.root, groupPayloadsJsonlPath)) {
-          throw new Error("Grouped interpretation input is outside the allowed grouping-prep root.");
-        }
-        const groupedInterpretationPayload = {
-          event: "heal.grouped_individual_interpretation.requested",
-          runId: groupedInterpretationRunId,
-          matchRunId: runId,
-          uploadId: upload.uploadId,
-          fileName: upload.fileName,
-          inputPath: groupPayloadsJsonlPath,
-          outputDir: groupedInterpretationOutputDir,
-          model: LLM1_MODEL,
-          dryRun: ALLOW_LLM_DRY_RUN ? normalizeAnalysisMode(analysisMode) === "qa" : false,
-          requestedAt: new Date().toISOString(),
-        };
-        const groupedInterpretationSummary = await processGroupedIndividualInterpretationWithRetry(
-          groupedInterpretationPayload,
-          job,
-          2,
-        );
-        job.artifacts.groupInterpretationsJsonl = groupedInterpretationSummary.outputs?.groupInterpretationsJsonl || "";
-        job.artifacts.groupInterpretationsCsv = groupedInterpretationSummary.outputs?.groupInterpretationsCsv || "";
-        job.artifacts.groupInterpretationErrorsCsv = groupedInterpretationSummary.outputs?.groupInterpretationErrorsCsv || "";
-        job.artifacts.groupInterpretationProgressJson = groupedInterpretationSummary.outputs?.groupInterpretationProgressJson || "";
-        job.artifacts.groupInterpretationSummaryJson = groupedInterpretationSummary.outputs?.groupInterpretationSummaryJson || "";
         job.status = "complete";
         job.progress = 100;
-        job.stage = "grouped_individual_interpretation";
+        job.stage = "grouping_preparation";
         job.stageProgress = 100;
-        job.message = "Gene-module canon v2 grouped interpretation completed";
+        job.message = "Grouped payload v4 dry-run completed; LLM1 pilot requires explicit approval";
         job.result = {
           ...job.result,
-          groupedIndividualInterpretation: sanitizeGroupedIndividualInterpretationResult(groupedInterpretationSummary),
           metadata: {
             ...(job.result?.metadata || {}),
             downstream_supported: false,
-            downstream_input: "grouped_individual_interpretation",
+            downstream_input: "llm1_group_payload_v4_dry_run",
             downstream_message:
-              "Downstream normalization/global/report remain blocked for canon schema v2. Supported handoff is grouped_individual_interpretation.",
+              "All grouped payload v4 artifacts were generated without LLM calls. The pilot remains blocked until mechanism curation, manifest approval, and explicit pilot enablement.",
           },
         };
         return;
@@ -3423,6 +3405,103 @@ app.get("/api/vcf-canon-matches/:jobId/logs", async (req, res) => {
     return;
   }
   res.json({ jobId: job.id, logs });
+});
+
+app.post("/api/vcf-canon-matches/:jobId/llm1-pilot", async (req, res) => {
+  if (REQUIRE_ORIGIN && !req.headers.origin) {
+    res.status(403).json({ error: "Origin header is required." });
+    return;
+  }
+  if (!HEAL_V2_LLM1_PILOT_ENABLED) {
+    res.status(409).json({ error: "The v2 LLM1 pilot is disabled. Set HEAL_V2_LLM1_PILOT_ENABLED=true only for an approved pilot." });
+    return;
+  }
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  const payloadPath = path.resolve(job.artifacts?.groupPayloadsJsonlV4 || "");
+  const manifestPath = path.resolve(job.artifacts?.llm1PilotManifestCsv || "");
+  const groupedRoot = groupedInterpretationPrepPaths().root;
+  if (!isPathInside(groupedRoot, payloadPath) || !existsSync(payloadPath) || !isPathInside(groupedRoot, manifestPath) || !existsSync(manifestPath)) {
+    res.status(409).json({ error: "Grouped payload v4 or its pilot manifest is not available." });
+    return;
+  }
+  const manifestLines = (await readFile(manifestPath, "utf8")).split(/\r?\n/).filter(Boolean);
+  const headers = (manifestLines.shift() || "").split(",").map((value) => value.trim());
+  const approvedIds = new Set(
+    manifestLines
+      .map((line) => Object.fromEntries(line.split(",").map((value, index) => [headers[index], value.trim()])))
+      .filter((row) => row.approved_for_pilot === "true" && row.approval_reviewer && row.approval_timestamp)
+      .map((row) => row.group_id),
+  );
+  const requestedIds = new Set(Array.isArray(req.body?.groupIds) ? req.body.groupIds.map(String) : []);
+  const payloads = (await readFile(payloadPath, "utf8"))
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const selected = payloads.filter(
+    (payload) =>
+      approvedIds.has(payload.group_id) &&
+      payload.gates?.group_payload_ready === true &&
+      (requestedIds.size === 0 || requestedIds.has(payload.group_id)),
+  );
+  if (selected.length === 0) {
+    res.status(409).json({ error: "No professionally approved, payload-ready groups are present in the pilot manifest." });
+    return;
+  }
+  if (selected.length > 20) {
+    res.status(409).json({ error: "The controlled LLM1 pilot is limited to 20 approved groups." });
+    return;
+  }
+  const outputDir = jobStageDirectory(job.id, "llm1-pilot");
+  await mkdir(outputDir, { recursive: true });
+  const selectedPath = path.join(outputDir, "llm1_pilot_selected_payloads_v4.jsonl");
+  await writeFile(selectedPath, `${selected.map((payload) => JSON.stringify(payload)).join("\n")}\n`, "utf8");
+  job.stage = "grouped_individual_interpretation";
+  job.stageProgress = 1;
+  job.message = `Starting controlled LLM1 pilot for ${selected.length} approved groups`;
+  job.updatedAt = new Date().toISOString();
+  await persistVcfCanonJob(job);
+  void (async () => {
+    try {
+      const summary = await processGroupedIndividualInterpretationWithRetry(
+        {
+          event: "heal.llm1_pilot.requested",
+          runId: `llm1-pilot-${job.id}`,
+          inputPath: selectedPath,
+          outputDir,
+          model: LLM1_MODEL,
+          dryRun: false,
+          maxGroups: 20,
+          requestedAt: new Date().toISOString(),
+        },
+        job,
+        2,
+      );
+      job.artifacts.groupInterpretationsJsonl = summary.outputs?.groupInterpretationsJsonl || "";
+      job.artifacts.groupInterpretationsCsv = summary.outputs?.groupInterpretationsCsv || "";
+      job.artifacts.groupInterpretationErrorsCsv = summary.outputs?.groupInterpretationErrorsCsv || "";
+      job.artifacts.groupInterpretationProgressJson = summary.outputs?.groupInterpretationProgressJson || "";
+      job.artifacts.groupInterpretationSummaryJson = summary.outputs?.groupInterpretationSummaryJson || "";
+      job.result = { ...job.result, groupedIndividualInterpretation: sanitizeGroupedIndividualInterpretationResult(summary) };
+      job.status = "complete";
+      job.stageProgress = 100;
+      job.message = "Controlled LLM1 pilot completed; downstream v2 stages remain blocked";
+    } catch (error) {
+      job.status = "complete";
+      job.result = {
+        ...job.result,
+        llm1Pilot: { status: "failed", error: error.message || String(error) },
+      };
+      job.message = "Controlled LLM1 pilot failed; deterministic v2 artifacts remain valid";
+    } finally {
+      job.updatedAt = new Date().toISOString();
+      await persistVcfCanonJob(job);
+    }
+  })();
+  res.status(202).json({ jobId: job.id, status: "running", selectedGroups: selected.length });
 });
 
 app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
@@ -4486,6 +4565,26 @@ app.get("/api/vcf-canon-matches/:jobId/gwas-associations", async (req, res) => {
   await downloadRuntimeArtifact(req, res, "gwasVariantAssociationsCsv", "gwas_variant_associations", evidenceRefinementPaths);
 });
 
+app.get("/api/vcf-canon-matches/:jobId/gwas-variant-traits", async (req, res) => {
+  await downloadRuntimeArtifact(req, res, "gwasVariantTraitSummaryCsv", "gwas_variant_trait_summary", evidenceRefinementPaths);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/gwas-gene-module-summary", async (req, res) => {
+  await downloadRuntimeArtifact(req, res, "gwasGeneModuleSummaryCsv", "gwas_gene_module_summary", evidenceRefinementPaths);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/gwas-evidence-clusters", async (req, res) => {
+  await downloadRuntimeArtifact(req, res, "gwasEvidenceClustersCsv", "gwas_evidence_clusters", evidenceRefinementPaths);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/gwas-relevance-template", async (req, res) => {
+  await downloadRuntimeArtifact(req, res, "gwasTraitModuleRelevanceTemplateCsv", "gwas_trait_module_relevance_template", evidenceRefinementPaths);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/gwas-metadata-retry-queue", async (req, res) => {
+  await downloadRuntimeArtifact(req, res, "gwasMetadataRetryQueueJsonl", "gwas_metadata_retry_queue", evidenceRefinementPaths, { jsonl: true });
+});
+
 app.get("/api/vcf-canon-matches/:jobId/publication-evidence", async (req, res) => {
   await downloadRuntimeArtifact(req, res, "publicationEvidenceCsv", "publication_evidence", evidenceRefinementPaths);
 });
@@ -4516,6 +4615,22 @@ app.get("/api/vcf-canon-matches/:jobId/grouped-variant-detail", async (req, res)
 
 app.get("/api/vcf-canon-matches/:jobId/grouped-summary", async (req, res) => {
   await downloadGroupedArtifact(req, res, "groupingSummaryJson", "gene_module_grouping_summary", { json: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-payloads-v4", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadsCsvV4", "gene_module_group_payloads_v4");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-payloads-v4-jsonl", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadsJsonlV4", "gene_module_group_payloads_v4", { jsonl: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/mechanism-registry", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "mechanismRegistryV1Csv", "mechanism_registry_v1");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/llm1-pilot-manifest", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "llm1PilotManifestCsv", "llm1_pilot_manifest_v1");
 });
 
 app.get("/api/vcf-canon-matches/:jobId/grouped-interpretations", async (req, res) => {

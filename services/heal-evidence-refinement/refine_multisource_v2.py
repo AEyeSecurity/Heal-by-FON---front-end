@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 
-PIPELINE_VERSION = "gene-module-v2-evidence-refinement-1"
+PIPELINE_VERSION = "gene-module-v2-evidence-refinement-2"
 VALID_SOURCE_STATUSES = {"success", "not_found", "source_error", "not_queried"}
 NON_BENIGN_CLINVAR_CLASSES = {
     "pathogenic_or_likely_pathogenic",
@@ -888,6 +888,8 @@ def parse_gwas_association(association: dict, row: dict, study_bundle: dict | No
             if isinstance(value, dict) and clean(value.get("country_name")):
                 ancestry_values.append(f"country:{clean(value.get('country_name'))}")
     efo_traits = association.get("efo_traits") or []
+    beta_raw = clean(association.get("beta_num") or association.get("beta"))
+    beta_value, beta_unit, beta_direction = parse_gwas_beta(beta_raw, association.get("beta_direction"))
     return {
         "variant_key": clean(row.get("variant_key")),
         "physical_evidence_id": physical_evidence_id(clean(row.get("variant_key"))),
@@ -906,8 +908,10 @@ def parse_gwas_association(association: dict, row: dict, study_bundle: dict | No
         "risk_frequency": clean(association.get("risk_frequency")),
         "p_value": clean(association.get("p_value")),
         "or_value": clean(association.get("or_value") or association.get("or_per_copy_num")),
-        "beta": clean(association.get("beta_num") or association.get("beta")),
-        "beta_direction": clean(association.get("beta_direction")),
+        "beta": beta_raw,
+        "beta_value": beta_value,
+        "beta_unit": beta_unit,
+        "beta_direction": beta_direction,
         "confidence_interval": clean(association.get("range")),
         "is_genome_wide_significant": "true" if significant else "false",
         "focus_eligible": "true" if focus else "false",
@@ -917,6 +921,120 @@ def parse_gwas_association(association: dict, row: dict, study_bundle: dict | No
         "source_attribution": "NHGRI-EBI GWAS Catalog",
         "evidence_scope": "population_association_not_individual_causality",
     }
+
+
+def parse_gwas_beta(raw_value: object, explicit_direction: object = "") -> tuple[str, str, str]:
+    raw = clean(raw_value)
+    numeric = re.search(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?", raw)
+    value = numeric.group(0) if numeric else ""
+    unit = clean(raw[numeric.end() :]).strip(" ;,()[]") if numeric else raw
+    direction = clean(explicit_direction).lower()
+    if direction not in {"positive", "negative", "mixed", "unknown"}:
+        parsed = as_float(value)
+        direction = "positive" if parsed is not None and parsed > 0 else "negative" if parsed is not None and parsed < 0 else "unknown"
+    return value, unit, direction
+
+
+def split_pipe(value: object) -> list[str]:
+    return [item.strip() for item in clean(value).split("|") if item.strip()]
+
+
+def build_gwas_summaries(
+    gwas_rows: list[dict],
+    groups_by_variant: dict[str, list[tuple[str, str]]],
+    relevance_map: dict[tuple[str, str, str], str],
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Build evidence units without changing the complete raw association set."""
+
+    variant_traits: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    group_traits: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
+    for row in gwas_rows:
+        trait_ids = split_pipe(row.get("mapped_trait_ids")) or split_pipe(row.get("mapped_traits")) or ["unmapped_trait"]
+        for trait_id in trait_ids:
+            variant_traits[(clean(row.get("variant_key")), trait_id)].append(row)
+            for gene, module_id in groups_by_variant.get(clean(row.get("variant_key")), []):
+                group_traits[(gene, module_id, trait_id)].append(row)
+
+    def summarize(rows: list[dict]) -> dict:
+        focus_rows = [row for row in rows if as_bool(row.get("focus_eligible"))]
+        pmids = {clean(row.get("pubmed_id")) for row in focus_rows if clean(row.get("pubmed_id"))}
+        accessions = {clean(row.get("study_accession")) for row in focus_rows if clean(row.get("study_accession"))}
+        directions = {clean(row.get("beta_direction")) or "unknown" for row in focus_rows}
+        known_directions = directions - {"unknown"}
+        if len(known_directions) > 1:
+            direction_status = "mixed"
+        elif len(known_directions) == 1:
+            direction_status = "consistent"
+        else:
+            direction_status = "unknown"
+        pvalues = [as_float(row.get("p_value")) for row in rows]
+        return {
+            "association_count": len(rows),
+            "allele_confirmed_significant_count": len(focus_rows),
+            "independent_publication_count": len(pmids),
+            "study_count": len(accessions),
+            "publication_ids": unique_text(sorted(pmids)),
+            "study_accessions": unique_text(sorted(accessions)),
+            "direction_status": direction_status,
+            "directions": unique_text(sorted(directions)),
+            "minimum_p_value": min((value for value in pvalues if value is not None), default=""),
+        }
+
+    variant_rows: list[dict] = []
+    for (variant_key, trait_id), rows in sorted(variant_traits.items()):
+        variant_rows.append(
+            {
+                "variant_key": variant_key,
+                "physical_evidence_id": physical_evidence_id(variant_key),
+                "trait_id": trait_id,
+                "trait_labels": unique_text(row.get("mapped_traits") or row.get("reported_traits") for row in rows),
+                **summarize(rows),
+            }
+        )
+
+    group_rows: list[dict] = []
+    cluster_rows: list[dict] = []
+    for (gene, module_id, trait_id), rows in sorted(group_traits.items()):
+        aggregate = summarize(rows)
+        relevance = relevance_map.get((gene, module_id, trait_id), "unreviewed")
+        replicated = as_int(aggregate["independent_publication_count"]) >= 2
+        confirmed = as_int(aggregate["allele_confirmed_significant_count"]) > 0
+        if confirmed and replicated and aggregate["direction_status"] != "mixed" and relevance == "approved":
+            band = "high_confidence_replicated"
+            selection_reason = "replicated_allele_confirmed_module_relevance_approved"
+        elif confirmed:
+            band = "moderate_contextual"
+            selection_reason = (
+                "replicated_direction_or_relevance_requires_review" if replicated else "single_publication_allele_confirmed"
+            )
+        else:
+            band = "context_only"
+            selection_reason = "effect_allele_or_significance_not_confirmed"
+        common = {
+            "approved_symbol": gene,
+            "module_id": module_id,
+            "trait_id": trait_id,
+            "trait_labels": unique_text(row.get("mapped_traits") or row.get("reported_traits") for row in rows),
+            "module_relevance_status": relevance,
+            "evidence_band": band,
+            "selection_reason": selection_reason,
+            **aggregate,
+        }
+        group_rows.append(common)
+        cluster_rows.append(
+            {
+                "cluster_id": "gwc_" + hashlib.sha256(f"{gene}|{module_id}|{trait_id}".encode("utf-8")).hexdigest()[:20],
+                **common,
+                "variant_count": len({clean(row.get("variant_key")) for row in rows}),
+                "variant_keys": unique_text(sorted({clean(row.get("variant_key")) for row in rows})),
+                "metadata_followup": (
+                    "required"
+                    if band == "high_confidence_replicated" or (replicated and aggregate["direction_status"] in {"mixed", "unknown"})
+                    else "defer_to_complete"
+                ),
+            }
+        )
+    return variant_rows, group_rows, cluster_rows
 
 
 def parse_pubmed_article(root: ET.Element, pmid: str) -> dict:
@@ -1043,11 +1161,18 @@ def classify_curated_variant(
     clinvar_class = clean(clinvar_summary.get("normalized_classification")) or normalized_clinvar_class(
         row.get("clinvar_normalized_classification")
     )
-    pgx_usable = as_int(pgx_summary.get("compatible_clinical_annotations")) > 0
-    gwas_focus = as_int(gwas_summary.get("focus_associations")) > 0
+    pgx_confirmed = as_int(pgx_summary.get("compatible_clinical_annotations")) > 0
+    pgx_context = as_bool(pgx_summary.get("base_context_available"))
+    gwas_focus = as_int(gwas_summary.get("high_confidence_cluster_count")) > 0
     clinvar_focus = clinvar_class in NON_BENIGN_CLINVAR_CLASSES and as_bool(clinvar_summary.get("identity_confirmed"))
     population = bool(clean(row.get("population_frequency_summary")))
-    external_evidence = clinvar_class != "not_reported" or pgx_usable or as_int(gwas_summary.get("total_associations")) > 0
+    external_evidence = (
+        clinvar_class != "not_reported"
+        or pgx_confirmed
+        or pgx_context
+        or as_int(gwas_summary.get("total_associations")) > 0
+        or as_int(gwas_summary.get("base_association_count")) > 0
+    )
     source_errors = [
         source
         for source in ("clinvar", "pharmgkb", "gwas")
@@ -1055,9 +1180,11 @@ def classify_curated_variant(
     ]
     if clinvar_class != "not_reported":
         evidence_status = "clinical"
-    elif pgx_usable:
+    elif pgx_confirmed:
         evidence_status = "pharmacogenomic"
-    elif as_int(gwas_summary.get("total_associations")) > 0:
+    elif pgx_context:
+        evidence_status = "pharmacogenomic_context_unconfirmed"
+    elif as_int(gwas_summary.get("total_associations")) > 0 or as_int(gwas_summary.get("base_association_count")) > 0:
         evidence_status = "gwas_population_association"
     elif source_errors:
         evidence_status = "source_error"
@@ -1073,10 +1200,10 @@ def classify_curated_variant(
     elif source_errors and not external_evidence:
         curation_depth = "unresolved"
         role = "unresolved_review"
-    elif clinvar_focus or pgx_usable or gwas_focus:
+    elif clinvar_focus or pgx_confirmed or gwas_focus:
         curation_depth = "deep_curated"
         role = "focus_candidate"
-    elif clinvar_class == "benign_or_likely_benign" and not (pgx_usable or gwas_focus):
+    elif clinvar_class == "benign_or_likely_benign" and not (pgx_confirmed or gwas_focus):
         curation_depth = "structured_summary"
         role = "benign_context"
     elif external_evidence:
@@ -1128,6 +1255,45 @@ def public_fact_fields(row: dict) -> dict:
         "quality_flag",
     ]
     return {key: clean(row.get(key)) for key in allowed}
+
+
+def load_gwas_relevance(path_value: object) -> dict[tuple[str, str, str], str]:
+    path = Path(clean(path_value)) if clean(path_value) else None
+    if not path or not path.is_file():
+        return {}
+    output: dict[tuple[str, str, str], str] = {}
+    for row in read_csv(path):
+        key = (clean(row.get("approved_symbol")), clean(row.get("module_id")), clean(row.get("trait_id")))
+        status = clean(row.get("relevance_status")).lower()
+        if all(key) and status in {"approved", "rejected", "unreviewed"}:
+            output[key] = status
+    return output
+
+
+def deduplicate_gwas_metadata_queue(rows: list[dict]) -> list[dict]:
+    grouped: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        key = (clean(row.get("study_accession")), clean(row.get("reason")))
+        current = grouped.setdefault(
+            key,
+            {
+                **row,
+                "cluster_ids": set(),
+                "evidence_bands": set(),
+            },
+        )
+        if clean(row.get("cluster_id")):
+            current["cluster_ids"].add(clean(row.get("cluster_id")))
+        if clean(row.get("evidence_band")):
+            current["evidence_bands"].add(clean(row.get("evidence_band")))
+    return [
+        {
+            **{key: value for key, value in row.items() if key not in {"cluster_ids", "evidence_bands", "cluster_id", "evidence_band"}},
+            "cluster_ids": unique_text(sorted(row["cluster_ids"])),
+            "evidence_bands": unique_text(sorted(row["evidence_bands"])),
+        }
+        for row in grouped.values()
+    ]
 
 
 def process(payload: dict) -> dict:
@@ -1191,6 +1357,13 @@ def process(payload: dict) -> dict:
     triage_audit_keys = [projection_key(row) for row in [*triage_rows, *triage_excluded_rows]]
     match_projection_keys = [projection_key(row) for row in match_rows]
     triage_audit_contract_available = bool(triage_excluded_path and triage_excluded_path.is_file())
+    groups_by_variant: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for row in triage_rows:
+        key = clean(row.get("variant_key"))
+        group = (clean(row.get("approved_symbol")), clean(row.get("module_id")))
+        if key and all(group) and group not in groups_by_variant[key]:
+            groups_by_variant[key].append(group)
+    gwas_relevance = load_gwas_relevance(payload.get("gwasTraitModuleMapPath"))
 
     cache = RefinementCache(cache_path, ttl_days=as_int(payload.get("cacheTtlDays"), 30))
     client = PublicHttpClient(cache, timeout_seconds=timeout_seconds)
@@ -1207,6 +1380,10 @@ def process(payload: dict) -> dict:
     clinpgx_summaries: dict[str, dict] = {}
     gwas_rows: list[dict] = []
     gwas_summaries: dict[str, dict] = {}
+    gwas_variant_trait_rows: list[dict] = []
+    gwas_gene_module_rows: list[dict] = []
+    gwas_cluster_rows: list[dict] = []
+    gwas_metadata_retry_rows: list[dict] = []
 
     with gzip.open(raw_path, "wt", encoding="utf-8") as raw_handle:
         clinvar_candidates = [
@@ -1217,7 +1394,7 @@ def process(payload: dict) -> dict:
                 source_status(row, "clinvar") == "success"
                 or bool(split_accessions(row.get("clinvar_accessions"), "VCV"))
                 or normalized_clinvar_class(row.get("clinvar_normalized_classification")) != "not_reported"
-                or (complete_mode and source_status(row, "clinvar") == "source_error")
+                or source_status(row, "clinvar") == "source_error"
             )
         ]
         candidate_keys = {clean(row.get("variant_key")) for row in clinvar_candidates}
@@ -1331,43 +1508,52 @@ def process(payload: dict) -> dict:
         ]
         for index, row in enumerate(clinpgx_candidates, start=1):
             key = clean(row.get("variant_key"))
-            bundle, status = fetch_clinpgx_bundle(clean(row.get("resolved_rsid")), client)
-            clinical, annotations = parse_clinpgx_bundle(bundle, {**row, **representative_match.get(key, {})})
-            clinpgx_clinical_rows.extend(clinical)
-            clinpgx_annotation_rows.extend(annotations)
-            compatible = [item for item in clinical if item.get("allele_match_status") in {"compatible_observed_genotype", "not_specified"}]
-            eligible = [item for item in clinical if as_bool(item.get("publication_followup_eligible"))]
-            for item in eligible:
-                for pmid in re.findall(r"\d+", clean(item.get("pmids"))):
-                    publication_refs[pmid].add("clinpgx")
-                    publication_variants[pmid].add(key)
-            clinpgx_summaries[key] = {
-                "refinement_status": clean(status.get("status")),
-                "refinement_status_reason": clean(status.get("status_reason")),
-                "clinical_annotations": len(clinical),
-                "compatible_clinical_annotations": len(compatible),
-                "variant_annotations": len(annotations),
-                "publication_followup_annotations": len(eligible),
+            clinical_count = as_int(row.get("pharmgkb_clinical_annotation_count"))
+            annotation_count = as_int(row.get("pharmgkb_variant_annotation_count"))
+            common = {
+                "variant_key": key,
+                "physical_evidence_id": physical_evidence_id(key),
+                "resolved_rsid": clean(row.get("resolved_rsid")),
+                "refinement_status": "not_queried",
+                "refinement_status_reason": "deep_clinpgx_disabled_by_policy",
+                "allele_applicability": "context_unconfirmed_allele_applicability",
+                "source_attribution": CLINPGX_ATTRIBUTION,
+                "source_license": CLINPGX_LICENSE,
             }
-            if status.get("status") == "source_error":
-                retry_rows.append(
+            if clinical_count:
+                clinpgx_clinical_rows.append(
                     {
-                        "variant_key": key,
-                        "source": "clinpgx",
-                        "query_mode": "full_annotations",
-                        "reason": clean(status.get("status_reason")),
-                        "priority": "normal",
-                        "next_attempt": "automatic_retry",
+                        **common,
+                        "base_annotation_count": clinical_count,
+                        "base_summary": clean(row.get("pharmgkb_clinical_annotation_summary")),
+                        "base_evidence_levels": clean(row.get("pharmgkb_evidence_levels")),
+                        "base_chemicals": clean(row.get("pharmgkb_chemicals")),
                     }
                 )
-            raw_handle.write(json.dumps({"source": "clinpgx", "variant_key": key, "bundle": bundle}, ensure_ascii=True) + "\n")
+            if annotation_count:
+                clinpgx_annotation_rows.append(
+                    {
+                        **common,
+                        "base_annotation_count": annotation_count,
+                        "base_summary": clean(row.get("pharmgkb_variant_annotation_summary")),
+                    }
+                )
+            clinpgx_summaries[key] = {
+                "refinement_status": "not_queried",
+                "refinement_status_reason": "deep_clinpgx_disabled_by_policy",
+                "clinical_annotations": clinical_count,
+                "compatible_clinical_annotations": 0,
+                "variant_annotations": annotation_count,
+                "publication_followup_annotations": 0,
+                "base_context_available": clinical_count + annotation_count > 0,
+            }
             write_progress(
                 output_dir,
-                substage="clinpgx_annotations",
+                substage="pharmgkb_base_context",
                 processed=30 + round(20 * index / max(len(clinpgx_candidates), 1)),
                 total=100,
                 unit="percent",
-                message=f"Curating ClinPGx annotations ({index}/{len(clinpgx_candidates)})",
+                message=f"Preserving PharmGKB base context ({index}/{len(clinpgx_candidates)})",
                 metrics={"clinical_annotations": len(clinpgx_clinical_rows), "variant_annotations": len(clinpgx_annotation_rows)},
             )
 
@@ -1381,43 +1567,24 @@ def process(payload: dict) -> dict:
                 or (complete_mode and source_status(row, "gwas") == "source_error")
             )
         ]
-        study_cache: dict[str, dict] = {}
+        gwas_source_records: list[tuple[dict, dict]] = []
         for index, row in enumerate(gwas_candidates, start=1):
             key = clean(row.get("variant_key"))
             associations, status = fetch_gwas_associations(clean(row.get("resolved_rsid")), client)
             parsed_rows = [parse_gwas_association(item, row) for item in associations]
-            focus_rows = [item for item in parsed_rows if as_bool(item.get("focus_eligible"))]
-            focus_accessions = {clean(item.get("study_accession")) for item in focus_rows if clean(item.get("study_accession"))}
-            for accession in focus_accessions:
-                if accession not in study_cache:
-                    study_cache[accession], study_status = fetch_gwas_study(accession, client)
-                    if study_status.get("status") == "source_error":
-                        retry_rows.append(
-                            {
-                                "variant_key": key,
-                                "source": "gwas",
-                                "query_mode": "study_ancestry",
-                                "reason": clean(study_status.get("status_reason")),
-                                "priority": "normal",
-                                "next_attempt": "automatic_retry",
-                            }
-                        )
-            final_rows = [
-                parse_gwas_association(item, row, study_cache.get(clean(item.get("accession_id")))) for item in associations
-            ]
-            gwas_rows.extend(final_rows)
-            focus_rows = [item for item in final_rows if as_bool(item.get("focus_eligible"))]
-            for item in focus_rows:
-                pmid = clean(item.get("pubmed_id"))
-                if pmid:
-                    publication_refs[pmid].add("gwas")
-                    publication_variants[pmid].add(key)
+            gwas_rows.extend(parsed_rows)
+            gwas_source_records.extend((item, row) for item in associations)
             gwas_summaries[key] = {
                 "refinement_status": clean(status.get("status")),
-                "refinement_status_reason": clean(status.get("status_reason")),
-                "total_associations": len(final_rows),
-                "genome_wide_significant_associations": sum(as_bool(item.get("is_genome_wide_significant")) for item in final_rows),
-                "focus_associations": len(focus_rows),
+                "refinement_status_reason": (
+                    "gwas_v2_not_found_base_context_preserved"
+                    if not parsed_rows and as_int(row.get("gwas_association_count")) > 0
+                    else clean(status.get("status_reason"))
+                ),
+                "total_associations": len(parsed_rows),
+                "base_association_count": as_int(row.get("gwas_association_count")),
+                "genome_wide_significant_associations": sum(as_bool(item.get("is_genome_wide_significant")) for item in parsed_rows),
+                "focus_associations": sum(as_bool(item.get("focus_eligible")) for item in parsed_rows),
             }
             if status.get("status") == "source_error":
                 retry_rows.append(
@@ -1433,13 +1600,78 @@ def process(payload: dict) -> dict:
             raw_handle.write(json.dumps({"source": "gwas", "variant_key": key, "associations": associations}, ensure_ascii=True) + "\n")
             write_progress(
                 output_dir,
-                substage="gwas_allele_aware",
-                processed=50 + round(20 * index / max(len(gwas_candidates), 1)),
+                substage="gwas_raw_associations",
+                processed=50 + round(12 * index / max(len(gwas_candidates), 1)),
                 total=100,
                 unit="percent",
-                message=f"Curating GWAS associations ({index}/{len(gwas_candidates)})",
+                message=f"Collecting complete GWAS associations ({index}/{len(gwas_candidates)})",
                 metrics={"associations": len(gwas_rows), "focus_associations": sum(as_bool(item.get("focus_eligible")) for item in gwas_rows)},
             )
+
+        gwas_variant_trait_rows, gwas_gene_module_rows, gwas_cluster_rows = build_gwas_summaries(
+            gwas_rows, groups_by_variant, gwas_relevance
+        )
+        selected_accessions: set[str] = set()
+        for cluster in gwas_cluster_rows:
+            accessions = set(split_pipe(cluster.get("study_accessions")))
+            if complete_mode or clean(cluster.get("metadata_followup")) == "required":
+                selected_accessions.update(accessions)
+            else:
+                for accession in sorted(accessions):
+                    gwas_metadata_retry_rows.append(
+                        {
+                            "source": "gwas",
+                            "study_accession": accession,
+                            "cluster_id": clean(cluster.get("cluster_id")),
+                            "evidence_band": clean(cluster.get("evidence_band")),
+                            "reason": "metadata_deferred_to_complete_analysis",
+                            "next_attempt": "complete_analysis",
+                        }
+                    )
+
+        study_cache: dict[str, dict] = {}
+        for index, accession in enumerate(sorted(selected_accessions), start=1):
+            study_cache[accession], study_status = fetch_gwas_study(accession, client)
+            if study_status.get("status") == "source_error":
+                gwas_metadata_retry_rows.append(
+                    {
+                        "source": "gwas",
+                        "study_accession": accession,
+                        "reason": clean(study_status.get("status_reason")),
+                        "next_attempt": "automatic_retry",
+                    }
+                )
+            write_progress(
+                output_dir,
+                substage="gwas_independent_evidence_metadata",
+                processed=62 + round(8 * index / max(len(selected_accessions), 1)),
+                total=100,
+                unit="percent",
+                message=f"Resolving independent GWAS evidence metadata ({index}/{len(selected_accessions)})",
+                metrics={"selected_studies": len(selected_accessions), "raw_associations": len(gwas_rows)},
+            )
+        if study_cache:
+            gwas_rows = [
+                parse_gwas_association(item, row, study_cache.get(clean(item.get("accession_id"))))
+                for item, row in gwas_source_records
+            ]
+            gwas_variant_trait_rows, gwas_gene_module_rows, gwas_cluster_rows = build_gwas_summaries(
+                gwas_rows, groups_by_variant, gwas_relevance
+            )
+
+        for key, summary in gwas_summaries.items():
+            summary["high_confidence_cluster_count"] = sum(
+                key in split_pipe(cluster.get("variant_keys"))
+                and clean(cluster.get("evidence_band")) == "high_confidence_replicated"
+                for cluster in gwas_cluster_rows
+            )
+        for item in gwas_rows:
+            if as_bool(item.get("focus_eligible")):
+                pmid = clean(item.get("pubmed_id"))
+                if pmid:
+                    publication_refs[pmid].add("gwas")
+                    publication_variants[pmid].add(clean(item.get("variant_key")))
+        gwas_metadata_retry_rows = deduplicate_gwas_metadata_queue(gwas_metadata_retry_rows)
 
         publication_rows: list[dict] = []
         publication_dir = output_dir / "publications"
@@ -1541,8 +1773,10 @@ def process(payload: dict) -> dict:
                 "curated_clinpgx_compatible_annotation_count": as_int(pgx.get("compatible_clinical_annotations")),
                 "curated_clinpgx_variant_annotation_count": as_int(pgx.get("variant_annotations")),
                 "curated_gwas_association_count": as_int(gwas.get("total_associations")),
+                "curated_gwas_base_association_count": as_int(gwas.get("base_association_count")),
                 "curated_gwas_significant_count": as_int(gwas.get("genome_wide_significant_associations")),
                 "curated_gwas_focus_count": as_int(gwas.get("focus_associations")),
+                "curated_gwas_high_confidence_cluster_count": as_int(gwas.get("high_confidence_cluster_count")),
                 "curated_publication_count": publication_count_by_variant.get(key, 0),
                 **classification,
                 "curation_pipeline_version": PIPELINE_VERSION,
@@ -1674,6 +1908,11 @@ def process(payload: dict) -> dict:
     clinpgx_clinical_path = output_dir / "clinpgx_clinical_annotations.csv"
     clinpgx_annotations_path = output_dir / "clinpgx_variant_annotations.csv"
     gwas_path = output_dir / "gwas_variant_associations.csv"
+    gwas_variant_trait_path = output_dir / "gwas_variant_trait_summary.csv"
+    gwas_gene_module_path = output_dir / "gwas_gene_module_summary.csv"
+    gwas_clusters_path = output_dir / "gwas_evidence_clusters.csv"
+    gwas_relevance_template_path = output_dir / "gwas_trait_module_relevance_template.csv"
+    gwas_metadata_retry_path = output_dir / "gwas_metadata_retry_queue.jsonl"
     publications_path = output_dir / "publication_evidence.csv"
     retry_path = output_dir / "evidence_refinement_retry_queue.jsonl"
     summary_path = output_dir / "evidence_refinement_summary.json"
@@ -1686,6 +1925,27 @@ def process(payload: dict) -> dict:
     write_csv(clinpgx_clinical_path, clinpgx_clinical_rows, field_order(clinpgx_clinical_rows) or ["variant_key"])
     write_csv(clinpgx_annotations_path, clinpgx_annotation_rows, field_order(clinpgx_annotation_rows) or ["variant_key"])
     write_csv(gwas_path, gwas_rows, field_order(gwas_rows) or ["variant_key"])
+    write_csv(gwas_variant_trait_path, gwas_variant_trait_rows, field_order(gwas_variant_trait_rows) or ["variant_key"])
+    write_csv(gwas_gene_module_path, gwas_gene_module_rows, field_order(gwas_gene_module_rows) or ["approved_symbol", "module_id"])
+    write_csv(gwas_clusters_path, gwas_cluster_rows, field_order(gwas_cluster_rows) or ["cluster_id"])
+    gwas_relevance_template_rows = [
+        {
+            "approved_symbol": row.get("approved_symbol", ""),
+            "module_id": row.get("module_id", ""),
+            "trait_id": row.get("trait_id", ""),
+            "trait_labels": row.get("trait_labels", ""),
+            "relevance_status": row.get("module_relevance_status", "unreviewed"),
+            "reviewer": "",
+            "reviewed_at": "",
+            "review_notes": "",
+        }
+        for row in gwas_gene_module_rows
+    ]
+    write_csv(
+        gwas_relevance_template_path,
+        gwas_relevance_template_rows,
+        ["approved_symbol", "module_id", "trait_id", "trait_labels", "relevance_status", "reviewer", "reviewed_at", "review_notes"],
+    )
     write_csv(publications_path, publication_rows, field_order(publication_rows) or ["pmid"])
     with retry_path.open("w", encoding="utf-8") as handle:
         if retry_rows:
@@ -1693,6 +1953,12 @@ def process(payload: dict) -> dict:
                 handle.write(json.dumps(row, ensure_ascii=True) + "\n")
         else:
             handle.write(json.dumps({"record_type": "summary", "pending_retries": 0}, ensure_ascii=True) + "\n")
+    with gwas_metadata_retry_path.open("w", encoding="utf-8") as handle:
+        if gwas_metadata_retry_rows:
+            for row in gwas_metadata_retry_rows:
+                handle.write(json.dumps(row, ensure_ascii=True) + "\n")
+        else:
+            handle.write(json.dumps({"record_type": "summary", "pending_metadata": 0}, ensure_ascii=True) + "\n")
 
     projection_orphans = sum(1 for row in projection_rows if clean(row.get("variant_key")) not in registry_keys)
     role_counts = Counter(clean(row.get("downstream_role")) for row in curated_rows)
@@ -1780,6 +2046,12 @@ def process(payload: dict) -> dict:
                 "associations": len(gwas_rows),
                 "significantAssociations": sum(as_bool(row.get("is_genome_wide_significant")) for row in gwas_rows),
                 "focusAssociations": sum(as_bool(row.get("focus_eligible")) for row in gwas_rows),
+                "variantTraitUnits": len(gwas_variant_trait_rows),
+                "geneModuleTraitUnits": len(gwas_gene_module_rows),
+                "highConfidenceReplicatedClusters": sum(row.get("evidence_band") == "high_confidence_replicated" for row in gwas_cluster_rows),
+                "moderateContextualClusters": sum(row.get("evidence_band") == "moderate_contextual" for row in gwas_cluster_rows),
+                "contextOnlyClusters": sum(row.get("evidence_band") == "context_only" for row in gwas_cluster_rows),
+                "metadataDeferredOrRetry": len(gwas_metadata_retry_rows),
             },
         },
         "downstreamRoleCounts": dict(role_counts),
@@ -1811,6 +2083,11 @@ def process(payload: dict) -> dict:
             "clinpgxClinicalAnnotationsCsv": str(clinpgx_clinical_path),
             "clinpgxVariantAnnotationsCsv": str(clinpgx_annotations_path),
             "gwasVariantAssociationsCsv": str(gwas_path),
+            "gwasVariantTraitSummaryCsv": str(gwas_variant_trait_path),
+            "gwasGeneModuleSummaryCsv": str(gwas_gene_module_path),
+            "gwasEvidenceClustersCsv": str(gwas_clusters_path),
+            "gwasTraitModuleRelevanceTemplateCsv": str(gwas_relevance_template_path),
+            "gwasMetadataRetryQueueJsonl": str(gwas_metadata_retry_path),
             "publicationEvidenceCsv": str(publications_path),
             "evidenceRefinementRawJsonlGz": str(raw_path),
             "evidenceRefinementRetryQueueJsonl": str(retry_path),

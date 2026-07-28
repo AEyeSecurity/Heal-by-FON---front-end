@@ -468,6 +468,61 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
                     message="test",
                 )
 
+    def test_bcftools_prefilter_uses_native_target_regions_before_normalization(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "sample.vcf"
+            output_path = root / "normalized.vcf.gz"
+            reference_path = root / "hg38.fa"
+            regions_path = root / "target_regions.tsv"
+            rename_path = root / "rename.tsv"
+            for path, content in (
+                (input_path, "fixture"),
+                (reference_path, ">chr1\nA\n"),
+                (regions_path, "chr1\t1\t10\n"),
+                (rename_path, ""),
+            ):
+                path.write_text(content, encoding="utf-8")
+            completed = type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            with patch.object(normalizer.subprocess, "run", return_value=completed) as run:
+                normalizer.run_bcftools(input_path, output_path, reference_path, "fixture:1", regions_path, rename_path)
+
+        command = run.call_args.args[0]
+        shell_command = command[-1]
+        self.assertIn("bcftools view", shell_command)
+        self.assertIn("--targets-overlap 0", shell_command)
+        self.assertIn("-T /output/target_regions.tsv", shell_command)
+        self.assertLess(shell_command.index("bcftools view"), shell_command.index("bcftools norm"))
+        self.assertNotIn("awk", shell_command)
+
+    def test_vep_failed_batch_is_retried_as_smaller_batches(self):
+        batch = [{"variant_key": f"v{index}"} for index in range(200)]
+        calls = []
+
+        def fake_fetch(candidates, *_args):
+            calls.append(len(candidates))
+            if len(candidates) == 200:
+                return ({row["variant_key"]: {"status": "source_error", "error": "http error 503"} for row in candidates}, 0, 200, [])
+            return ({row["variant_key"]: {"status": "success", "error": "", "cache_hit": False} for row in candidates}, 0, len(candidates), [])
+
+        with patch.object(enrichment, "fetch_vep_batch", side_effect=fake_fetch):
+            resolved, _, network_variants, warnings = enrichment.fetch_vep_adaptive(batch, "GRCh38", object(), 10, {})
+
+        self.assertEqual(calls, [200, 50, 50, 50, 50])
+        self.assertTrue(all(row["status"] == "success" for row in resolved.values()))
+        self.assertEqual(network_variants, 200)
+        self.assertEqual(warnings, [])
+
+    def test_vep_rate_limit_does_not_multiply_requests(self):
+        batch = [{"variant_key": f"v{index}"} for index in range(200)]
+        with patch.object(
+            enrichment,
+            "fetch_vep_batch",
+            return_value=({row["variant_key"]: {"status": "source_error", "error": "http error 429"} for row in batch}, 0, 200, []),
+        ) as fetch:
+            enrichment.fetch_vep_adaptive(batch, "GRCh38", object(), 10, {})
+        self.assertEqual(fetch.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

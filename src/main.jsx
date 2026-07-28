@@ -193,7 +193,7 @@ const COPY = {
     enrichmentCompleteProgress: "Enrichment completo",
     enrichmentVepOnlyProgress: "Identidad no resuelta / seguimiento por coordenadas",
     enrichmentQuality: "Validando cobertura y calidad del enrichment...",
-    evidenceRefining: "Curando ClinVar, ClinPGx, GWAS y publicaciones seleccionadas...",
+    evidenceRefining: "Curando ClinVar, contexto PharmGKB, clusters GWAS y publicaciones seleccionadas...",
     groupingPreparing: "Preparando payloads agrupados por gen y modulo...",
     groupedInterpretationStarting: "Iniciando interpretacion individual agrupada...",
     groupedInterpreting: "Interpretando grupos gen-modulo...",
@@ -307,6 +307,10 @@ const COPY = {
     curatedFocusVariants: "Elegibles como foco",
     curatedRetryRows: "Errores reintentables",
     curatedPublications: "Publicaciones unicas",
+    curatedGwasRaw: "Asociaciones GWAS raw",
+    curatedGwasClustersHigh: "Clusters GWAS de alta confianza",
+    curatedGwasClustersModerate: "Clusters GWAS contextuales",
+    curatedGwasMetadataPending: "Metadata GWAS diferida",
     groupingPreparationGroups: "Grupos gene+modulo",
     groupingPreparationVariants: "Variantes fuente",
     groupingPreparationAverageSize: "Tamano promedio",
@@ -415,14 +419,23 @@ const COPY = {
     canonicalStatusDownload: "Descargar estado completo del canon",
     clinvarAggregateDownload: "Descargar resumen ClinVar",
     clinvarAssertionsDownload: "Descargar assertions ClinVar",
-    clinpgxClinicalDownload: "Descargar clinical annotations ClinPGx",
-    clinpgxVariantDownload: "Descargar variant annotations ClinPGx",
+    clinpgxClinicalDownload: "Descargar contexto clinico PharmGKB base",
+    clinpgxVariantDownload: "Descargar contexto de variantes PharmGKB base",
     gwasAssociationsDownload: "Descargar asociaciones GWAS",
+    gwasVariantTraitsDownload: "Descargar resumen GWAS variante-trait",
+    gwasGeneModuleDownload: "Descargar resumen GWAS gen-modulo-trait",
+    gwasClustersDownload: "Descargar clusters de evidencia GWAS",
+    gwasRelevanceTemplateDownload: "Descargar plantilla de relevancia GWAS",
+    gwasMetadataRetryDownload: "Descargar metadata GWAS pendiente",
     publicationEvidenceDownload: "Descargar evidencia bibliografica",
     evidenceRefinementRawDownload: "Descargar evidencia publica raw",
     evidenceRefinementRetryDownload: "Descargar retries de curacion",
     evidenceRefinementSummaryDownload: "Descargar resumen de curacion",
     groupingPayloadsDownload: "Descargar payloads agrupados",
+    groupingPayloadsV4Download: "Descargar payloads agrupados v4",
+    mechanismRegistryDownload: "Descargar registro de mecanismos",
+    llm1PilotManifestDownload: "Descargar manifest del piloto LLM1",
+    llm1PilotStart: "Ejecutar piloto LLM1 aprobado",
     groupingVariantDetailDownload: "Descargar detalle por variante",
     groupingSummaryDownload: "Descargar resumen de grupos",
     groupedInterpretationDownload: "Descargar interpretacion agrupada",
@@ -523,7 +536,7 @@ const COPY = {
     enrichmentCompleteProgress: "Complete enrichment",
     enrichmentVepOnlyProgress: "Unresolved identity / coordinate follow-up",
     enrichmentQuality: "Checking enrichment coverage and quality...",
-    evidenceRefining: "Curating ClinVar, ClinPGx, GWAS, and selected publications...",
+    evidenceRefining: "Curating ClinVar, PharmGKB context, GWAS clusters, and selected publications...",
     groupingPreparing: "Preparing grouped gene-module payloads...",
     groupedInterpretationStarting: "Starting grouped individual interpretation...",
     groupedInterpreting: "Interpreting gene-module groups...",
@@ -637,6 +650,10 @@ const COPY = {
     curatedFocusVariants: "Focus eligible",
     curatedRetryRows: "Retryable errors",
     curatedPublications: "Unique publications",
+    curatedGwasRaw: "Raw GWAS associations",
+    curatedGwasClustersHigh: "High-confidence GWAS clusters",
+    curatedGwasClustersModerate: "Contextual GWAS clusters",
+    curatedGwasMetadataPending: "Deferred GWAS metadata",
     groupingPreparationGroups: "Gene+module groups",
     groupingPreparationVariants: "Source variants",
     groupingPreparationAverageSize: "Average size",
@@ -745,14 +762,23 @@ const COPY = {
     canonicalStatusDownload: "Download complete canon status",
     clinvarAggregateDownload: "Download ClinVar aggregate",
     clinvarAssertionsDownload: "Download ClinVar assertions",
-    clinpgxClinicalDownload: "Download ClinPGx clinical annotations",
-    clinpgxVariantDownload: "Download ClinPGx variant annotations",
+    clinpgxClinicalDownload: "Download base PharmGKB clinical context",
+    clinpgxVariantDownload: "Download base PharmGKB variant context",
     gwasAssociationsDownload: "Download GWAS associations",
+    gwasVariantTraitsDownload: "Download GWAS variant-trait summary",
+    gwasGeneModuleDownload: "Download GWAS gene-module-trait summary",
+    gwasClustersDownload: "Download GWAS evidence clusters",
+    gwasRelevanceTemplateDownload: "Download GWAS relevance review template",
+    gwasMetadataRetryDownload: "Download pending GWAS metadata",
     publicationEvidenceDownload: "Download publication evidence",
     evidenceRefinementRawDownload: "Download raw public evidence",
     evidenceRefinementRetryDownload: "Download curation retry queue",
     evidenceRefinementSummaryDownload: "Download curation summary",
     groupingPayloadsDownload: "Download grouped payloads",
+    groupingPayloadsV4Download: "Download grouped payloads v4",
+    mechanismRegistryDownload: "Download mechanism registry",
+    llm1PilotManifestDownload: "Download LLM1 pilot manifest",
+    llm1PilotStart: "Run approved LLM1 pilot",
     groupingVariantDetailDownload: "Download grouped variant detail",
     groupingSummaryDownload: "Download grouped summary",
     groupedInterpretationDownload: "Download grouped interpretation CSV",
@@ -1603,6 +1629,7 @@ function MatchResultPanel({ result, locale, t }) {
   const enrichmentQuality = enrichment.qualityGate || metadata.enrichment_quality_gate || {};
   const evidenceRefinement = result.evidenceRefinement || {};
   const evidenceRefinementCounts = evidenceRefinement.counts || {};
+  const refinedGwasCounts = evidenceRefinement.sourceCounts?.gwas || {};
   const groupingPreparation = result.groupPrep?.metadata || {};
   const groupedInterpretation = result.groupedIndividualInterpretation?.metadata || {};
   const individualInterpretation = result.individualInterpretation?.metadata || {};
@@ -1707,6 +1734,10 @@ function MatchResultPanel({ result, locale, t }) {
         [t.curatedFocusVariants, formatNumber(evidenceRefinementCounts.focusCandidateVariants, locale)],
         [t.curatedRetryRows, formatNumber(evidenceRefinementCounts.retryQueueRows, locale)],
         [t.curatedPublications, formatNumber(evidenceRefinementCounts.uniquePublications, locale)],
+        [t.curatedGwasRaw, formatNumber(refinedGwasCounts.associations, locale)],
+        [t.curatedGwasClustersHigh, formatNumber(refinedGwasCounts.highConfidenceReplicatedClusters, locale)],
+        [t.curatedGwasClustersModerate, formatNumber(refinedGwasCounts.moderateContextualClusters, locale)],
+        [t.curatedGwasMetadataPending, formatNumber(refinedGwasCounts.metadataDeferredOrRetry, locale)],
       ]
     : [];
   const groupingPreparationCards = result.groupPrep
@@ -1954,6 +1985,11 @@ function MatchResultPanel({ result, locale, t }) {
       clinpgxClinical: ["clinpgx-clinical-annotations", "clinpgx_clinical_annotations.csv"],
       clinpgxVariant: ["clinpgx-variant-annotations", "clinpgx_variant_annotations.csv"],
       gwasAssociations: ["gwas-associations", "gwas_variant_associations.csv"],
+      gwasVariantTraits: ["gwas-variant-traits", "gwas_variant_trait_summary.csv"],
+      gwasGeneModule: ["gwas-gene-module-summary", "gwas_gene_module_summary.csv"],
+      gwasClusters: ["gwas-evidence-clusters", "gwas_evidence_clusters.csv"],
+      gwasRelevanceTemplate: ["gwas-relevance-template", "gwas_trait_module_relevance_template.csv"],
+      gwasMetadataRetry: ["gwas-metadata-retry-queue", "gwas_metadata_retry_queue.jsonl"],
       publications: ["publication-evidence", "publication_evidence.csv"],
       raw: ["evidence-refinement-raw", "evidence_refinement_raw.jsonl.gz"],
       retryQueue: ["evidence-refinement-retry-queue", "evidence_refinement_retry_queue.jsonl"],
@@ -1966,6 +2002,30 @@ function MatchResultPanel({ result, locale, t }) {
 
   async function downloadGroupedPayloads() {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/grouped-payloads`, "gene_module_group_payloads.csv");
+  }
+
+  async function downloadGroupedV4Artifact(kind) {
+    const artifacts = {
+      payloads: ["grouped-payloads-v4", "gene_module_group_payloads_v4.csv"],
+      mechanisms: ["mechanism-registry", "mechanism_registry_v1.csv"],
+      manifest: ["llm1-pilot-manifest", "llm1_pilot_manifest_v1.csv"],
+    };
+    const artifact = artifacts[kind];
+    if (artifact) await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/${artifact[0]}`, artifact[1]);
+  }
+
+  async function startLlm1Pilot() {
+    try {
+      const response = await fetch(`/api/vcf-canon-matches/${result.jobId}/llm1-pilot`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Could not start the controlled LLM1 pilot.");
+    } catch (error) {
+      window.alert(error.message || String(error));
+    }
   }
 
   async function downloadGroupedVariantDetail() {
@@ -2291,6 +2351,26 @@ function MatchResultPanel({ result, locale, t }) {
           <Download size={17} />
           {t.gwasAssociationsDownload}
         </button>}
+        {isGeneModuleV2 && artifactReady.gwasVariantTraitSummary && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("gwasVariantTraits")}>
+          <Download size={17} />
+          {t.gwasVariantTraitsDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.gwasGeneModuleSummary && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("gwasGeneModule")}>
+          <Download size={17} />
+          {t.gwasGeneModuleDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.gwasEvidenceClusters && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("gwasClusters")}>
+          <Download size={17} />
+          {t.gwasClustersDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.gwasTraitModuleRelevanceTemplate && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("gwasRelevanceTemplate")}>
+          <Download size={17} />
+          {t.gwasRelevanceTemplateDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.gwasMetadataRetryQueue && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("gwasMetadataRetry")}>
+          <Download size={17} />
+          {t.gwasMetadataRetryDownload}
+        </button>}
         {isGeneModuleV2 && artifactReady.publicationEvidence && <button className="secondary-button match-download-button" type="button" onClick={() => downloadCuratedArtifact("publications")}>
           <Download size={17} />
           {t.publicationEvidenceDownload}
@@ -2310,6 +2390,21 @@ function MatchResultPanel({ result, locale, t }) {
         {isGeneModuleV2 && artifactReady.groupedPayloads && <button className="secondary-button match-download-button" type="button" onClick={downloadGroupedPayloads}>
           <Download size={17} />
           {t.groupingPayloadsDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.groupedPayloadsV4 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV4Artifact("payloads")}>
+          <Download size={17} />
+          {t.groupingPayloadsV4Download}
+        </button>}
+        {isGeneModuleV2 && artifactReady.mechanismRegistry && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV4Artifact("mechanisms")}>
+          <Download size={17} />
+          {t.mechanismRegistryDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.llm1PilotManifest && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV4Artifact("manifest")}>
+          <Download size={17} />
+          {t.llm1PilotManifestDownload}
+        </button>}
+        {isGeneModuleV2 && artifactReady.llm1PilotManifest && <button className="secondary-button match-download-button" type="button" onClick={startLlm1Pilot}>
+          {t.llm1PilotStart}
         </button>}
         {isGeneModuleV2 && artifactReady.groupedVariantDetail && <button className="secondary-button match-download-button" type="button" onClick={downloadGroupedVariantDetail}>
           <Download size={17} />
@@ -2469,11 +2564,19 @@ function App() {
     clinpgxClinicalAnnotations: false,
     clinpgxVariantAnnotations: false,
     gwasAssociations: false,
+    gwasVariantTraitSummary: false,
+    gwasGeneModuleSummary: false,
+    gwasEvidenceClusters: false,
+    gwasTraitModuleRelevanceTemplate: false,
+    gwasMetadataRetryQueue: false,
     publicationEvidence: false,
     evidenceRefinementRaw: false,
     evidenceRefinementRetryQueue: false,
     evidenceRefinementSummary: false,
     groupedPayloads: false,
+    groupedPayloadsV4: false,
+    mechanismRegistry: false,
+    llm1PilotManifest: false,
     groupedVariantDetail: false,
     groupedInterpretation: false,
     individualInterpretation: false,
@@ -2953,11 +3056,19 @@ function App() {
       clinpgxClinicalAnnotations: Boolean(ready.clinpgxClinicalAnnotations),
       clinpgxVariantAnnotations: Boolean(ready.clinpgxVariantAnnotations),
       gwasAssociations: Boolean(ready.gwasAssociations),
+      gwasVariantTraitSummary: Boolean(ready.gwasVariantTraitSummary),
+      gwasGeneModuleSummary: Boolean(ready.gwasGeneModuleSummary),
+      gwasEvidenceClusters: Boolean(ready.gwasEvidenceClusters),
+      gwasTraitModuleRelevanceTemplate: Boolean(ready.gwasTraitModuleRelevanceTemplate),
+      gwasMetadataRetryQueue: Boolean(ready.gwasMetadataRetryQueue),
       publicationEvidence: Boolean(ready.publicationEvidence),
       evidenceRefinementRaw: Boolean(ready.evidenceRefinementRaw),
       evidenceRefinementRetryQueue: Boolean(ready.evidenceRefinementRetryQueue),
       evidenceRefinementSummary: Boolean(ready.evidenceRefinementSummary),
       groupedPayloads: Boolean(ready.groupedPayloads),
+      groupedPayloadsV4: Boolean(ready.groupedPayloadsV4),
+      mechanismRegistry: Boolean(ready.mechanismRegistry),
+      llm1PilotManifest: Boolean(ready.llm1PilotManifest),
       groupedVariantDetail: Boolean(ready.groupedVariantDetail),
       groupedInterpretation: Boolean(ready.groupedInterpretation),
       individualInterpretation: Boolean(ready.individualInterpretation),
