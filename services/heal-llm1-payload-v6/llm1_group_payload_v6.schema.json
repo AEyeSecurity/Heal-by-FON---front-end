@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healbyfon.local/schemas/llm1_group_payload_v6.schema.json",
+  "title": "HEAL LLM1 transcript-aware grouped payload v6",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "payload_schema_version", "execution_mode", "group_id", "gene", "module_id",
+    "group_context", "canonical_status", "curated_mechanism", "focus_variant_evidence",
+    "clinical_evidence_summary", "gwas_evidence_summary", "publication_evidence_digest",
+    "supporting_context", "target_gene_discordant_context", "identity_unresolved",
+    "source_failures", "allele_specific_frequency_summary", "professional_curation",
+    "deterministic_summary", "evidence_coverage", "compression_metadata", "provenance", "gates"
+  ],
+  "properties": {
+    "payload_schema_version": {"const": "llm1_group_payload_v6"},
+    "execution_mode": {"enum": ["dry_run", "pilot"]},
+    "group_id": {"type": "string", "minLength": 3},
+    "gene": {"type": "string", "minLength": 1},
+    "module_id": {"type": "string", "minLength": 1},
+    "focus_variant_evidence": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["evidence_id", "variant_ref", "variant_key", "identity_match_class", "target_gene_annotation", "functional_evidence", "population"],
+        "properties": {
+          "target_gene_annotation": {
+            "type": "object",
+            "required": ["status", "target_gene", "selected_transcript", "reason", "local_consequence_concordance", "local_consequence_reason"],
+            "properties": {
+              "status": {"enum": ["confirmed", "alternative_transcript"]},
+              "local_consequence_concordance": {"enum": ["concordant", "splice_window_context"]}
+            }
+          },
+          "population": {
+            "type": "object",
+            "required": ["observed_alt", "observed_alt_frequency", "frequency_relation", "other_allele_context"]
+          }
+        }
+      }
+    },
+    "compression_metadata": {
+      "type": "object",
+      "required": ["estimated_tokens", "budget_status", "hard_limit_tokens"],
+      "properties": {
+        "estimated_tokens": {"type": "integer", "maximum": 25000},
+        "hard_limit_tokens": {"const": 25000}
+      }
+    },
+    "gates": {
+      "type": "object",
+      "required": [
+        "token_budget_ready", "mechanism_registry_ready", "target_gene_annotation_ready",
+        "allele_specific_frequency_ready", "gwas_relevance_ready", "group_payload_ready", "llm1_pilot_ready"
+      ]
+    }
+  }
+}

@@ -95,10 +95,11 @@ const HEAL_V2_LLM1_ENABLED = process.env.HEAL_V2_LLM1_ENABLED === "true";
 const HEAL_V2_LLM1_PILOT_ENABLED = process.env.HEAL_V2_LLM1_PILOT_ENABLED === "true";
 const HEAL_V2_EVIDENCE_DIGEST_ENABLED = process.env.HEAL_V2_EVIDENCE_DIGEST_ENABLED === "true";
 const HEAL_V2_EVIDENCE_DIGEST_MODEL = process.env.HEAL_V2_EVIDENCE_DIGEST_MODEL || "";
+const HEAL_CURATION_ACCESS_TOKEN = process.env.HEAL_CURATION_ACCESS_TOKEN || "";
 const HEAL_MECHANISM_REGISTRY_PATH =
-  process.env.HEAL_MECHANISM_REGISTRY_PATH || path.join(CONFIG_ROOT, "mechanism_registry_v1.csv");
+  process.env.HEAL_MECHANISM_REGISTRY_PATH || path.join(RUNTIME_PATHS.canonCuration, "mechanism_registry_v1.csv");
 const HEAL_GWAS_TRAIT_MODULE_MAP_PATH =
-  process.env.HEAL_GWAS_TRAIT_MODULE_MAP_PATH || path.join(CONFIG_ROOT, "gwas_trait_module_relevance_v1.csv");
+  process.env.HEAL_GWAS_TRAIT_MODULE_MAP_PATH || path.join(RUNTIME_PATHS.canonCuration, "gwas_module_relevance_registry_v1.csv");
 const HEAL_V2_MIN_VEP_COVERAGE = Math.min(
   1,
   Math.max(0, Number.parseFloat(process.env.HEAL_V2_MIN_VEP_COVERAGE || "0.90") || 0.90),
@@ -153,7 +154,7 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, X-Chunk-Index, X-Upload-Id, X-Canon-File-Name, X-Canon-Assembly, X-Turnstile-Token, X-HEAL-Access-Token",
+    "Content-Type, X-Chunk-Index, X-Upload-Id, X-Canon-File-Name, X-Canon-Assembly, X-Turnstile-Token, X-HEAL-Access-Token, X-HEAL-Curation-Token",
   );
   if (req.method === "OPTIONS") {
     res.status(204).send();
@@ -166,7 +167,8 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: "1mb" }));
+// Professional GWAS curation registries can exceed 1 MB while remaining bounded CSV inputs.
+app.use(express.json({ limit: "4mb" }));
 
 function safeFileName(name) {
   const parsed = path.basename(String(name || "upload.vcf"));
@@ -698,6 +700,7 @@ function publicArtifactsReady(job) {
     groupedPayloads: artifactExists(artifacts.groupPayloadsCsv || artifacts.groupPayloadsJsonl),
     groupedPayloadsV4: artifactExists(artifacts.groupPayloadsCsvV4 || artifacts.groupPayloadsJsonlV4),
     groupedPayloadsV5: artifactExists(artifacts.groupPayloadsCsvV5 || artifacts.groupPayloadsJsonlV5),
+    groupedPayloadsV6: artifactExists(artifacts.groupPayloadsCsvV6 || artifacts.groupPayloadsJsonlV6),
     groupEvidencePackets: artifactExists(artifacts.groupEvidencePacketsJsonlGz),
     groupEvidenceDigests: artifactExists(artifacts.groupEvidenceDigestsJsonl),
     groupEvidenceDigestErrors: artifactExists(artifacts.groupEvidenceDigestErrorsCsv),
@@ -706,11 +709,26 @@ function publicArtifactsReady(job) {
     groupCompressionErrors: artifactExists(artifacts.groupCompressionErrorsCsv),
     groupCompressionSummary: artifactExists(artifacts.groupCompressionSummaryJson),
     groupPayloadSchemaV5: artifactExists(artifacts.groupPayloadSchemaV5Json),
+    groupPayloadSchemaV6: artifactExists(artifacts.groupPayloadSchemaV6Json),
+    targetGeneConsequenceAudit: artifactExists(artifacts.targetGeneConsequenceAuditCsv),
+    alleleSpecificFrequencyAudit: artifactExists(artifacts.alleleSpecificFrequencyAuditCsv),
+    clinvarConditionConflictAudit: artifactExists(artifacts.clinvarConditionConflictAuditCsv),
+    groupTokenBudgetAuditV6: artifactExists(artifacts.groupTokenBudgetAuditV6Csv),
+    groupPayloadV6Summary: artifactExists(artifacts.groupPayloadV6SummaryJson),
+    groupPayloadV6Errors: artifactExists(artifacts.groupPayloadV6ErrorsCsv),
+    persistentMechanismRegistry: artifactExists(artifacts.persistentMechanismRegistryCsv),
+    persistentGwasRegistry: artifactExists(artifacts.persistentGwasRegistryCsv),
     mechanismRegistry: artifactExists(artifacts.mechanismRegistryV1Csv),
     llm1PilotManifest: artifactExists(artifacts.llm1PilotManifestCsv),
     llm1PilotCandidateManifestV2: artifactExists(artifacts.llm1PilotCandidateManifestV2Csv),
+    llm1PilotCandidateManifestV3: artifactExists(artifacts.llm1PilotCandidateManifestV3Csv),
     groupedVariantDetail: artifactExists(artifacts.groupVariantDetailCsv),
     groupedInterpretation: artifactExists(artifacts.groupInterpretationsCsv),
+    llm1PilotApprovedPayloads: artifactExists(artifacts.llm1PilotApprovedPayloadsJsonl),
+    groupedInterpretationRawResponses: artifactExists(artifacts.groupInterpretationRawResponsesJsonl),
+    groupedInterpretationCallAudit: artifactExists(artifacts.groupInterpretationCallAuditCsv),
+    llm1PilotPromptSnapshot: artifactExists(artifacts.llm1PilotPromptSnapshotMd),
+    llm1PilotResponseSchemaSnapshot: artifactExists(artifacts.llm1PilotResponseSchemaSnapshotJson),
     individualInterpretation: artifactExists(artifacts.individualVariantInterpretationsCsv),
     interpretationNormalization: artifactExists(artifacts.individualVariantInterpretationsNormalizedCsv),
     globalInterpretation: artifactExists(artifacts.globalInterpretationJson || artifacts.globalInterpretationSectionsCsv),
@@ -1473,6 +1491,10 @@ async function processGroupedPayloadV5(payload) {
   return await runBase64JsonScript(SERVICE_SCRIPTS.groupedPayloadV5, payload);
 }
 
+async function processGroupedPayloadV6(payload) {
+  return await runBase64JsonScript(SERVICE_SCRIPTS.groupedPayloadV6, payload);
+}
+
 async function processEvidenceDigest(payload) {
   return await runBase64JsonScript(SERVICE_SCRIPTS.evidenceDigest, payload);
 }
@@ -2058,6 +2080,7 @@ app.get("/api/health", async (_req, res) => {
     v2Llm1PilotEnabled: HEAL_V2_LLM1_PILOT_ENABLED,
     v2EvidenceDigestEnabled: HEAL_V2_EVIDENCE_DIGEST_ENABLED,
     v2EvidenceDigestModelConfigured: Boolean(HEAL_V2_EVIDENCE_DIGEST_MODEL),
+    v2CurationUploadConfigured: Boolean(HEAL_CURATION_ACCESS_TOKEN),
     v2MechanismRegistryConfigured: existsSync(HEAL_MECHANISM_REGISTRY_PATH),
     v2GwasTraitModuleMapConfigured: existsSync(HEAL_GWAS_TRAIT_MODULE_MAP_PATH),
     v2MinVepCoverage: HEAL_V2_MIN_VEP_COVERAGE,
@@ -3344,19 +3367,73 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           },
         };
 
+        job.stageProgress = 86;
+        job.message = "Building transcript-aware LLM1 v6 payloads";
+        job.updatedAt = new Date().toISOString();
+        await persistVcfCanonJob(job);
+        const groupedV6Summary = await processGroupedPayloadV6({
+          event: "heal.grouped_payload_v6.requested",
+          runId: `group-payload-v6-${runId}`,
+          detailPath: groupedPrepSummary.outputs?.groupVariantDetailCsvV4,
+          canonicalStatusPath: job.artifacts.canonicalGeneModuleStatusCsv,
+          mechanismRegistryPath: groupedPrepSummary.outputs?.mechanismRegistryV1Csv,
+          persistentMechanismRegistryPath: HEAL_MECHANISM_REGISTRY_PATH,
+          persistentGwasRegistryPath: HEAL_GWAS_TRAIT_MODULE_MAP_PATH,
+          clinvarAssertionsPath: job.artifacts.clinvarSubmitterAssertionsCsv,
+          gwasClustersPath: job.artifacts.gwasEvidenceClustersCsv,
+          publicationsPath: job.artifacts.publicationEvidenceCsv,
+          outputDir: groupedPrepOutputDir,
+          tokenizerModel: LLM1_MODEL,
+          requestedAt: new Date().toISOString(),
+        });
+        const requiredGroupedV6Artifacts = [
+          groupedV6Summary.outputs?.groupPayloadsJsonlV6,
+          groupedV6Summary.outputs?.groupPayloadsCsvV6,
+          groupedV6Summary.outputs?.groupPayloadSchemaV6Json,
+          groupedV6Summary.outputs?.targetGeneConsequenceAuditCsv,
+          groupedV6Summary.outputs?.alleleSpecificFrequencyAuditCsv,
+          groupedV6Summary.outputs?.clinvarConditionConflictAuditCsv,
+          groupedV6Summary.outputs?.groupTokenBudgetAuditV6Csv,
+          groupedV6Summary.outputs?.llm1PilotCandidateManifestV3Csv,
+          groupedV6Summary.outputs?.groupPayloadV6SummaryJson,
+        ];
+        if (requiredGroupedV6Artifacts.some((artifactPath) => !artifactPath || !existsSync(artifactPath))) {
+          throw new Error("Grouped interpretation prep did not produce its required v6 artifacts.");
+        }
+        job.artifacts.groupPayloadsJsonlV6 = groupedV6Summary.outputs?.groupPayloadsJsonlV6 || "";
+        job.artifacts.groupPayloadsCsvV6 = groupedV6Summary.outputs?.groupPayloadsCsvV6 || "";
+        job.artifacts.groupPayloadSchemaV6Json = groupedV6Summary.outputs?.groupPayloadSchemaV6Json || "";
+        job.artifacts.targetGeneConsequenceAuditCsv = groupedV6Summary.outputs?.targetGeneConsequenceAuditCsv || "";
+        job.artifacts.alleleSpecificFrequencyAuditCsv = groupedV6Summary.outputs?.alleleSpecificFrequencyAuditCsv || "";
+        job.artifacts.clinvarConditionConflictAuditCsv = groupedV6Summary.outputs?.clinvarConditionConflictAuditCsv || "";
+        job.artifacts.groupTokenBudgetAuditV6Csv = groupedV6Summary.outputs?.groupTokenBudgetAuditV6Csv || "";
+        job.artifacts.llm1PilotCandidateManifestV3Csv = groupedV6Summary.outputs?.llm1PilotCandidateManifestV3Csv || "";
+        job.artifacts.groupPayloadV6ErrorsCsv = groupedV6Summary.outputs?.groupPayloadV6ErrorsCsv || "";
+        job.artifacts.groupPayloadV6SummaryJson = groupedV6Summary.outputs?.groupPayloadV6SummaryJson || "";
+        job.artifacts.persistentMechanismRegistryCsv = groupedV6Summary.outputs?.persistentMechanismRegistryCsv || "";
+        job.artifacts.persistentGwasRegistryCsv = groupedV6Summary.outputs?.persistentGwasRegistryCsv || "";
+        job.result.groupPrep = {
+          ...(job.result.groupPrep || {}),
+          payloadV6: sanitizeGroupedInterpretationPrepResult(groupedV6Summary),
+          metadata: {
+            ...(job.result.groupPrep?.metadata || {}),
+            ...(groupedV6Summary.metadata || {}),
+          },
+        };
+
         job.status = "complete";
         job.progress = 100;
         job.stage = "grouping_preparation";
         job.stageProgress = 100;
-        job.message = "Grouped payload v5 dry-run completed; LLM1 pilot requires explicit approval";
+        job.message = "Grouped payload v6 dry-run completed; LLM1 pilot requires explicit approval";
         job.result = {
           ...job.result,
           metadata: {
             ...(job.result?.metadata || {}),
             downstream_supported: false,
-            downstream_input: "llm1_group_payload_v5_dry_run",
+            downstream_input: "llm1_group_payload_v6_dry_run",
             downstream_message:
-              "All grouped payload v5 artifacts were generated without LLM calls. The pilot remains blocked until mechanism curation, manifest approval, and explicit pilot enablement.",
+              "All grouped payload v6 artifacts were generated without LLM calls. The five-group pilot remains blocked until professional curation, manifest approval, and explicit pilot enablement.",
           },
         };
         return;
@@ -3513,6 +3590,201 @@ function parseCsvRecords(raw) {
   return rows.map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] || ""])));
 }
 
+function requireCurationAccess(req, res) {
+  if (!HEAL_CURATION_ACCESS_TOKEN) {
+    res.status(503).json({ error: "Professional curation uploads are not configured on this deployment." });
+    return false;
+  }
+  if (!tokenMatches(HEAL_CURATION_ACCESS_TOKEN, String(req.headers["x-heal-curation-token"] || ""))) {
+    res.status(403).json({ error: "A valid professional curation token is required." });
+    return false;
+  }
+  return true;
+}
+
+function validateCurationCsv(kind, rows) {
+  if (!rows.length) throw new Error("The uploaded curation CSV is empty.");
+  const required = {
+    mechanism: ["mechanism_registry_version", "gene", "module_id", "curation_status", "source_ids_or_urls", "reviewer", "reviewed_at"],
+    gwas: ["registry_version", "gene", "approved_symbol", "module_id", "trait_id", "relevance_status", "relevance_reason", "source_ids_or_urls", "reviewer", "reviewed_at"],
+    manifest: ["group_id", "approved_for_pilot", "approval_reviewer", "approval_timestamp"],
+  }[kind];
+  if (!required) throw new Error("Unsupported curation registry kind.");
+  const headers = new Set(Object.keys(rows[0] || {}));
+  const missing = required.filter((header) => !headers.has(header));
+  if (missing.length) throw new Error(`Curation CSV is missing required columns: ${missing.join(", ")}`);
+  if (kind === "manifest") {
+    const allowed = new Set(["MTHFR:T1.1", "PEMT:T1.3", "IL6:T1.4", "NQO1:T1.6", "IFNG:T3.5"]);
+    const uploadedGroups = new Set(rows.map((row) => row.group_id));
+    if (
+      rows.length !== 5 ||
+      uploadedGroups.size !== allowed.size ||
+      rows.some((row) => !allowed.has(row.group_id))
+    ) {
+      throw new Error("The v6 canary manifest must contain exactly the five configured gene-module groups.");
+    }
+    if (rows.some((row) => !["true", "false"].includes(row.approved_for_pilot))) {
+      throw new Error("approved_for_pilot must be either true or false for every canary group.");
+    }
+    for (const row of rows.filter((item) => item.approved_for_pilot === "true")) {
+      if (!row.approval_reviewer || !row.approval_timestamp) {
+        throw new Error(`Approved pilot group ${row.group_id} is missing reviewer or approval timestamp.`);
+      }
+    }
+  } else {
+    const statusField = kind === "mechanism" ? "curation_status" : "relevance_status";
+    const allowedStatuses = kind === "mechanism" ? new Set(["draft", "approved", "rejected"]) : new Set(["unreviewed", "approved", "rejected"]);
+    for (const row of rows) {
+      if (!allowedStatuses.has(row[statusField])) throw new Error(`Unsupported ${statusField}: ${row[statusField]}`);
+      if (["approved", "rejected"].includes(row[statusField])) {
+        if (!row.reviewer || !row.reviewed_at || !row.source_ids_or_urls) {
+          throw new Error(`Professionally reviewed ${kind} row is missing reviewer, reviewed_at, or sources.`);
+        }
+        if (kind === "gwas" && !row.relevance_reason) {
+          throw new Error("Professionally reviewed GWAS relevance rows require relevance_reason.");
+        }
+      }
+    }
+  }
+}
+
+function curationRowKey(kind, row) {
+  if (kind === "mechanism") return `${row.gene || ""}:${row.module_id || ""}`;
+  if (kind === "gwas") {
+    return `${row.gene || row.approved_symbol || ""}:${row.module_id || ""}:${row.trait_id || ""}`;
+  }
+  return row.group_id || "";
+}
+
+async function validateCompleteCurationRegistry(kind, rows, expectedPath) {
+  if (!expectedPath || !existsSync(expectedPath)) return;
+  const expectedRows = parseCsvRecords(await readFile(expectedPath, "utf8"));
+  const expectedKeys = new Set(expectedRows.map((row) => curationRowKey(kind, row)));
+  const uploadedKeys = new Set(rows.map((row) => curationRowKey(kind, row)));
+  if (
+    rows.length !== uploadedKeys.size ||
+    uploadedKeys.size !== expectedKeys.size ||
+    [...expectedKeys].some((key) => !uploadedKeys.has(key))
+  ) {
+    throw new Error(
+      `The ${kind} upload must preserve every row from the downloaded registry; edit review fields without removing, duplicating, or adding keys.`,
+    );
+  }
+}
+
+async function regenerateGroupedPayloadV6(job) {
+  const outputDir = path.dirname(path.resolve(job.artifacts?.groupPayloadsJsonlV5 || ""));
+  const requiredInputs = [
+    job.artifacts?.groupVariantDetailCsvV4,
+    job.artifacts?.canonicalGeneModuleStatusCsv,
+    job.artifacts?.clinvarSubmitterAssertionsCsv,
+    job.artifacts?.gwasEvidenceClustersCsv,
+    job.artifacts?.publicationEvidenceCsv,
+  ].map((value) => path.resolve(value || ""));
+  if (!isPathInside(RUNTIME_PATHS.runs, outputDir) || requiredInputs.some((value) => !isPathInside(RUNTIME_PATHS.runs, value) || !existsSync(value))) {
+    throw new Error("V6 regeneration inputs are incomplete or outside the HEAL run root.");
+  }
+  const summary = await processGroupedPayloadV6({
+    event: "heal.grouped_payload_v6.regenerate",
+    runId: `group-payload-v6-${job.id}`,
+    detailPath: job.artifacts.groupVariantDetailCsvV4,
+    canonicalStatusPath: job.artifacts.canonicalGeneModuleStatusCsv,
+    mechanismRegistryPath: existsSync(HEAL_MECHANISM_REGISTRY_PATH)
+      ? HEAL_MECHANISM_REGISTRY_PATH
+      : job.artifacts.mechanismRegistryV1Csv,
+    persistentMechanismRegistryPath: HEAL_MECHANISM_REGISTRY_PATH,
+    persistentGwasRegistryPath: HEAL_GWAS_TRAIT_MODULE_MAP_PATH,
+    clinvarAssertionsPath: job.artifacts.clinvarSubmitterAssertionsCsv,
+    gwasClustersPath: job.artifacts.gwasEvidenceClustersCsv,
+    publicationsPath: job.artifacts.publicationEvidenceCsv,
+    outputDir,
+    tokenizerModel: LLM1_MODEL,
+    requestedAt: new Date().toISOString(),
+  });
+  const outputs = summary.outputs || {};
+  Object.assign(job.artifacts, {
+    groupPayloadsJsonlV6: outputs.groupPayloadsJsonlV6 || "",
+    groupPayloadsCsvV6: outputs.groupPayloadsCsvV6 || "",
+    groupPayloadSchemaV6Json: outputs.groupPayloadSchemaV6Json || "",
+    targetGeneConsequenceAuditCsv: outputs.targetGeneConsequenceAuditCsv || "",
+    alleleSpecificFrequencyAuditCsv: outputs.alleleSpecificFrequencyAuditCsv || "",
+    clinvarConditionConflictAuditCsv: outputs.clinvarConditionConflictAuditCsv || "",
+    groupTokenBudgetAuditV6Csv: outputs.groupTokenBudgetAuditV6Csv || "",
+    llm1PilotCandidateManifestV3Csv: outputs.llm1PilotCandidateManifestV3Csv || "",
+    groupPayloadV6ErrorsCsv: outputs.groupPayloadV6ErrorsCsv || "",
+    groupPayloadV6SummaryJson: outputs.groupPayloadV6SummaryJson || "",
+    persistentMechanismRegistryCsv: outputs.persistentMechanismRegistryCsv || "",
+    persistentGwasRegistryCsv: outputs.persistentGwasRegistryCsv || "",
+  });
+  job.result = {
+    ...job.result,
+    groupPrep: {
+      ...(job.result?.groupPrep || {}),
+      payloadV6: sanitizeGroupedInterpretationPrepResult(summary),
+      metadata: { ...(job.result?.groupPrep?.metadata || {}), ...(summary.metadata || {}) },
+    },
+  };
+  job.updatedAt = new Date().toISOString();
+  await persistVcfCanonJob(job);
+  return summary;
+}
+
+app.post("/api/vcf-canon-matches/:jobId/curation/:kind", async (req, res) => {
+  if (!requireCurationAccess(req, res)) return;
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload && !canAccessUpload(req, upload)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+  const kind = String(req.params.kind || "").toLowerCase();
+  try {
+    const raw = Buffer.from(String(req.body?.csvBase64 || ""), "base64").toString("utf8");
+    const rows = parseCsvRecords(raw);
+    validateCurationCsv(kind, rows);
+    if (kind === "mechanism") {
+      await validateCompleteCurationRegistry(
+        kind,
+        rows,
+        job.artifacts?.persistentMechanismRegistryCsv || job.artifacts?.mechanismRegistryV1Csv,
+      );
+    } else if (kind === "gwas") {
+      await validateCompleteCurationRegistry(
+        kind,
+        rows,
+        job.artifacts?.persistentGwasRegistryCsv || job.artifacts?.gwasTraitModuleRelevanceTemplateCsv,
+      );
+    }
+    let destination;
+    if (kind === "mechanism") destination = HEAL_MECHANISM_REGISTRY_PATH;
+    else if (kind === "gwas") destination = HEAL_GWAS_TRAIT_MODULE_MAP_PATH;
+    else if (kind === "manifest") destination = job.artifacts?.llm1PilotCandidateManifestV3Csv;
+    else throw new Error("Unsupported curation registry kind.");
+    const resolvedDestination = path.resolve(destination || "");
+    const allowedRoot = kind === "manifest" ? RUNTIME_PATHS.runs : RUNTIME_PATHS.canonCuration;
+    if (!isPathInside(allowedRoot, resolvedDestination)) throw new Error("Curation destination is outside the allowed HEAL root.");
+    await mkdir(path.dirname(resolvedDestination), { recursive: true });
+    const temporary = `${resolvedDestination}.${process.pid}.tmp`;
+    await writeFile(temporary, raw, "utf8");
+    if (kind !== "manifest") {
+      const revisionHash = crypto.createHash("sha256").update(raw).digest("hex").slice(0, 16);
+      const revisionTimestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const historyDir = path.join(RUNTIME_PATHS.canonCuration, "history");
+      await mkdir(historyDir, { recursive: true });
+      await writeFile(path.join(historyDir, `${kind}-${revisionTimestamp}-${revisionHash}.csv`), raw, "utf8");
+    }
+    await rename(temporary, resolvedDestination);
+    const summary = kind === "manifest" ? null : await regenerateGroupedPayloadV6(job);
+    res.json({ status: "accepted", kind, regenerated: Boolean(summary), metadata: summary?.metadata || null });
+  } catch (error) {
+    res.status(400).json({ error: error.message || String(error) });
+  }
+});
+
 app.post("/api/vcf-canon-matches/:jobId/llm1-pilot", async (req, res) => {
   if (REQUIRE_ORIGIN && !req.headers.origin) {
     res.status(403).json({ error: "Origin header is required." });
@@ -3536,11 +3808,11 @@ app.post("/api/vcf-canon-matches/:jobId/llm1-pilot", async (req, res) => {
     res.status(403).json({ error: "Match belongs to a different client." });
     return;
   }
-  const payloadPath = path.resolve(job.artifacts?.groupPayloadsJsonlV5 || "");
-  const manifestPath = path.resolve(job.artifacts?.llm1PilotCandidateManifestV2Csv || "");
+  const payloadPath = path.resolve(job.artifacts?.groupPayloadsJsonlV6 || "");
+  const manifestPath = path.resolve(job.artifacts?.llm1PilotCandidateManifestV3Csv || "");
   const groupedRoot = groupedInterpretationPrepPaths().root;
   if (!isPathInside(groupedRoot, payloadPath) || !existsSync(payloadPath) || !isPathInside(groupedRoot, manifestPath) || !existsSync(manifestPath)) {
-    res.status(409).json({ error: "Grouped payload v5 or its pilot candidate manifest is not available." });
+    res.status(409).json({ error: "Grouped payload v6 or its five-group pilot manifest is not available." });
     return;
   }
   const manifestRows = parseCsvRecords(await readFile(manifestPath, "utf8"));
@@ -3557,7 +3829,7 @@ app.post("/api/vcf-canon-matches/:jobId/llm1-pilot", async (req, res) => {
   const selected = payloads.filter(
     (payload) =>
       approvedIds.has(payload.group_id) &&
-      payload.payload_schema_version === "llm1_group_payload_v5" &&
+      payload.payload_schema_version === "llm1_group_payload_v6" &&
       payload.execution_mode === "dry_run" &&
       Number(payload.compression_metadata?.estimated_tokens || 0) <= 25000 &&
       payload.gates?.group_payload_ready === true &&
@@ -3571,14 +3843,15 @@ app.post("/api/vcf-canon-matches/:jobId/llm1-pilot", async (req, res) => {
     res.status(409).json({ error: "No professionally approved, payload-ready groups are present in the pilot manifest." });
     return;
   }
-  if (selected.length > 20) {
-    res.status(409).json({ error: "The controlled LLM1 pilot is limited to 20 approved groups." });
+  if (selected.length > 5) {
+    res.status(409).json({ error: "The controlled LLM1 canary is limited to five approved groups." });
     return;
   }
   const outputDir = jobStageDirectory(job.id, "llm1-pilot");
   await mkdir(outputDir, { recursive: true });
-  const selectedPath = path.join(outputDir, "llm1_pilot_selected_payloads_v5.jsonl");
+  const selectedPath = path.join(outputDir, "llm1_pilot_selected_payloads_v6.jsonl");
   await writeFile(selectedPath, `${selected.map((payload) => JSON.stringify(payload)).join("\n")}\n`, "utf8");
+  job.artifacts.llm1PilotApprovedPayloadsJsonl = selectedPath;
   job.stage = "grouped_individual_interpretation";
   job.stageProgress = 1;
   job.message = `Starting controlled LLM1 pilot for ${selected.length} approved groups`;
@@ -3594,17 +3867,23 @@ app.post("/api/vcf-canon-matches/:jobId/llm1-pilot", async (req, res) => {
           outputDir,
           model: LLM1_MODEL,
           dryRun: false,
-          maxGroups: 20,
+          maxGroups: 5,
+          maxWorkers: 2,
+          groupAttempts: 2,
           requestedAt: new Date().toISOString(),
         },
         job,
-        2,
+        1,
       );
       job.artifacts.groupInterpretationsJsonl = summary.outputs?.groupInterpretationsJsonl || "";
       job.artifacts.groupInterpretationsCsv = summary.outputs?.groupInterpretationsCsv || "";
       job.artifacts.groupInterpretationErrorsCsv = summary.outputs?.groupInterpretationErrorsCsv || "";
       job.artifacts.groupInterpretationProgressJson = summary.outputs?.groupInterpretationProgressJson || "";
       job.artifacts.groupInterpretationSummaryJson = summary.outputs?.groupInterpretationSummaryJson || "";
+      job.artifacts.groupInterpretationRawResponsesJsonl = summary.outputs?.groupInterpretationRawResponsesJsonl || "";
+      job.artifacts.groupInterpretationCallAuditCsv = summary.outputs?.groupInterpretationCallAuditCsv || "";
+      job.artifacts.llm1PilotPromptSnapshotMd = summary.outputs?.llm1PilotPromptSnapshotMd || "";
+      job.artifacts.llm1PilotResponseSchemaSnapshotJson = summary.outputs?.llm1PilotResponseSchemaSnapshotJson || "";
       job.result = { ...job.result, groupedIndividualInterpretation: sanitizeGroupedIndividualInterpretationResult(summary) };
       job.status = "complete";
       job.stageProgress = 100;
@@ -4514,7 +4793,7 @@ async function downloadAiTriageArtifact(req, res, artifactKey, suffix, { json = 
   res.download(artifactPath, `${baseName}_${suffix}.csv`);
 }
 
-async function downloadGroupedArtifact(req, res, artifactKey, suffix, { json = false, jsonl = false } = {}) {
+async function downloadGroupedArtifact(req, res, artifactKey, suffix, { json = false, jsonl = false, text = false } = {}) {
   if (REQUIRE_ORIGIN && !req.headers.origin) {
     res.status(403).json({ error: "Origin header is required." });
     return;
@@ -4563,6 +4842,11 @@ async function downloadGroupedArtifact(req, res, artifactKey, suffix, { json = f
   if (jsonl) {
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
     res.download(artifactPath, `${baseName}_${suffix}.jsonl`);
+    return;
+  }
+  if (text) {
+    res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+    res.download(artifactPath, `${baseName}_${suffix}.md`);
     return;
   }
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -4859,6 +5143,14 @@ app.get("/api/vcf-canon-matches/:jobId/grouped-payloads-v5-jsonl", async (req, r
   await downloadGroupedArtifact(req, res, "groupPayloadsJsonlV5", "llm1_group_payloads_v5", { jsonl: true });
 });
 
+app.get("/api/vcf-canon-matches/:jobId/grouped-payloads-v6", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadsCsvV6", "llm1_group_payloads_v6");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-payloads-v6-jsonl", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadsJsonlV6", "llm1_group_payloads_v6", { jsonl: true });
+});
+
 app.get("/api/vcf-canon-matches/:jobId/group-evidence-packets", async (req, res) => {
   await downloadGroupedArtifact(req, res, "groupEvidencePacketsJsonlGz", "group_evidence_packets", { jsonl: true });
 });
@@ -4895,6 +5187,46 @@ app.get("/api/vcf-canon-matches/:jobId/grouped-payload-v5-schema", async (req, r
   await downloadGroupedArtifact(req, res, "groupPayloadSchemaV5Json", "llm1_group_payload_v5_schema", { json: true });
 });
 
+app.get("/api/vcf-canon-matches/:jobId/grouped-payload-v6-schema", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadSchemaV6Json", "llm1_group_payload_v6_schema", { json: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/target-gene-consequence-audit", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "targetGeneConsequenceAuditCsv", "target_gene_consequence_audit");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/allele-specific-frequency-audit", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "alleleSpecificFrequencyAuditCsv", "allele_specific_frequency_audit");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/clinvar-condition-conflict-audit", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "clinvarConditionConflictAuditCsv", "clinvar_condition_conflict_audit");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/group-token-budget-audit-v6", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupTokenBudgetAuditV6Csv", "group_token_budget_audit_v6");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/group-payload-v6-summary", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadV6SummaryJson", "llm1_group_payload_v6_summary", { json: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/group-payload-v6-errors", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadV6ErrorsCsv", "group_payload_v6_errors");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/llm1-pilot-candidate-manifest-v3", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "llm1PilotCandidateManifestV3Csv", "llm1_pilot_candidate_manifest_v3");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/persistent-mechanism-registry", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "persistentMechanismRegistryCsv", "mechanism_registry_v1");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/persistent-gwas-registry", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "persistentGwasRegistryCsv", "gwas_module_relevance_registry_v1");
+});
+
 app.get("/api/vcf-canon-matches/:jobId/mechanism-registry", async (req, res) => {
   await downloadGroupedArtifact(req, res, "mechanismRegistryV1Csv", "mechanism_registry_v1");
 });
@@ -4909,6 +5241,26 @@ app.get("/api/vcf-canon-matches/:jobId/grouped-interpretations", async (req, res
 
 app.get("/api/vcf-canon-matches/:jobId/grouped-interpretation-summary", async (req, res) => {
   await downloadGroupedArtifact(req, res, "groupInterpretationSummaryJson", "gene_module_group_interpretation_summary", { json: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-interpretation-raw-responses", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupInterpretationRawResponsesJsonl", "gene_module_group_interpretation_raw_responses", { jsonl: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/llm1-pilot-approved-payloads", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "llm1PilotApprovedPayloadsJsonl", "llm1_pilot_approved_payloads_v6", { jsonl: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-interpretation-call-audit", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupInterpretationCallAuditCsv", "gene_module_group_interpretation_call_audit");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/llm1-pilot-prompt-snapshot", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "llm1PilotPromptSnapshotMd", "llm1_pilot_prompt_snapshot", { text: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/llm1-pilot-response-schema-snapshot", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "llm1PilotResponseSchemaSnapshotJson", "llm1_pilot_response_schema_snapshot", { json: true });
 });
 
 app.get("/api/vcf-canon-matches/:jobId/enrichment", async (req, res) => {

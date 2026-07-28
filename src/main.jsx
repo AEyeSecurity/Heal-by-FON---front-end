@@ -315,6 +315,21 @@ const COPY = {
     groupingPreparationVariants: "Variantes fuente",
     groupingPreparationAverageSize: "Tamano promedio",
     groupingPreparationLargeGroups: "Grupos >25 variantes",
+    groupingTranscriptFocus: "Variantes foco transcript-aware",
+    groupingFocusReclassified: "Filas retiradas del foco v5",
+    groupingApprovedMechanisms: "Mecanismos aprobados",
+    groupingApprovedGwas: "Grupos con GWAS aprobado",
+    groupingPayloadReady: "Grupos listos para payload",
+    groupingSourceFailureGroups: "Grupos con errores de fuente",
+    llm1CanaryTitle: "Canary LLM1: estado por grupo",
+    llm1CanaryCategory: "Categoria",
+    llm1CanaryFocus: "Foco concordante",
+    llm1CanaryAltFrequency: "Frecuencia ALT",
+    llm1CanaryMechanism: "Mecanismo",
+    llm1CanaryGwas: "Relevancia GWAS",
+    llm1CanaryErrors: "Errores fuente",
+    llm1CanaryTokens: "Tokens",
+    llm1CanaryBlockers: "Bloqueos",
     groupedInterpretationTitle: "Interpretacion individual agrupada",
     groupedInterpretationGroups: "Grupos interpretados",
     groupedInterpretationSourceGroups: "Grupos fuente",
@@ -434,6 +449,20 @@ const COPY = {
     groupingPayloadsDownload: "Descargar payloads agrupados",
     groupingPayloadsV4Download: "Descargar payloads agrupados v4",
     groupingPayloadsV5Download: "Descargar payloads acotados v5",
+    groupingPayloadsV6Download: "Descargar payloads transcript-aware v6",
+    targetGeneAuditDownload: "Descargar auditoria gen-transcrito",
+    alleleFrequencyAuditDownload: "Descargar auditoria de frecuencia ALT",
+    clinvarConflictAuditDownload: "Descargar conflictos ClinVar por condicion",
+    groupTokenBudgetV6Download: "Descargar presupuesto de tokens v6",
+    groupPayloadV6SummaryDownload: "Descargar resumen LLM1 v6",
+    groupPayloadV6ErrorsDownload: "Descargar errores LLM1 v6",
+    llm1PilotCandidateManifestV3Download: "Descargar manifest canary v3",
+    groupPayloadSchemaV6Download: "Descargar schema del payload v6",
+    persistentMechanismRegistryDownload: "Descargar mecanismos profesionales",
+    persistentGwasRegistryDownload: "Descargar relevancia GWAS profesional",
+    curationMechanismUpload: "Cargar mecanismos revisados",
+    curationGwasUpload: "Cargar relevancia GWAS revisada",
+    curationManifestUpload: "Cargar aprobacion del canary",
     groupEvidencePacketsDownload: "Descargar ledger por grupo",
     groupEvidenceDigestsDownload: "Descargar digests de evidencia",
     groupEvidenceDigestErrorsDownload: "Descargar errores de digest",
@@ -457,6 +486,11 @@ const COPY = {
     groupingSummaryDownload: "Descargar resumen de grupos",
     groupedInterpretationDownload: "Descargar interpretacion agrupada",
     groupedInterpretationSummaryDownload: "Descargar resumen interpretacion agrupada",
+    groupedInterpretationRawDownload: "Descargar respuestas raw del canary",
+    llm1PilotApprovedPayloadsDownload: "Descargar payloads aprobados del canary",
+    groupedInterpretationCallAuditDownload: "Descargar auditoria de llamadas LLM1",
+    llm1PilotPromptDownload: "Descargar prompt LLM1 usado",
+    llm1PilotSchemaDownload: "Descargar schema de respuesta LLM1",
     individualInterpretationDownload: "Descargar CSV interpretacion individual",
     interpretationNormalizationDownload: "Descargar CSV normalizado",
     globalInterpretationDownload: "Descargar interpretacion global JSON",
@@ -675,6 +709,21 @@ const COPY = {
     groupingPreparationVariants: "Source variants",
     groupingPreparationAverageSize: "Average size",
     groupingPreparationLargeGroups: "Groups >25 variants",
+    groupingTranscriptFocus: "Transcript-aware focus variants",
+    groupingFocusReclassified: "Rows removed from v5 focus",
+    groupingApprovedMechanisms: "Approved mechanisms",
+    groupingApprovedGwas: "Groups with approved GWAS",
+    groupingPayloadReady: "Payload-ready groups",
+    groupingSourceFailureGroups: "Groups with source errors",
+    llm1CanaryTitle: "LLM1 canary: group status",
+    llm1CanaryCategory: "Category",
+    llm1CanaryFocus: "Concordant focus",
+    llm1CanaryAltFrequency: "ALT frequency",
+    llm1CanaryMechanism: "Mechanism",
+    llm1CanaryGwas: "GWAS relevance",
+    llm1CanaryErrors: "Source errors",
+    llm1CanaryTokens: "Tokens",
+    llm1CanaryBlockers: "Blockers",
     groupedInterpretationTitle: "Grouped individual interpretation",
     groupedInterpretationGroups: "Interpreted groups",
     groupedInterpretationSourceGroups: "Source groups",
@@ -794,6 +843,20 @@ const COPY = {
     groupingPayloadsDownload: "Download grouped payloads",
     groupingPayloadsV4Download: "Download grouped payloads v4",
     groupingPayloadsV5Download: "Download bounded v5 payloads",
+    groupingPayloadsV6Download: "Download transcript-aware v6 payloads",
+    targetGeneAuditDownload: "Download gene-transcript audit",
+    alleleFrequencyAuditDownload: "Download ALT-frequency audit",
+    clinvarConflictAuditDownload: "Download condition-aware ClinVar conflicts",
+    groupTokenBudgetV6Download: "Download v6 token budget",
+    groupPayloadV6SummaryDownload: "Download LLM1 v6 summary",
+    groupPayloadV6ErrorsDownload: "Download LLM1 v6 errors",
+    llm1PilotCandidateManifestV3Download: "Download canary manifest v3",
+    groupPayloadSchemaV6Download: "Download v6 payload schema",
+    persistentMechanismRegistryDownload: "Download professional mechanism registry",
+    persistentGwasRegistryDownload: "Download professional GWAS relevance registry",
+    curationMechanismUpload: "Upload reviewed mechanisms",
+    curationGwasUpload: "Upload reviewed GWAS relevance",
+    curationManifestUpload: "Upload canary approval",
     groupEvidencePacketsDownload: "Download group evidence ledger",
     groupEvidenceDigestsDownload: "Download evidence digests",
     groupEvidenceDigestErrorsDownload: "Download digest errors",
@@ -817,6 +880,11 @@ const COPY = {
     groupingSummaryDownload: "Download grouped summary",
     groupedInterpretationDownload: "Download grouped interpretation CSV",
     groupedInterpretationSummaryDownload: "Download grouped interpretation summary",
+    groupedInterpretationRawDownload: "Download raw canary responses",
+    llm1PilotApprovedPayloadsDownload: "Download approved canary payloads",
+    groupedInterpretationCallAuditDownload: "Download LLM1 call audit",
+    llm1PilotPromptDownload: "Download executed LLM1 prompt",
+    llm1PilotSchemaDownload: "Download LLM1 response schema",
     individualInterpretationDownload: "Download individual interpretation CSV",
     interpretationNormalizationDownload: "Download normalized CSV",
     globalInterpretationDownload: "Download global interpretation JSON",
@@ -1786,7 +1854,16 @@ function MatchResultPanel({ result, locale, t }) {
         [t.groupingCoverageRecords, formatNumber(groupingPreparation.coverage_records, locale)],
         [t.groupingCoverageReconciled, groupingPreparation.coverage_reconciled ? "true" : "false"],
         [t.groupingPilotCandidates, formatNumber(groupingPreparation.pilot_candidates, locale)],
+        [t.groupingTranscriptFocus, formatNumber(groupingPreparation.focus_variants_total, locale)],
+        [t.groupingFocusReclassified, formatNumber(groupingPreparation.focus_rows_reclassified, locale)],
+        [t.groupingApprovedMechanisms, formatNumber(groupingPreparation.groups_with_approved_mechanism, locale)],
+        [t.groupingApprovedGwas, formatNumber(groupingPreparation.groups_with_approved_gwas_relevance, locale)],
+        [t.groupingPayloadReady, formatNumber(groupingPreparation.groups_payload_ready, locale)],
+        [t.groupingSourceFailureGroups, formatNumber(groupingPreparation.source_failure_groups, locale)],
       ]
+    : [];
+  const llm1CanaryGroups = Array.isArray(groupingPreparation.pilot_manifest)
+    ? groupingPreparation.pilot_manifest
     : [];
   const groupedInterpretationCards = result.groupedIndividualInterpretation
     ? [
@@ -2071,6 +2148,58 @@ function MatchResultPanel({ result, locale, t }) {
     if (artifact) await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/${artifact[0]}`, artifact[1]);
   }
 
+  async function downloadGroupedV6Artifact(kind) {
+    const artifacts = {
+      payloads: ["grouped-payloads-v6", "llm1_group_payloads_v6.csv"],
+      targetGene: ["target-gene-consequence-audit", "target_gene_consequence_audit.csv"],
+      frequency: ["allele-specific-frequency-audit", "allele_specific_frequency_audit.csv"],
+      clinvar: ["clinvar-condition-conflict-audit", "clinvar_condition_conflict_audit.csv"],
+      tokens: ["group-token-budget-audit-v6", "group_token_budget_audit_v6.csv"],
+      summary: ["group-payload-v6-summary", "llm1_group_payload_v6_summary.json"],
+      errors: ["group-payload-v6-errors", "group_payload_v6_errors.csv"],
+      manifest: ["llm1-pilot-candidate-manifest-v3", "llm1_pilot_candidate_manifest_v3.csv"],
+      schema: ["grouped-payload-v6-schema", "llm1_group_payload_v6.schema.json"],
+      mechanisms: ["persistent-mechanism-registry", "mechanism_registry_v1.csv"],
+      gwas: ["persistent-gwas-registry", "gwas_module_relevance_registry_v1.csv"],
+    };
+    const artifact = artifacts[kind];
+    if (artifact) await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/${artifact[0]}`, artifact[1]);
+  }
+
+  function uploadProfessionalCuration(kind) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".csv,text/csv";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const curationToken = window.prompt("Professional curation token");
+      if (!curationToken) return;
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        let binary = "";
+        for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+        }
+        const response = await fetch(`/api/vcf-canon-matches/${result.jobId}/curation/${kind}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-HEAL-Curation-Token": curationToken,
+            ...accessHeaders(result.accessToken || getJobAccessToken(result.jobId)),
+          },
+          body: JSON.stringify({ csvBase64: window.btoa(binary) }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || "Could not upload professional curation.");
+        window.alert("Professional curation accepted. V6 readiness was recalculated.");
+      } catch (error) {
+        setDownloadError(error.message || String(error));
+      }
+    };
+    input.click();
+  }
+
   async function startEvidenceDigest() {
     try {
       const response = await fetch(`/api/vcf-canon-matches/${result.jobId}/evidence-digest`, {
@@ -2089,7 +2218,7 @@ function MatchResultPanel({ result, locale, t }) {
     try {
       const response = await fetch(`/api/vcf-canon-matches/${result.jobId}/llm1-pilot`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...accessHeaders(result.accessToken || getJobAccessToken(result.jobId)) },
         body: JSON.stringify({}),
       });
       const payload = await response.json().catch(() => ({}));
@@ -2122,6 +2251,18 @@ function MatchResultPanel({ result, locale, t }) {
       `/api/vcf-canon-matches/${result.jobId}/grouped-interpretation-summary`,
       "gene_module_group_interpretation_summary.json",
     );
+  }
+
+  async function downloadLlm1PilotArtifact(kind) {
+    const artifacts = {
+      payloads: ["llm1-pilot-approved-payloads", "llm1_pilot_approved_payloads_v6.jsonl"],
+      raw: ["grouped-interpretation-raw-responses", "gene_module_group_interpretation_raw_responses.jsonl"],
+      calls: ["grouped-interpretation-call-audit", "gene_module_group_interpretation_call_audit.csv"],
+      prompt: ["llm1-pilot-prompt-snapshot", "llm1_pilot_prompt_snapshot.md"],
+      schema: ["llm1-pilot-response-schema-snapshot", "llm1_pilot_response_schema_snapshot.json"],
+    };
+    const artifact = artifacts[kind];
+    if (artifact) await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/${artifact[0]}`, artifact[1]);
   }
 
   async function downloadEnrichmentQa() {
@@ -2236,6 +2377,43 @@ function MatchResultPanel({ result, locale, t }) {
             {groupingPreparationCards.map(([label, value]) => (
               <MetricCard label={label} value={value} key={label} />
             ))}
+          </div>
+        </>
+      )}
+      {llm1CanaryGroups.length > 0 && (
+        <>
+          <h3 className="result-subtitle">{t.llm1CanaryTitle}</h3>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Gene + module</th>
+                  <th>{t.llm1CanaryCategory}</th>
+                  <th>{t.llm1CanaryFocus}</th>
+                  <th>{t.llm1CanaryAltFrequency}</th>
+                  <th>{t.llm1CanaryMechanism}</th>
+                  <th>{t.llm1CanaryGwas}</th>
+                  <th>{t.llm1CanaryErrors}</th>
+                  <th>{t.llm1CanaryTokens}</th>
+                  <th>{t.llm1CanaryBlockers}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {llm1CanaryGroups.map((group) => (
+                  <tr key={group.group_id}>
+                    <td>{group.group_id}</td>
+                    <td>{group.selection_category || "-"}</td>
+                    <td>{group.target_concordant_focus_count}/{group.focus_variant_count}</td>
+                    <td>{group.observed_alt_frequency_count}/{group.focus_variant_count}</td>
+                    <td>{group.mechanism_status || "-"}</td>
+                    <td>{group.gwas_relevance_status || "-"}</td>
+                    <td>{formatNumber(group.source_error_count, locale)}</td>
+                    <td>{formatNumber(group.estimated_tokens, locale)}</td>
+                    <td>{group.blockers || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </>
       )}
@@ -2476,6 +2654,20 @@ function MatchResultPanel({ result, locale, t }) {
         {isGeneModuleV2 && artifactReady.groupCompressionSummary && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV5Artifact("summary")}><Download size={17} />{t.groupCompressionSummaryDownload}</button>}
         {isGeneModuleV2 && artifactReady.llm1PilotCandidateManifestV2 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV5Artifact("manifest")}><Download size={17} />{t.llm1PilotCandidateManifestV2Download}</button>}
         {isGeneModuleV2 && artifactReady.groupPayloadSchemaV5 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV5Artifact("schema")}><Download size={17} />{t.groupPayloadSchemaV5Download}</button>}
+        {isGeneModuleV2 && artifactReady.groupedPayloadsV6 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV6Artifact("payloads")}><Download size={17} />{t.groupingPayloadsV6Download}</button>}
+        {isGeneModuleV2 && artifactReady.targetGeneConsequenceAudit && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV6Artifact("targetGene")}><Download size={17} />{t.targetGeneAuditDownload}</button>}
+        {isGeneModuleV2 && artifactReady.alleleSpecificFrequencyAudit && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV6Artifact("frequency")}><Download size={17} />{t.alleleFrequencyAuditDownload}</button>}
+        {isGeneModuleV2 && artifactReady.clinvarConditionConflictAudit && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV6Artifact("clinvar")}><Download size={17} />{t.clinvarConflictAuditDownload}</button>}
+        {isGeneModuleV2 && artifactReady.groupTokenBudgetAuditV6 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV6Artifact("tokens")}><Download size={17} />{t.groupTokenBudgetV6Download}</button>}
+        {isGeneModuleV2 && artifactReady.groupPayloadV6Summary && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV6Artifact("summary")}><Download size={17} />{t.groupPayloadV6SummaryDownload}</button>}
+        {isGeneModuleV2 && artifactReady.groupPayloadV6Errors && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV6Artifact("errors")}><Download size={17} />{t.groupPayloadV6ErrorsDownload}</button>}
+        {isGeneModuleV2 && artifactReady.llm1PilotCandidateManifestV3 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV6Artifact("manifest")}><Download size={17} />{t.llm1PilotCandidateManifestV3Download}</button>}
+        {isGeneModuleV2 && artifactReady.groupPayloadSchemaV6 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV6Artifact("schema")}><Download size={17} />{t.groupPayloadSchemaV6Download}</button>}
+        {isGeneModuleV2 && artifactReady.persistentMechanismRegistry && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV6Artifact("mechanisms")}><Download size={17} />{t.persistentMechanismRegistryDownload}</button>}
+        {isGeneModuleV2 && artifactReady.persistentGwasRegistry && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV6Artifact("gwas")}><Download size={17} />{t.persistentGwasRegistryDownload}</button>}
+        {isGeneModuleV2 && artifactReady.persistentMechanismRegistry && <button className="secondary-button match-download-button" type="button" onClick={() => uploadProfessionalCuration("mechanism")}>{t.curationMechanismUpload}</button>}
+        {isGeneModuleV2 && artifactReady.persistentGwasRegistry && <button className="secondary-button match-download-button" type="button" onClick={() => uploadProfessionalCuration("gwas")}>{t.curationGwasUpload}</button>}
+        {isGeneModuleV2 && artifactReady.llm1PilotCandidateManifestV3 && <button className="secondary-button match-download-button" type="button" onClick={() => uploadProfessionalCuration("manifest")}>{t.curationManifestUpload}</button>}
         {isGeneModuleV2 && Number(groupingPreparation.groups_requiring_compression_review || 0) > 0 && artifactReady.groupEvidencePackets && <button className="secondary-button match-download-button" type="button" onClick={startEvidenceDigest}>{t.evidenceDigestStart}</button>}
         {isGeneModuleV2 && artifactReady.mechanismRegistry && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV4Artifact("mechanisms")}>
           <Download size={17} />
@@ -2485,7 +2677,7 @@ function MatchResultPanel({ result, locale, t }) {
           <Download size={17} />
           {t.llm1PilotManifestDownload}
         </button>}
-        {isGeneModuleV2 && artifactReady.llm1PilotCandidateManifestV2 && <button className="secondary-button match-download-button" type="button" onClick={startLlm1Pilot}>
+        {isGeneModuleV2 && artifactReady.llm1PilotCandidateManifestV3 && <button className="secondary-button match-download-button" type="button" onClick={startLlm1Pilot}>
           {t.llm1PilotStart}
         </button>}
         {isGeneModuleV2 && artifactReady.groupedVariantDetail && <button className="secondary-button match-download-button" type="button" onClick={downloadGroupedVariantDetail}>
@@ -2504,6 +2696,11 @@ function MatchResultPanel({ result, locale, t }) {
           <Download size={17} />
           {t.groupedInterpretationSummaryDownload}
         </button>}
+        {isGeneModuleV2 && artifactReady.groupedInterpretationRawResponses && <button className="secondary-button match-download-button" type="button" onClick={() => downloadLlm1PilotArtifact("raw")}><Download size={17} />{t.groupedInterpretationRawDownload}</button>}
+        {isGeneModuleV2 && artifactReady.llm1PilotApprovedPayloads && <button className="secondary-button match-download-button" type="button" onClick={() => downloadLlm1PilotArtifact("payloads")}><Download size={17} />{t.llm1PilotApprovedPayloadsDownload}</button>}
+        {isGeneModuleV2 && artifactReady.groupedInterpretationCallAudit && <button className="secondary-button match-download-button" type="button" onClick={() => downloadLlm1PilotArtifact("calls")}><Download size={17} />{t.groupedInterpretationCallAuditDownload}</button>}
+        {isGeneModuleV2 && artifactReady.llm1PilotPromptSnapshot && <button className="secondary-button match-download-button" type="button" onClick={() => downloadLlm1PilotArtifact("prompt")}><Download size={17} />{t.llm1PilotPromptDownload}</button>}
+        {isGeneModuleV2 && artifactReady.llm1PilotResponseSchemaSnapshot && <button className="secondary-button match-download-button" type="button" onClick={() => downloadLlm1PilotArtifact("schema")}><Download size={17} />{t.llm1PilotSchemaDownload}</button>}
         {!isGeneModuleV2 && artifactReady.individualInterpretation && <button className="secondary-button match-download-button" type="button" onClick={downloadIndividualInterpretations}>
           <Download size={17} />
           {t.individualInterpretationDownload}
@@ -2658,6 +2855,7 @@ function App() {
     groupedPayloads: false,
     groupedPayloadsV4: false,
     groupedPayloadsV5: false,
+    groupedPayloadsV6: false,
     groupEvidencePackets: false,
     groupEvidenceDigests: false,
     groupEvidenceDigestErrors: false,
@@ -2666,11 +2864,26 @@ function App() {
     groupCompressionErrors: false,
     groupCompressionSummary: false,
     groupPayloadSchemaV5: false,
+    groupPayloadSchemaV6: false,
+    targetGeneConsequenceAudit: false,
+    alleleSpecificFrequencyAudit: false,
+    clinvarConditionConflictAudit: false,
+    groupTokenBudgetAuditV6: false,
+    groupPayloadV6Summary: false,
+    groupPayloadV6Errors: false,
+    persistentMechanismRegistry: false,
+    persistentGwasRegistry: false,
     mechanismRegistry: false,
     llm1PilotManifest: false,
     llm1PilotCandidateManifestV2: false,
+    llm1PilotCandidateManifestV3: false,
     groupedVariantDetail: false,
     groupedInterpretation: false,
+    llm1PilotApprovedPayloads: false,
+    groupedInterpretationRawResponses: false,
+    groupedInterpretationCallAudit: false,
+    llm1PilotPromptSnapshot: false,
+    llm1PilotResponseSchemaSnapshot: false,
     individualInterpretation: false,
     interpretationNormalization: false,
     globalInterpretation: false,
@@ -2775,6 +2988,7 @@ function App() {
       groupedPayloads: false,
       groupedPayloadsV4: false,
       groupedPayloadsV5: false,
+      groupedPayloadsV6: false,
       groupEvidencePackets: false,
       groupEvidenceDigests: false,
       groupEvidenceDigestErrors: false,
@@ -2783,11 +2997,26 @@ function App() {
       groupCompressionErrors: false,
       groupCompressionSummary: false,
       groupPayloadSchemaV5: false,
+      groupPayloadSchemaV6: false,
+      targetGeneConsequenceAudit: false,
+      alleleSpecificFrequencyAudit: false,
+      clinvarConditionConflictAudit: false,
+      groupTokenBudgetAuditV6: false,
+      groupPayloadV6Summary: false,
+      groupPayloadV6Errors: false,
+      persistentMechanismRegistry: false,
+      persistentGwasRegistry: false,
       mechanismRegistry: false,
       llm1PilotManifest: false,
       llm1PilotCandidateManifestV2: false,
+      llm1PilotCandidateManifestV3: false,
       groupedVariantDetail: false,
       groupedInterpretation: false,
+      llm1PilotApprovedPayloads: false,
+      groupedInterpretationRawResponses: false,
+      groupedInterpretationCallAudit: false,
+      llm1PilotPromptSnapshot: false,
+      llm1PilotResponseSchemaSnapshot: false,
       individualInterpretation: false,
       interpretationNormalization: false,
       globalInterpretation: false,
@@ -3173,6 +3402,7 @@ function App() {
       groupedPayloads: Boolean(ready.groupedPayloads),
       groupedPayloadsV4: Boolean(ready.groupedPayloadsV4),
       groupedPayloadsV5: Boolean(ready.groupedPayloadsV5),
+      groupedPayloadsV6: Boolean(ready.groupedPayloadsV6),
       groupEvidencePackets: Boolean(ready.groupEvidencePackets),
       groupEvidenceDigests: Boolean(ready.groupEvidenceDigests),
       groupEvidenceDigestErrors: Boolean(ready.groupEvidenceDigestErrors),
@@ -3181,11 +3411,26 @@ function App() {
       groupCompressionErrors: Boolean(ready.groupCompressionErrors),
       groupCompressionSummary: Boolean(ready.groupCompressionSummary),
       groupPayloadSchemaV5: Boolean(ready.groupPayloadSchemaV5),
+      groupPayloadSchemaV6: Boolean(ready.groupPayloadSchemaV6),
+      targetGeneConsequenceAudit: Boolean(ready.targetGeneConsequenceAudit),
+      alleleSpecificFrequencyAudit: Boolean(ready.alleleSpecificFrequencyAudit),
+      clinvarConditionConflictAudit: Boolean(ready.clinvarConditionConflictAudit),
+      groupTokenBudgetAuditV6: Boolean(ready.groupTokenBudgetAuditV6),
+      groupPayloadV6Summary: Boolean(ready.groupPayloadV6Summary),
+      groupPayloadV6Errors: Boolean(ready.groupPayloadV6Errors),
+      persistentMechanismRegistry: Boolean(ready.persistentMechanismRegistry),
+      persistentGwasRegistry: Boolean(ready.persistentGwasRegistry),
       mechanismRegistry: Boolean(ready.mechanismRegistry),
       llm1PilotManifest: Boolean(ready.llm1PilotManifest),
       llm1PilotCandidateManifestV2: Boolean(ready.llm1PilotCandidateManifestV2),
+      llm1PilotCandidateManifestV3: Boolean(ready.llm1PilotCandidateManifestV3),
       groupedVariantDetail: Boolean(ready.groupedVariantDetail),
       groupedInterpretation: Boolean(ready.groupedInterpretation),
+      llm1PilotApprovedPayloads: Boolean(ready.llm1PilotApprovedPayloads),
+      groupedInterpretationRawResponses: Boolean(ready.groupedInterpretationRawResponses),
+      groupedInterpretationCallAudit: Boolean(ready.groupedInterpretationCallAudit),
+      llm1PilotPromptSnapshot: Boolean(ready.llm1PilotPromptSnapshot),
+      llm1PilotResponseSchemaSnapshot: Boolean(ready.llm1PilotResponseSchemaSnapshot),
       individualInterpretation: Boolean(ready.individualInterpretation),
       interpretationNormalization: Boolean(ready.interpretationNormalization),
       globalInterpretation: Boolean(ready.globalInterpretation),
@@ -3601,6 +3846,7 @@ function App() {
             groupedPayloads: false,
             groupedPayloadsV4: false,
             groupedPayloadsV5: false,
+            groupedPayloadsV6: false,
             groupEvidencePackets: false,
             groupEvidenceDigests: false,
             groupEvidenceDigestErrors: false,
@@ -3609,11 +3855,26 @@ function App() {
             groupCompressionErrors: false,
             groupCompressionSummary: false,
             groupPayloadSchemaV5: false,
+            groupPayloadSchemaV6: false,
+            targetGeneConsequenceAudit: false,
+            alleleSpecificFrequencyAudit: false,
+            clinvarConditionConflictAudit: false,
+            groupTokenBudgetAuditV6: false,
+            groupPayloadV6Summary: false,
+            groupPayloadV6Errors: false,
+            persistentMechanismRegistry: false,
+            persistentGwasRegistry: false,
             mechanismRegistry: false,
             llm1PilotManifest: false,
             llm1PilotCandidateManifestV2: false,
+            llm1PilotCandidateManifestV3: false,
             groupedVariantDetail: false,
             groupedInterpretation: false,
+            llm1PilotApprovedPayloads: false,
+            groupedInterpretationRawResponses: false,
+            groupedInterpretationCallAudit: false,
+            llm1PilotPromptSnapshot: false,
+            llm1PilotResponseSchemaSnapshot: false,
             individualInterpretation: false,
             interpretationNormalization: false,
             globalInterpretation: false,
@@ -4102,6 +4363,7 @@ function App() {
       groupedPayloads: false,
       groupedPayloadsV4: false,
       groupedPayloadsV5: false,
+      groupedPayloadsV6: false,
       groupEvidencePackets: false,
       groupEvidenceDigests: false,
       groupEvidenceDigestErrors: false,
@@ -4110,11 +4372,26 @@ function App() {
       groupCompressionErrors: false,
       groupCompressionSummary: false,
       groupPayloadSchemaV5: false,
+      groupPayloadSchemaV6: false,
+      targetGeneConsequenceAudit: false,
+      alleleSpecificFrequencyAudit: false,
+      clinvarConditionConflictAudit: false,
+      groupTokenBudgetAuditV6: false,
+      groupPayloadV6Summary: false,
+      groupPayloadV6Errors: false,
+      persistentMechanismRegistry: false,
+      persistentGwasRegistry: false,
       mechanismRegistry: false,
       llm1PilotManifest: false,
       llm1PilotCandidateManifestV2: false,
+      llm1PilotCandidateManifestV3: false,
       groupedVariantDetail: false,
       groupedInterpretation: false,
+      llm1PilotApprovedPayloads: false,
+      groupedInterpretationRawResponses: false,
+      groupedInterpretationCallAudit: false,
+      llm1PilotPromptSnapshot: false,
+      llm1PilotResponseSchemaSnapshot: false,
       individualInterpretation: false,
       interpretationNormalization: false,
       globalInterpretation: false,

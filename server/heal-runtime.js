@@ -45,6 +45,7 @@ export const RUNTIME_PATHS = {
   references: resolveEnvPath("HEAL_REFERENCE_DATA_ROOT", dataPath("references")),
   jobs: resolveEnvPath("HEAL_JOB_ROOT", dataPath("jobs")),
   enrichmentCache: resolveEnvPath("HEAL_ENRICHMENT_CACHE_ROOT", dataPath("enrichment-cache")),
+  canonCuration: resolveEnvPath("HEAL_CANON_CURATION_ROOT", dataPath("canon", "curation")),
 };
 
 export const SERVICE_SCRIPTS = {
@@ -61,6 +62,7 @@ export const SERVICE_SCRIPTS = {
   evidenceRefinement: serviceScript("heal-evidence-refinement", "refine_multisource_v2.py"),
   groupedPrep: serviceScript("heal-grouped-interpretation-prep", "prepare_gene_module_group_payloads.py"),
   groupedPayloadV5: serviceScript("heal-llm1-payload-v5", "build_llm1_payload_v5.py"),
+  groupedPayloadV6: serviceScript("heal-llm1-payload-v6", "build_llm1_payload_v6.py"),
   evidenceDigest: serviceScript("heal-evidence-digest", "digest_public_evidence.py"),
   groupedInterpretation: serviceScript("heal-grouped-individual-interpretation", "interpret_gene_module_groups.py"),
   individualInterpretation: serviceScript("heal-individual-interpretation", "interpret_observed_variants.py"),

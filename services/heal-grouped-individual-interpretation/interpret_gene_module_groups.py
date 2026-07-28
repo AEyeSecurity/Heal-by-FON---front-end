@@ -27,6 +27,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROMPT_PATH = SCRIPT_DIR / "prompt_grouped_llm1.md"
 PROMPT_V4_PATH = SCRIPT_DIR / "prompt_grouped_llm1_v4.md"
 PROMPT_V5_PATH = SCRIPT_DIR / "prompt_grouped_llm1_v5.md"
+PROMPT_V6_PATH = SCRIPT_DIR / "prompt_grouped_llm1_v6.md"
 SCHEMA_PATH = SCRIPT_DIR / "grouped_gene_module_interpretation_schema.json"
 SCHEMA_V5_PATH = SCRIPT_DIR / "grouped_gene_module_interpretation_v5_schema.json"
 
@@ -155,10 +156,11 @@ def v5_evidence_ids(payload: dict) -> set[str]:
 
 
 def validate_v5_payload(payload: dict, *, dry_run: bool) -> None:
-    if payload.get("payload_schema_version") != "llm1_group_payload_v5":
+    version = payload.get("payload_schema_version")
+    if version not in {"llm1_group_payload_v5", "llm1_group_payload_v6"}:
         return
     if not dry_run and payload.get("execution_mode") != "pilot":
-        raise ValueError("V5 LLM execution requires execution_mode=pilot.")
+        raise ValueError("Bounded LLM1 execution requires execution_mode=pilot.")
     if int(payload.get("compression_metadata", {}).get("estimated_tokens", 0) or 0) > 25_000:
         raise ValueError("V5 payload exceeds the 25,000 token hard limit.")
     gates = payload.get("gates") or {}
@@ -170,6 +172,23 @@ def validate_v5_payload(payload: dict, *, dry_run: bool) -> None:
         raise ValueError("V5 payload was not approved for the controlled LLM1 pilot.")
     if not payload.get("evidence_coverage", {}).get("reconciled"):
         raise ValueError("V5 evidence coverage is not reconciled.")
+    if version == "llm1_group_payload_v6":
+        for focus in payload.get("focus_variant_evidence") or []:
+            target_status = clean_str((focus.get("target_gene_annotation") or {}).get("status"))
+            if target_status not in {"confirmed", "alternative_transcript"}:
+                raise ValueError(f"V6 focus variant lacks target-gene confirmation: {focus.get('variant_ref', '')}")
+            local_concordance = clean_str((focus.get("target_gene_annotation") or {}).get("local_consequence_concordance"))
+            if local_concordance not in {"concordant", "splice_window_context"}:
+                raise ValueError(f"V6 focus variant lacks local/transcript consequence concordance: {focus.get('variant_ref', '')}")
+            frequency_relation = clean_str((focus.get("population") or {}).get("frequency_relation"))
+            if frequency_relation not in {"observed_alt", "not_available_for_observed_alt"}:
+                raise ValueError(f"V6 focus variant has ambiguous allele-frequency semantics: {focus.get('variant_ref', '')}")
+        if not dry_run and not gates.get("target_gene_annotation_ready"):
+            raise ValueError("V6 target-gene annotation gate did not pass.")
+        if not dry_run and not gates.get("allele_specific_frequency_ready"):
+            raise ValueError("V6 allele-specific frequency gate did not pass.")
+        if not dry_run and not gates.get("gwas_relevance_ready"):
+            raise ValueError("V6 GWAS relevance gate did not pass.")
 
 
 def validate_v5_interpretation(item: dict, payload: dict) -> None:
@@ -212,7 +231,7 @@ def call_openai_structured(
     system_prompt: str,
     schema: dict,
     timeout_seconds: int,
-) -> dict:
+) -> tuple[dict, dict]:
     body = {
         "model": model,
         "input": [
@@ -250,7 +269,12 @@ def call_openai_structured(
         detail = error.read().decode("utf-8", errors="replace")[:1200]
         raise RuntimeError(f"OpenAI API http_{error.code}: {detail}") from error
     text = output_text_from_response(parsed)
-    return json.loads(text)
+    return json.loads(text), {
+        "response_id": clean_str(parsed.get("id")),
+        "usage": parsed.get("usage") or {},
+        "raw_output_text": text,
+        "raw_response": parsed,
+    }
 
 
 def call_openai_with_retries(
@@ -262,11 +286,12 @@ def call_openai_with_retries(
     schema: dict,
     timeout_seconds: int,
     group_attempts: int,
-) -> dict:
+) -> tuple[dict, dict]:
     errors = []
+    started = time.perf_counter()
     for attempt in range(1, group_attempts + 1):
         try:
-            return call_openai_structured(
+            result, metadata = call_openai_structured(
                 payload,
                 api_key=api_key,
                 model=model,
@@ -274,6 +299,8 @@ def call_openai_with_retries(
                 schema=schema,
                 timeout_seconds=timeout_seconds,
             )
+            metadata.update({"attempt_count": attempt, "elapsed_seconds": round(time.perf_counter() - started, 3)})
+            return result, metadata
         except Exception as error:  # noqa: BLE001
             errors.append(str(error))
             if attempt < group_attempts:
@@ -282,7 +309,7 @@ def call_openai_with_retries(
 
 
 def dry_run_interpretation(payload: dict) -> dict:
-    if payload.get("payload_schema_version") == "llm1_group_payload_v5":
+    if payload.get("payload_schema_version") in {"llm1_group_payload_v5", "llm1_group_payload_v6"}:
         focus = payload.get("focus_variant_evidence") or []
         context = payload.get("group_context") or {}
         conflict = bool(payload.get("clinical_evidence_summary", {}).get("conflicting_variant_keys"))
@@ -295,8 +322,8 @@ def dry_run_interpretation(payload: dict) -> dict:
             "focus_variant_count": len(focus), "interpretation_scope": "conflicting_group_review_needed" if conflict else "limited_group_signal",
             "interpretation_one_sentence_en": "Dry-run placeholder; no model call was made.",
             "interpretation_one_sentence_es": "Placeholder dry-run; no se realizo una llamada al modelo.",
-            "interpretation_long_en": "The bounded v5 payload and its evidence references were validated only.",
-            "interpretation_long_es": "Solo se validaron el payload v5 acotado y sus referencias de evidencia.",
+            "interpretation_long_en": "The bounded payload and its evidence references were validated only.",
+            "interpretation_long_es": "Solo se validaron el payload acotado y sus referencias de evidencia.",
             "technical_interpretation_en": "No biological interpretation was generated.",
             "technical_interpretation_es": "No se genero interpretacion biologica.",
             "final_confidence_level": "Abstain", "confidence_rationale_en": "Dry-run mode.",
@@ -387,7 +414,12 @@ def process(payload: dict) -> dict:
     if len(versions) > 1:
         raise ValueError("Grouped interpretation input cannot mix payload schema versions.")
     version = next(iter(versions), "")
-    if version == "llm1_group_payload_v5":
+    if version == "llm1_group_payload_v6":
+        schema_path = SCHEMA_V5_PATH
+        prompt_path = PROMPT_V6_PATH
+        if not dry_run:
+            max_workers = min(max_workers, 2)
+    elif version == "llm1_group_payload_v5":
         schema_path = SCHEMA_V5_PATH
         prompt_path = PROMPT_V5_PATH
     elif version == "llm1_group_payload_v4":
@@ -405,7 +437,13 @@ def process(payload: dict) -> dict:
     interpretations_jsonl = output_dir / "gene_module_group_interpretations.jsonl"
     interpretations_csv = output_dir / "gene_module_group_interpretations.csv"
     errors_csv = output_dir / "gene_module_group_interpretation_errors.csv"
+    raw_responses_jsonl = output_dir / "gene_module_group_interpretation_raw_responses.jsonl"
+    call_audit_csv = output_dir / "gene_module_group_interpretation_call_audit.csv"
+    prompt_snapshot = output_dir / "llm1_pilot_prompt_snapshot.md"
+    schema_snapshot = output_dir / "llm1_pilot_response_schema_snapshot.json"
     summary_json = output_dir / "gene_module_group_interpretation_summary.json"
+    prompt_snapshot.write_text(system_prompt, encoding="utf-8")
+    schema_snapshot.write_text(json.dumps(schema, ensure_ascii=False, indent=2), encoding="utf-8")
     write_csv(
         interpretations_csv,
         [],
@@ -429,13 +467,21 @@ def process(payload: dict) -> dict:
 
     interpretation_results: dict[int, dict] = {}
     error_results: dict[int, dict] = {}
+    call_results: dict[int, dict] = {}
 
     def write_partial_outputs(completed_groups: int, current_item: dict | None = None) -> None:
         interpretations = [interpretation_results[index] for index in sorted(interpretation_results)]
         errors = [error_results[index] for index in sorted(error_results)]
+        calls = [call_results[index] for index in sorted(call_results)]
         write_jsonl(interpretations_jsonl, interpretations)
+        write_jsonl(raw_responses_jsonl, calls)
         write_csv(interpretations_csv, interpretations, OUTPUT_FIELDS + ["model", "dry_run", "source_group_id", "variant_detail_artifact"])
         write_csv(errors_csv, errors, ["group_id", "gene", "module_id", "error"])
+        write_csv(
+            call_audit_csv,
+            calls,
+            ["group_id", "model", "status", "response_id", "attempt_count", "elapsed_seconds", "input_tokens", "output_tokens", "total_tokens", "error"],
+        )
         write_progress(
             progress_json,
             {
@@ -460,13 +506,21 @@ def process(payload: dict) -> dict:
             },
         )
 
-    def interpret_one(index: int, item: dict) -> tuple[int, dict | None, dict | None]:
+    def interpret_one(index: int, item: dict) -> tuple[int, dict | None, dict | None, dict]:
+        call_started_at = None
+        call_metadata = {
+            "group_id": item.get("group_id", ""), "model": model, "status": "dry_run" if dry_run else "running",
+            "response_id": "", "attempt_count": 0, "elapsed_seconds": 0, "input_tokens": 0,
+            "output_tokens": 0, "total_tokens": 0, "error": "", "raw_output_text": "",
+            "raw_response": {},
+        }
         try:
             validate_v5_payload(item, dry_run=dry_run)
             if dry_run:
                 parsed = dry_run_interpretation(item)
             else:
-                parsed = call_openai_with_retries(
+                call_started_at = time.perf_counter()
+                parsed, response_metadata = call_openai_with_retries(
                     item,
                     api_key=api_key,
                     model=model,
@@ -475,25 +529,44 @@ def process(payload: dict) -> dict:
                     timeout_seconds=timeout_seconds,
                     group_attempts=group_attempts,
                 )
-            if item.get("payload_schema_version") == "llm1_group_payload_v5":
+                usage = response_metadata.get("usage") or {}
+                call_metadata.update({
+                    "status": "success",
+                    "response_id": response_metadata.get("response_id", ""),
+                    "attempt_count": response_metadata.get("attempt_count", 0),
+                    "elapsed_seconds": response_metadata.get("elapsed_seconds", 0),
+                    "input_tokens": usage.get("input_tokens", 0),
+                    "output_tokens": usage.get("output_tokens", 0),
+                    "total_tokens": usage.get("total_tokens", 0),
+                    "raw_output_text": response_metadata.get("raw_output_text", ""),
+                    "raw_response": response_metadata.get("raw_response") or {},
+                })
+            if item.get("payload_schema_version") in {"llm1_group_payload_v5", "llm1_group_payload_v6"}:
                 validate_v5_interpretation(parsed, item)
-            return index, normalize_output(parsed, item, model, dry_run), None
+            return index, normalize_output(parsed, item, model, dry_run), None, call_metadata
         except Exception as error:  # noqa: BLE001
+            call_metadata.update({"status": "failed", "error": str(error)})
+            if call_started_at is not None:
+                call_metadata.update({
+                    "attempt_count": group_attempts,
+                    "elapsed_seconds": round(time.perf_counter() - call_started_at, 3),
+                })
             return index, None, {
                 "group_id": item.get("group_id", ""),
                 "gene": item.get("gene", ""),
                 "module_id": item.get("module_id", ""),
                 "error": str(error),
-            }
+            }, call_metadata
 
     completed_count = 0
     if dry_run or max_workers == 1:
         for index, item in enumerate(payloads, start=1):
-            result_index, interpretation, error = interpret_one(index, item)
+            result_index, interpretation, error, call_metadata = interpret_one(index, item)
             if interpretation:
                 interpretation_results[result_index] = interpretation
             if error:
                 error_results[result_index] = error
+            call_results[result_index] = call_metadata
             completed_count += 1
             write_partial_outputs(completed_count, item)
             if not dry_run:
@@ -503,19 +576,27 @@ def process(payload: dict) -> dict:
             future_to_item = {executor.submit(interpret_one, index, item): item for index, item in enumerate(payloads, start=1)}
             for future in concurrent.futures.as_completed(future_to_item):
                 item = future_to_item[future]
-                result_index, interpretation, error = future.result()
+                result_index, interpretation, error, call_metadata = future.result()
                 if interpretation:
                     interpretation_results[result_index] = interpretation
                 if error:
                     error_results[result_index] = error
+                call_results[result_index] = call_metadata
                 completed_count += 1
                 write_partial_outputs(completed_count, item)
 
     interpretations = [interpretation_results[index] for index in sorted(interpretation_results)]
     errors = [error_results[index] for index in sorted(error_results)]
+    calls = [call_results[index] for index in sorted(call_results)]
     write_jsonl(interpretations_jsonl, interpretations)
+    write_jsonl(raw_responses_jsonl, calls)
     write_csv(interpretations_csv, interpretations, OUTPUT_FIELDS + ["model", "dry_run", "source_group_id", "variant_detail_artifact"])
     write_csv(errors_csv, errors, ["group_id", "gene", "module_id", "error"])
+    write_csv(
+        call_audit_csv,
+        calls,
+        ["group_id", "model", "status", "response_id", "attempt_count", "elapsed_seconds", "input_tokens", "output_tokens", "total_tokens", "error"],
+    )
 
     status = "valid" if interpretations and not errors else "warning" if interpretations else "invalid"
     summary = {
@@ -548,6 +629,10 @@ def process(payload: dict) -> dict:
             "groupInterpretationErrorsCsv": str(errors_csv),
             "groupInterpretationProgressJson": str(progress_json),
             "groupInterpretationSummaryJson": str(summary_json),
+            "groupInterpretationRawResponsesJsonl": str(raw_responses_jsonl),
+            "groupInterpretationCallAuditCsv": str(call_audit_csv),
+            "llm1PilotPromptSnapshotMd": str(prompt_snapshot),
+            "llm1PilotResponseSchemaSnapshotJson": str(schema_snapshot),
         },
         "timestamps": {"startedAt": started_at, "completedAt": utc_now()},
     }
