@@ -36,6 +36,7 @@ $env:HEAL_LOG_ROOT = $logRoot
 $env:HEAL_BACKUP_ROOT = Join-Path $healHome "backups"
 $env:HEAL_UPLOAD_ROOT = Join-Path $dataRoot "uploads"
 $env:HEAL_CANON_ROOT = Join-Path $dataRoot "canon"
+$env:HEAL_CANON_CURATION_ROOT = Join-Path $env:HEAL_CANON_ROOT "curation"
 $env:HEAL_RSID_RESOLUTION_ROOT = Join-Path $dataRoot "legacy-rsid"
 $env:HEAL_RUN_ROOT = Join-Path $dataRoot "runs"
 $env:HEAL_JOB_ROOT = Join-Path $dataRoot "jobs"
@@ -65,8 +66,8 @@ if ([string]::IsNullOrWhiteSpace($env:HEAL_V2_LLM1_PILOT_ENABLED)) {
 if ([string]::IsNullOrWhiteSpace($env:HEAL_V2_EVIDENCE_DIGEST_ENABLED)) {
     $env:HEAL_V2_EVIDENCE_DIGEST_ENABLED = "false"
 }
-$env:HEAL_MECHANISM_REGISTRY_PATH = Join-Path $configRoot "mechanism_registry_v1.csv"
-$env:HEAL_GWAS_TRAIT_MODULE_MAP_PATH = Join-Path $configRoot "gwas_trait_module_relevance_v1.csv"
+$env:HEAL_MECHANISM_REGISTRY_PATH = Join-Path $env:HEAL_CANON_CURATION_ROOT "mechanism_registry_v1.csv"
+$env:HEAL_GWAS_TRAIT_MODULE_MAP_PATH = Join-Path $env:HEAL_CANON_CURATION_ROOT "gwas_module_relevance_registry_v1.csv"
 # V2 QA remains conservative but allows the known test VCF's VEP coverage.
 $env:HEAL_V2_MIN_VEP_COVERAGE = "0.90"
 
@@ -86,7 +87,7 @@ foreach ($name in @(
     [Environment]::SetEnvironmentVariable($name, "", "Process")
 }
 
-foreach ($directory in @($dataRoot, $logRoot, $env:HEAL_UPLOAD_ROOT, $env:HEAL_CANON_ROOT, $env:HEAL_RSID_RESOLUTION_ROOT, $env:HEAL_RUN_ROOT, $env:HEAL_JOB_ROOT, $env:HEAL_ENRICHMENT_CACHE_ROOT, $env:HEAL_REFERENCE_DATA_ROOT)) {
+foreach ($directory in @($dataRoot, $logRoot, $env:HEAL_UPLOAD_ROOT, $env:HEAL_CANON_ROOT, $env:HEAL_CANON_CURATION_ROOT, $env:HEAL_RSID_RESOLUTION_ROOT, $env:HEAL_RUN_ROOT, $env:HEAL_JOB_ROOT, $env:HEAL_ENRICHMENT_CACHE_ROOT, $env:HEAL_REFERENCE_DATA_ROOT)) {
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
 }
 
