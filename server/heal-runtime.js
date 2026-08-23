@@ -38,6 +38,7 @@ export const RUNTIME_PATHS = {
   evidenceRefinement: resolveEnvPath("HEAL_EVIDENCE_REFINEMENT_ROOT", dataPath("runs")),
   groupedPrep: resolveEnvPath("HEAL_GROUPED_INTERPRETATION_PREP_ROOT", dataPath("runs")),
   groupedInterpretation: resolveEnvPath("HEAL_GROUPED_INDIVIDUAL_INTERPRETATION_ROOT", dataPath("runs")),
+  groupedPrototype: resolveEnvPath("HEAL_GROUPED_PROTOTYPE_ROOT", dataPath("runs")),
   individualInterpretation: resolveEnvPath("HEAL_INDIVIDUAL_INTERPRETATION_ROOT", dataPath("runs")),
   interpretationNormalization: resolveEnvPath("HEAL_INTERPRETATION_NORMALIZATION_ROOT", dataPath("runs")),
   globalInterpretation: resolveEnvPath("HEAL_GLOBAL_INTERPRETATION_ROOT", dataPath("runs")),
@@ -46,6 +47,7 @@ export const RUNTIME_PATHS = {
   jobs: resolveEnvPath("HEAL_JOB_ROOT", dataPath("jobs")),
   enrichmentCache: resolveEnvPath("HEAL_ENRICHMENT_CACHE_ROOT", dataPath("enrichment-cache")),
   canonCuration: resolveEnvPath("HEAL_CANON_CURATION_ROOT", dataPath("canon", "curation")),
+  tier1CurationV2: resolveEnvPath("HEAL_TIER1_CURATION_V2_ROOT", dataPath("curation-candidates", "tier1-v2")),
 };
 
 export const SERVICE_SCRIPTS = {
@@ -63,10 +65,14 @@ export const SERVICE_SCRIPTS = {
   groupedPrep: serviceScript("heal-grouped-interpretation-prep", "prepare_gene_module_group_payloads.py"),
   groupedPayloadV5: serviceScript("heal-llm1-payload-v5", "build_llm1_payload_v5.py"),
   groupedPayloadV6: serviceScript("heal-llm1-payload-v6", "build_llm1_payload_v6.py"),
+  groupedPayloadV7: serviceScript("heal-llm1-payload-v7", "build_llm1_payload_v7.py"),
   evidenceDigest: serviceScript("heal-evidence-digest", "digest_public_evidence.py"),
   groupedInterpretation: serviceScript("heal-grouped-individual-interpretation", "interpret_gene_module_groups.py"),
+  groupedPrototype: serviceScript("heal-grouped-prototype", "run_grouped_prototype.py"),
   individualInterpretation: serviceScript("heal-individual-interpretation", "interpret_observed_variants.py"),
   interpretationNormalization: serviceScript("heal-interpretation-normalization", "normalize_individual_interpretations.py"),
   globalInterpretation: serviceScript("heal-global-interpretation", "interpret_global_profile.py"),
   finalReport: serviceScript("heal-final-report", "render_final_report.py"),
+  tier1CurationV2Evidence: serviceScript("heal-tier1-curation-v2", "build_evidence_packets.py"),
+  tier1CurationV2Runner: serviceScript("heal-tier1-curation-v2", "run_curation_v2.py"),
 };

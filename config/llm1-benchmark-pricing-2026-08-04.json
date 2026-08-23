@@ -1,0 +1,12 @@
+{
+  "captured_at": "2026-08-04T00:00:00-03:00",
+  "source": "https://developers.openai.com/api/docs/pricing",
+  "service_tier": "standard",
+  "context_band": "short_context_under_272k_input_tokens",
+  "currency": "USD",
+  "models": {
+    "gpt-5-mini": {"input_per_million_usd": 0.25, "output_per_million_usd": 2.00},
+    "gpt-5.6-luna": {"input_per_million_usd": 0.20, "output_per_million_usd": 1.20},
+    "gpt-5.6-terra": {"input_per_million_usd": 2.00, "output_per_million_usd": 12.00}
+  }
+}

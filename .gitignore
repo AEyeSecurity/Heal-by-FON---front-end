@@ -6,5 +6,8 @@ npm-debug.log*
 uploads
 artifacts
 logs
+tmp/
 __pycache__/
 *.pyc
+.codex-artifacts-*/
+output/

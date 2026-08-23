@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://heal.local/schemas/mechanism_curation_v2.schema.json",
+  "title": "HEAL Tier 1 mechanism curation decision v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "group_id", "core_status", "context_usable", "inference_ceiling",
+    "evidence_ids", "source_assessments", "direction_assessment", "decision_reason_codes",
+    "limitations", "confidence", "identity_exact", "module_relation_direct", "expert_review_basis"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "mechanism_curation_v2_decision"},
+    "group_id": {"type": "string"},
+    "core_status": {"type": "string", "enum": ["approved", "approved_with_conflict", "withheld", "rejected"]},
+    "context_usable": {"type": "boolean"},
+    "inference_ceiling": {"type": "string", "enum": ["none", "context_only", "initial_guide_candidate"]},
+    "identity_exact": {"type": "boolean"}, "module_relation_direct": {"type": "boolean"},
+    "expert_review_basis": {
+      "type": "object", "additionalProperties": false,
+      "required": ["strong_evidence", "material_scientific_conflict", "conflict_evidence_ids", "runtime_variant_context_required"],
+      "properties": {
+        "strong_evidence": {"type": "boolean"},
+        "material_scientific_conflict": {"type": "boolean"},
+        "conflict_evidence_ids": {"$ref": "#/$defs/id_list"},
+        "runtime_variant_context_required": {"type": "boolean", "const": true}
+      }
+    },
+    "evidence_ids": {
+      "type": "object", "additionalProperties": false,
+      "required": ["functional", "human", "canonical", "conflict_or_null"],
+      "properties": {
+        "functional": {"$ref": "#/$defs/id_list"}, "human": {"$ref": "#/$defs/id_list"},
+        "canonical": {"$ref": "#/$defs/id_list"}, "conflict_or_null": {"$ref": "#/$defs/id_list"}
+      }
+    },
+    "source_assessments": {
+      "type": "array", "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["evidence_id", "roles", "supports_direction", "human_applicability", "functional_compatibility", "quality"],
+        "properties": {
+          "evidence_id": {"type": "string"},
+          "roles": {"type": "array", "items": {"type": "string", "enum": ["functional", "human", "canonical", "conflict_or_null"]}},
+          "supports_direction": {"type": "string", "enum": ["positive", "negative", "null", "mixed", "not_applicable"]},
+          "human_applicability": {"type": "boolean"}, "functional_compatibility": {"type": "boolean"},
+          "quality": {
+            "type": "object", "additionalProperties": false,
+            "required": ["methodology", "applicability", "independence", "precision_size", "recency"],
+            "properties": {
+              "methodology": {"type": "number", "minimum": 0, "maximum": 100},
+              "applicability": {"type": "number", "minimum": 0, "maximum": 100},
+              "independence": {"type": "number", "minimum": 0, "maximum": 100},
+              "precision_size": {"type": "number", "minimum": 0, "maximum": 100},
+              "recency": {"type": "number", "minimum": 0, "maximum": 100}
+            }
+          }
+        }
+      }
+    },
+    "direction_assessment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["dominant_direction", "support_score", "opposition_score", "margin", "material_conflict"],
+      "properties": {
+        "dominant_direction": {"type": "string", "enum": ["supports_relation", "opposes_relation", "no_dominant_direction", "not_applicable"]},
+        "support_score": {"type": "number", "minimum": 0, "maximum": 100},
+        "opposition_score": {"type": "number", "minimum": 0, "maximum": 100},
+        "margin": {"type": "number", "minimum": 0, "maximum": 100},
+        "material_conflict": {"type": "boolean"}
+      }
+    },
+    "decision_reason_codes": {
+      "type": "array",
+      "items": {"type": "string", "enum": [
+        "authoritative_plus_primary", "two_independent_primaries_one_functional", "human_and_functional_applicable",
+        "insufficient_primary_evidence", "only_authoritative_source", "only_review_evidence", "only_functional_evidence",
+        "only_human_evidence", "identity_unresolved", "module_relation_indirect", "conflict_margin_below_15",
+        "wrong_gene_mapping", "irrelevant_to_module", "material_contradiction", "metadata_insufficient"
+      ]}
+    },
+    "limitations": {"type": "array", "items": {"type": "string"}},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+  },
+  "$defs": {"id_list": {"type": "array", "items": {"type": "string"}}}
+}

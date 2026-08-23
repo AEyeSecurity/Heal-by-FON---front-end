@@ -159,7 +159,13 @@ def compact_variant(row: dict, language_mode: str) -> dict:
         "notes": choose_text(row, "technical_notes", language_mode),
         "family_notes": choose_text(row, "family_notes", language_mode),
         "recommended_next_review_step": choose_text(row, "recommended_next_review_step", language_mode),
+        "inference_mode": ascii_text(row.get("inference_mode")),
+        "review_priority": ascii_text(row.get("review_priority")),
+        "review_reason_codes": parse_json_list(row.get("review_reason_codes")),
+        "myth_correction_required": truthy(row.get("myth_correction_required")),
         "requires_professional_review": truthy(row.get("requires_professional_review")),
+        "interpretation_provenance": ascii_text(row.get("interpretation_provenance")),
+        "disclaimer_required": truthy(row.get("disclaimer_required")),
         "gene_or_locus_ambiguity_flag": truthy(row.get("gene_or_locus_ambiguity_flag")),
         "evidence_conflict_flag": truthy(row.get("evidence_conflict_flag")),
         "evidence_used": parse_json_list(row.get("evidence_used")),
@@ -173,16 +179,18 @@ def unique_sorted(values) -> list[str]:
 
 def confidence_distribution(rows: list[dict]) -> dict:
     counts = Counter(ascii_text(row.get("final_confidence_level")) for row in rows)
-    return {label: int(counts.get(label, 0)) for label in ["High", "Moderate", "Low", "Conflicting"]}
+    return {label: int(counts.get(label, 0)) for label in ["High", "Moderate", "Low", "Conflicting", "Abstain"]}
 
 
 def group_confidence(rows: list[dict]) -> dict:
     counts = Counter(ascii_text(row.get("final_confidence_level")) for row in rows)
-    return {label: int(counts.get(label, 0)) for label in ["High", "Moderate", "Low", "Conflicting"] if counts.get(label)}
+    return {label: int(counts.get(label, 0)) for label in ["High", "Moderate", "Low", "Conflicting", "Abstain"] if counts.get(label)}
 
 
 def dominant_confidence(rows: list[dict]) -> str:
     counts = group_confidence(rows)
+    if counts.get("Abstain", 0) >= len(rows):
+        return "limited"
     if counts.get("Conflicting"):
         return "Conflicting"
     if counts.get("High", 0) >= 2 or (counts.get("High", 0) >= 1 and counts.get("Moderate", 0) >= 2):
@@ -198,7 +206,7 @@ def axis_strength(rows: list[dict]) -> str:
     counts = group_confidence(rows)
     if counts.get("Conflicting"):
         return "review_with_caution"
-    if unique_rsids >= 5 and unique_genes >= 4 and counts.get("Low", 0) < len(rows):
+    if unique_rsids >= 5 and unique_genes >= 4 and counts.get("Low", 0) + counts.get("Abstain", 0) < len(rows):
         return "strong"
     if unique_rsids >= 2 and unique_genes >= 2:
         return "moderate"
@@ -434,6 +442,9 @@ def build_deterministic_summary(rows: list[dict], ontology: dict) -> dict:
         "conflicting_variants": conflicting_variants,
         "professional_review_variants": professional_review_variants,
         "gene_locus_ambiguities": gene_locus_ambiguities,
+        "llm_generated_guidance_count": sum(1 for row in rows if ascii_text(row.get("interpretation_provenance")) == "llm_generated"),
+        "disclaimer_required": any(truthy(row.get("disclaimer_required")) for row in rows),
+        "myth_correction_count": sum(1 for row in rows if truthy(row.get("myth_correction_required"))),
     }
 
 
@@ -442,6 +453,11 @@ def confidence_rank(label: str) -> int:
 
 
 def review_priority_for_row(row: dict) -> str:
+    structured_priority = ascii_text(row.get("review_priority"))
+    if structured_priority in {"urgent", "recommended"}:
+        return "high"
+    if structured_priority == "optional_contextual":
+        return "low"
     confidence = ascii_text(row.get("final_confidence_level"))
     if confidence == "Conflicting" or truthy(row.get("evidence_conflict_flag")):
         return "high"
@@ -943,6 +959,12 @@ def process(payload: dict) -> dict:
         "deterministic_summary": deterministic_summary,
         "canonical_analysis_frame": canonical_analysis_frame,
         "variant_interpretations": variant_interpretations,
+        "interpretation_notice": {
+            "llm_generated_guidance_present": deterministic_summary["llm_generated_guidance_count"] > 0,
+            "disclaimer_required": deterministic_summary["disclaimer_required"],
+            "myth_correction_count": deterministic_summary["myth_correction_count"],
+            "rendering_instruction": "Disclose bounded LLM guidance and preserve structured myth-correction flags.",
+        },
     }
     prompt_text = PROMPT_PATH.read_text(encoding="utf-8")
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -1071,6 +1093,10 @@ def process(payload: dict) -> dict:
         **audit_metadata,
         **(report.get("audit_metadata") or {}),
     }
+    report.setdefault("metadata", {})["llm_generated_guidance_present"] = deterministic_summary["llm_generated_guidance_count"] > 0
+    report["metadata"]["disclaimer_required"] = deterministic_summary["disclaimer_required"]
+    report["metadata"]["llm_generated_guidance_count"] = deterministic_summary["llm_generated_guidance_count"]
+    report["metadata"]["myth_correction_count"] = deterministic_summary["myth_correction_count"]
     if "structured_report" not in report:
         report["structured_report"] = build_structured_report(report, canonical_analysis_frame)
     if "canonical_analysis_frame" not in report:
@@ -1104,6 +1130,10 @@ def process(payload: dict) -> dict:
         "base_language_mode": base_language_mode,
         "audience_mode": audience_mode,
         "overall_readiness": report.get("final_recommendation", {}).get("overall_readiness", ""),
+        "llm_generated_guidance_present": deterministic_summary["llm_generated_guidance_count"] > 0,
+        "disclaimer_required": deterministic_summary["disclaimer_required"],
+        "llm_generated_guidance_count": deterministic_summary["llm_generated_guidance_count"],
+        "myth_correction_count": deterministic_summary["myth_correction_count"],
         "audit_metadata": {
             **(report.get("audit_metadata") or audit_metadata),
             "global_interpretation_json_hash": global_interpretation_file_hash,

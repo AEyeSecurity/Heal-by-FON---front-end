@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HEAL LLM1 Prototype Envelope V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "payload_v7", "scientific_decision", "coverage_status", "readiness", "allowlists", "prototype_hashes"],
+  "properties": {
+    "schema_version": {"const": "llm1_prototype_envelope_v1"},
+    "payload_v7": {"type": "object"},
+    "scientific_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["group_id", "core_status", "prototype_inference_ceiling", "dominant_direction", "material_conflict", "limitations"],
+      "properties": {
+        "group_id": {"type": "string"},
+        "core_status": {"enum": ["approved", "approved_with_conflict", "withheld", "rejected"]},
+        "prototype_inference_ceiling": {"enum": ["none", "context_only", "initial_guide_candidate"]},
+        "dominant_direction": {"type": "string"},
+        "material_conflict": {"type": "boolean"},
+        "limitations": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "evidence_records": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "coverage_status": {"const": "covered_by_prototype_snapshot"},
+    "readiness": {
+      "type": "object", "additionalProperties": false,
+      "required": ["prototype_readiness", "formal_validation_readiness"],
+      "properties": {
+        "prototype_readiness": {"const": "prototype_candidate"},
+        "formal_validation_readiness": {"const": "pending_new_unseen_holdout"}
+      }
+    },
+    "allowlists": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evidence_ids", "variant_refs", "focus_variant_refs"],
+      "properties": {
+        "evidence_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "variant_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "focus_variant_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+    "prototype_hashes": {
+      "type": "object", "additionalProperties": false,
+      "required": ["candidate_manifest", "snapshot", "payload"],
+      "properties": {
+        "candidate_manifest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "snapshot": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "payload": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    }
+  }
+}

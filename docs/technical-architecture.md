@@ -2,11 +2,15 @@
 
 > **Runtime notice:** this document retains design history. The active path map, data retention, task ownership and shared-dependency boundary are in [runtime-map.md](runtime-map.md). After migration, all active HEAL code and data run from `F:\Heal by FON`.
 
+## Tier 1 scientific curation v2
+
+Mechanism curation is now a VCF-independent candidate pipeline under `services/heal-tier1-curation-v2`. It collects versioned evidence, freezes a 12-group human gold, evaluates generic prompt candidates with two independent `gpt-5.6-sol` passes and conditional adjudication, and only then permits a 105-group candidate run. The active registry cannot be overwritten by this pipeline; publishing requires a reviewed approval manifest and a new immutable snapshot destination. LLM1/Luna remains a downstream consumer after publication and the 180-group preflight.
+
 ## Scope
 
 This repository contains the first production-facing slice of HEAL by FON: a web interface and backend API for receiving large VCF files, validating their integrity, maintaining the current interpretation canon, matching VCF rows against the canon, preparing match outputs for audit, and enriching observed variants with public external sources.
 
-Global clinical/genomic report generation and multi-user accounts are not implemented here yet. The current downstream implementation includes LLM1 individual observed-variant interpretation and a deterministic post-LLM1 QA normalization stage, but deterministic grouping and LLM2 global interpretation remain separate later modules.
+Global clinical/genomic report generation and multi-user accounts are not implemented here yet. Two downstream paths intentionally coexist: the legacy row-level LLM1 -> deterministic normalization -> LLM2 flow, and the production-candidate grouped LLM1 v7 flow. Grouped v7 currently ends in auditable internal cards and does not feed legacy LLM2; a native grouped LLM2 v2 remains a later module.
 
 ## Public Components
 
@@ -251,6 +255,14 @@ Webhook secrets, if added later, must stay outside GitHub and outside Cloudflare
 ## Global Interpretation Layer
 
 The current implementation now includes a first controlled global interpretation layer after LLM1 and deterministic QA normalization.
+
+### Production-candidate grouped LLM1 v7
+
+The grouped path builds v6 compatibility artifacts and a closed v7 contract. V7 adds deterministic input completeness, age band, active tiers, scientific snapshot, client visibility, LLM2 eligibility, operational state, and an exact reason for every excluded group. Its registry universe contains 180 gene-module groups. Sparse VCF absence never establishes homozygous-reference or not-callable status.
+
+Only `eligible` payloads can switch from `preflight` to `internal_auto`. Tier 1 is active, age 0-7 is active, age 8-17 is schema-defined but disabled, and IFNG:T3.5 is an experimental canary. Failures are isolated per group as `technical_failure` or `quarantined`. The UI combines deterministic coverage with valid interpretations in two-layer ES/EN cards; raw responses and call telemetry remain internal.
+
+The old row-level path remains available for control and rollback. Grouped results are not flattened into row-level inputs.
 
 LLM2 receives:
 

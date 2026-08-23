@@ -2,6 +2,8 @@
 
 Local React prototype for uploading a VCF file, validating it, matching it against the current HEAL canon, enriching observed variants, and generating auditable interpretation artifacts.
 
+Tier 1 mechanism recuration v2 is implemented in `services/heal-tier1-curation-v2`. It replaces draft-to-withheld fallback behavior with versioned evidence packets, a human-approved 12-group gold, double-pass GPT-5.6 Sol evaluation, conditional adjudication and manual publication gates. See [the implementation status](docs/tier1-mechanism-curation-v2-implementation-2026-08-05.md).
+
 ## Documentation
 
 - [Technical architecture](docs/technical-architecture.md)
@@ -129,6 +131,8 @@ The original Colab does not generate a final `.docx` or PDF report. Its determin
 The first interpretation module is now separated as LLM1: individual observed-variant interpretation. It consumes `heal_fon_interpretation_enrichment_plus.csv`, prepares a filtered JSON payload per row, and writes `individual_variant_interpretations.csv`. It runs with controlled parallelism, writes progress incrementally, and keeps row-level errors isolated.
 
 After LLM1, a separate deterministic QA normalization stage writes `individual_variant_interpretations_normalized.csv`. This stage normalizes duplicate confidence drift, applies generalized evidence-based confidence caps/raises, shortens overlong one-sentence outputs, and preserves audit columns explaining each adjustment. Deterministic grouping and global LLM2 reporting remain separate later modules.
+
+The production-candidate grouped path is versioned separately. `heal-llm1-payload-v7` preserves v6 benchmark artifacts, materializes the complete 180-group registry, records sparse-VCF absence as `not_observed_callability_unknown`, applies age/tier/curation gates, and creates auditable LLM1 cards. `internal_auto` execution remains blocked until Tier 1 classification and registry concordance pass. This path does not feed the legacy row-level LLM2; a native grouped LLM2 v2 is the next stage after the two authorized VCFs pass internal review.
 
 ## Canon Flow
 

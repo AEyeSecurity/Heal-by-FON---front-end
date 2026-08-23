@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://heal.local/schemas/mechanism_evidence_packet_v2.schema.json",
+  "title": "HEAL Tier 1 mechanism evidence packet v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "group_id", "gene", "approved_aliases", "module", "evidence_cutoff",
+    "retrieved_at", "database_snapshots", "publication_metadata_snapshot", "source_ledger", "selected_evidence_ids", "selection_summary",
+    "packet_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "mechanism_evidence_packet_v2"},
+    "group_id": {"type": "string", "pattern": "^[A-Z0-9-]+:T1\\.[1-6]$"},
+    "gene": {
+      "type": "object", "additionalProperties": false,
+      "required": ["symbol", "full_name"],
+      "properties": {"symbol": {"type": "string"}, "full_name": {"type": "string"}}
+    },
+    "approved_aliases": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "module": {
+      "type": "object", "additionalProperties": false,
+      "required": ["module_id", "name", "purpose", "system_within_module", "explicit_exclusions"],
+      "properties": {
+        "module_id": {"type": "string", "pattern": "^T1\\.[1-6]$"},
+        "name": {"type": "string"}, "purpose": {"type": "string"},
+        "system_within_module": {"type": "string"}, "explicit_exclusions": {"type": "string"}
+      }
+    },
+    "evidence_cutoff": {"const": "2026-07-28"},
+    "retrieved_at": {"type": "string", "format": "date-time"},
+    "database_snapshots": {
+      "type": "array", "items": {"$ref": "#/$defs/database_snapshot"}
+    },
+    "publication_metadata_snapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["database", "retrieved_at", "manifest_sha256", "qa_sha256", "consistency_status"],
+      "properties": {
+        "database": {"const": "PubMed"}, "retrieved_at": {"type": "string", "format": "date-time"},
+        "manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "qa_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "consistency_status": {"const": "consistent"}
+      }
+    },
+    "human_review_policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["proposal_sha256", "valid_evidence_ids", "invalid_evidence_ids"],
+      "properties": {
+        "proposal_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "valid_evidence_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "invalid_evidence_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+      }
+    },
+    "source_ledger": {"type": "array", "items": {"$ref": "#/$defs/source"}},
+    "selected_evidence_ids": {
+      "type": "array", "maxItems": 20, "uniqueItems": true, "items": {"type": "string"}
+    },
+    "selection_summary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ledger_total", "selected_total", "functional_selected", "human_selected", "conflict_or_null_selected", "overflow_total"],
+      "properties": {
+        "ledger_total": {"type": "integer", "minimum": 0}, "selected_total": {"type": "integer", "minimum": 0, "maximum": 20},
+        "functional_selected": {"type": "integer", "minimum": 0, "maximum": 8},
+        "human_selected": {"type": "integer", "minimum": 0, "maximum": 8},
+        "conflict_or_null_selected": {"type": "integer", "minimum": 0, "maximum": 4},
+        "overflow_total": {"type": "integer", "minimum": 0},
+        "review_required_selected": {"type": "integer", "minimum": 0, "maximum": 20},
+        "review_excluded_total": {"type": "integer", "minimum": 0}
+      }
+    },
+    "packet_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  },
+  "$defs": {
+    "database_snapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["database", "version_or_release", "retrieved_at", "url", "response_sha256", "status"],
+      "properties": {
+        "database": {"enum": ["NCBI_Gene", "UniProt", "Reactome"]},
+        "version_or_release": {"type": "string"}, "retrieved_at": {"type": "string", "format": "date-time"},
+        "url": {"type": "string"}, "response_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "status": {"enum": ["available", "not_found", "technical_failure"]}
+      }
+    },
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "evidence_id", "source_kind", "citation_type", "title", "publication_date", "pmid", "doi", "url",
+        "cohort_key", "derived_publication", "role_candidates", "review_discovery_only", "identity_match",
+        "eligibility_status", "exclusion_reasons",
+        "module_relevance_candidate", "abstract_or_summary", "metadata_complete", "retrieval_sha256",
+        "metadata_provenance", "authoritative_record_sha256", "metadata_consistency_status"
+      ],
+      "properties": {
+        "evidence_id": {"type": "string"},
+        "source_kind": {"enum": ["primary_publication", "review", "authoritative_database"]},
+        "citation_type": {"enum": ["journal_article", "clinical_trial", "meta_analysis", "review", "database_record", "unknown"]},
+        "title": {"type": "string"}, "publication_date": {"type": ["string", "null"]},
+        "pmid": {"type": ["string", "null"]}, "doi": {"type": ["string", "null"]}, "url": {"type": "string"},
+        "cohort_key": {"type": ["string", "null"]}, "derived_publication": {"type": "boolean"},
+        "lineage_id": {"type": ["string", "null"]}, "is_version_of_record": {"type": "boolean"},
+        "role_candidates": {
+          "type": "array", "uniqueItems": true,
+          "items": {"enum": ["molecular_function", "functional_study", "human_study", "variant_specific", "conflict_or_null", "canonical_source", "insufficient_metadata"]}
+        },
+        "review_discovery_only": {"type": "boolean"}, "identity_match": {"enum": ["exact", "alias", "ambiguous", "mismatch"]},
+        "review_disposition": {"enum": ["valid", "invalid", "unreviewed"]},
+        "eligibility_status": {"enum": ["eligible", "excluded"]},
+        "exclusion_reasons": {"type": "array", "uniqueItems": true, "items": {"enum": ["publication_after_cutoff", "duplicate_publication", "identity_mismatch", "metadata_unusable", "human_review_invalid"]}},
+        "module_relevance_candidate": {"type": "boolean"}, "abstract_or_summary": {"type": "string"},
+        "metadata_complete": {"type": "boolean"}, "retrieval_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "metadata_provenance": {
+          "type": ["object", "null"], "additionalProperties": false,
+          "required": ["database", "retrieved_at", "url", "response_sha256"],
+          "properties": {
+            "database": {"const": "PubMed"}, "retrieved_at": {"type": "string", "format": "date-time"},
+            "url": {"type": "string"}, "response_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+          }
+        },
+        "authoritative_record_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+        "metadata_consistency_status": {"enum": ["consistent", "not_applicable"]}
+      }
+    }
+  }
+}

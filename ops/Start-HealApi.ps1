@@ -6,8 +6,16 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$healHome = Split-Path -Parent $PSScriptRoot
-$appRoot = Join-Path $healHome "app"
+$scriptParent = Split-Path -Parent $PSScriptRoot
+if (Test-Path -LiteralPath (Join-Path $scriptParent "server\dev-api.js")) {
+    # Repository layout after the C: -> F: migration: <HEAL_HOME>\app\ops.
+    $appRoot = $scriptParent
+    $healHome = Split-Path -Parent $appRoot
+} else {
+    # Backward-compatible packaged layout: <HEAL_HOME>\ops.
+    $healHome = $scriptParent
+    $appRoot = Join-Path $healHome "app"
+}
 $configRoot = Join-Path $healHome "config"
 $dataRoot = Join-Path $healHome "data"
 $logRoot = Join-Path $healHome "logs"
@@ -42,6 +50,9 @@ $env:HEAL_RUN_ROOT = Join-Path $dataRoot "runs"
 $env:HEAL_JOB_ROOT = Join-Path $dataRoot "jobs"
 $env:HEAL_ENRICHMENT_CACHE_ROOT = Join-Path $dataRoot "enrichment-cache"
 $env:HEAL_REFERENCE_DATA_ROOT = Join-Path $dataRoot "references"
+if ([string]::IsNullOrWhiteSpace($env:HEAL_TIER1_CURATION_V2_ROOT)) {
+    $env:HEAL_TIER1_CURATION_V2_ROOT = Join-Path $dataRoot "curation-candidates\tier1-v2"
+}
 $env:HEAL_GRCH38_REFERENCE_FASTA = Join-Path $env:HEAL_REFERENCE_DATA_ROOT "GRCh38\hg38.fa"
 $env:HEAL_GRCH38_REFERENCE_MANIFEST = Join-Path $env:HEAL_REFERENCE_DATA_ROOT "GRCh38\reference_manifest.json"
 $env:HEAL_VCF_CANON_MATCH_ROOT = $env:HEAL_RUN_ROOT
@@ -51,6 +62,7 @@ $env:HEAL_AI_TRIAGE_ROOT = $env:HEAL_RUN_ROOT
 $env:HEAL_VARIANT_ENRICHMENT_ROOT = $env:HEAL_RUN_ROOT
 $env:HEAL_GROUPED_INTERPRETATION_PREP_ROOT = $env:HEAL_RUN_ROOT
 $env:HEAL_GROUPED_INDIVIDUAL_INTERPRETATION_ROOT = $env:HEAL_RUN_ROOT
+$env:HEAL_GROUPED_PROTOTYPE_ROOT = $env:HEAL_RUN_ROOT
 $env:HEAL_INDIVIDUAL_INTERPRETATION_ROOT = $env:HEAL_RUN_ROOT
 $env:HEAL_INTERPRETATION_NORMALIZATION_ROOT = $env:HEAL_RUN_ROOT
 $env:HEAL_GLOBAL_INTERPRETATION_ROOT = $env:HEAL_RUN_ROOT
@@ -62,6 +74,12 @@ $env:HEAL_VARIANT_ENRICHMENT_SCRIPT = Join-Path $appRoot "services\heal-variant-
 $env:HEAL_V2_LLM1_ENABLED = "false"
 if ([string]::IsNullOrWhiteSpace($env:HEAL_V2_LLM1_PILOT_ENABLED)) {
     $env:HEAL_V2_LLM1_PILOT_ENABLED = "false"
+}
+if ([string]::IsNullOrWhiteSpace($env:HEAL_GROUPED_PROTOTYPE_ENABLED)) {
+    $env:HEAL_GROUPED_PROTOTYPE_ENABLED = "false"
+}
+if ([string]::IsNullOrWhiteSpace($env:HEAL_PROTOTYPE_EXECUTION_MODE)) {
+    $env:HEAL_PROTOTYPE_EXECUTION_MODE = "disabled"
 }
 if ([string]::IsNullOrWhiteSpace($env:HEAL_V2_EVIDENCE_DIGEST_ENABLED)) {
     $env:HEAL_V2_EVIDENCE_DIGEST_ENABLED = "false"
@@ -87,7 +105,7 @@ foreach ($name in @(
     [Environment]::SetEnvironmentVariable($name, "", "Process")
 }
 
-foreach ($directory in @($dataRoot, $logRoot, $env:HEAL_UPLOAD_ROOT, $env:HEAL_CANON_ROOT, $env:HEAL_CANON_CURATION_ROOT, $env:HEAL_RSID_RESOLUTION_ROOT, $env:HEAL_RUN_ROOT, $env:HEAL_JOB_ROOT, $env:HEAL_ENRICHMENT_CACHE_ROOT, $env:HEAL_REFERENCE_DATA_ROOT)) {
+foreach ($directory in @($dataRoot, $logRoot, $env:HEAL_UPLOAD_ROOT, $env:HEAL_CANON_ROOT, $env:HEAL_CANON_CURATION_ROOT, $env:HEAL_RSID_RESOLUTION_ROOT, $env:HEAL_RUN_ROOT, $env:HEAL_JOB_ROOT, $env:HEAL_ENRICHMENT_CACHE_ROOT, $env:HEAL_REFERENCE_DATA_ROOT, $env:HEAL_TIER1_CURATION_V2_ROOT)) {
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
 }
 
@@ -116,7 +134,12 @@ if ($ValidateOnly) {
         deploymentSha = $env:HEAL_DEPLOYMENT_SHA
         v2Llm1Enabled = $env:HEAL_V2_LLM1_ENABLED
         v2Llm1PilotEnabled = $env:HEAL_V2_LLM1_PILOT_ENABLED
+        groupedPrototypeEnabled = $env:HEAL_GROUPED_PROTOTYPE_ENABLED
+        groupedPrototypeExecutionMode = $env:HEAL_PROTOTYPE_EXECUTION_MODE
         v2EvidenceDigestEnabled = $env:HEAL_V2_EVIDENCE_DIGEST_ENABLED
+        tier1CurationV2Enabled = $env:HEAL_TIER1_CURATION_V2_ENABLED
+        tier1CurationV2Model = $env:HEAL_TIER1_CURATION_V2_MODEL
+        tier1CurationV2Cutoff = $env:HEAL_TIER1_CURATION_V2_CUTOFF
     } | ConvertTo-Json -Depth 3
     exit 0
 }

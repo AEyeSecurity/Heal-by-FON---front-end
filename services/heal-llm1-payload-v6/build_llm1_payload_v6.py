@@ -21,7 +21,7 @@ PILOT_GROUPS = {
     "MTHFR:T1.1": "clinical_conflict_and_compression",
     "PEMT:T1.3": "functional_and_clinical",
     "IL6:T1.4": "gwas_relevance",
-    "NQO1:T1.6": "pharmacogenomic_context",
+    "ABCB1:T1.6": "pharmacogenomic_context",
     "IFNG:T3.5": "abstention",
 }
 TARGET_READY = {"confirmed", "alternative_transcript"}
@@ -74,6 +74,47 @@ v5 = load_v5_module()
 
 def utc_now() -> str:
     return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def traceability_allowlist(payload: dict) -> dict:
+    evidence_ids: set[str] = set()
+    variant_refs: set[str] = set()
+    def visit(value) -> None:
+        if isinstance(value, dict):
+            evidence_id = v5.clean(value.get("evidence_id"))
+            if evidence_id: evidence_ids.add(evidence_id)
+            variant_ref = v5.clean(value.get("variant_ref"))
+            if variant_ref: variant_refs.add(variant_ref)
+            for key in ("variant_refs", "variant_refs_for_audit", "primary_variant_refs"):
+                variant_refs.update(v5.clean(ref) for ref in value.get(key) or [] if v5.clean(ref))
+            for key, child in value.items():
+                if key != "traceability_allowlist": visit(child)
+        elif isinstance(value, list):
+            for child in value: visit(child)
+    visit(payload)
+    focus_refs = sorted(v5.clean(row.get("variant_ref")) for row in payload.get("focus_variant_evidence") or [] if v5.clean(row.get("variant_ref")))
+    return {"allowed_evidence_ids": sorted(evidence_ids), "allowed_variant_refs": sorted(variant_refs), "allowed_focus_variant_refs": focus_refs}
+
+
+def compact_v6_optional_text(payload: dict) -> bool:
+    """Reduce optional excerpts after v6 fields push an otherwise valid v5 payload over budget."""
+    changed = False
+    for group in payload.get("clinical_evidence_summary", {}).get("assertion_groups") or []:
+        assertion = group.get("representative_assertion") or {}
+        excerpt = assertion.get("description_excerpt")
+        if isinstance(excerpt, str) and len(excerpt) > 300:
+            assertion["description_excerpt"] = excerpt[:300].rstrip()
+            changed = True
+    for publication in payload.get("publication_evidence_digest", {}).get("selected_publications") or []:
+        excerpt = publication.get("abstract_excerpt")
+        if isinstance(excerpt, str) and len(excerpt) > 450:
+            publication["abstract_excerpt"] = excerpt[:450].rstrip()
+            changed = True
+    if changed:
+        metadata = payload.setdefault("compression_metadata", {})
+        metadata["strategy"] = "deterministic_v6_optional_text_compact"
+        metadata["compression_level"] = max(2, v5.as_int(metadata.get("compression_level")))
+    return changed
 
 
 def read_csv(path: Path | None) -> list[dict]:
@@ -310,6 +351,22 @@ def condition_key(value: str) -> str:
     return re.sub(r"\s+", " ", v5.clean(value).lower()) or "not_reported"
 
 
+UNINFORMATIVE_CONDITIONS = {
+    "not_reported", "not reported", "not provided", "not specified", "not applicable", "see cases",
+}
+PATHOGENIC_CLASSES = {"pathogenic", "likely_pathogenic", "pathogenic_or_likely_pathogenic"}
+BENIGN_CLASSES = {"benign", "likely_benign", "benign_or_likely_benign"}
+
+
+def material_same_condition_conflict(condition: str, classes: set[str]) -> bool:
+    """Only count comparable, clinically opposing assertions as a material conflict."""
+    if condition in UNINFORMATIVE_CONDITIONS:
+        return False
+    if "conflicting_pathogenicity" in classes:
+        return True
+    return bool(classes & PATHOGENIC_CLASSES) and bool(classes & BENIGN_CLASSES)
+
+
 def clinvar_conflict_semantics(assertions: list[dict]) -> tuple[dict, list[dict]]:
     by_variant_condition: dict[tuple[str, str], set[str]] = defaultdict(set)
     by_variant: dict[str, list[tuple[str, str]]] = defaultdict(list)
@@ -334,7 +391,7 @@ def clinvar_conflict_semantics(assertions: list[dict]) -> tuple[dict, list[dict]
         same = {
             condition: sorted(classes)
             for condition, classes in condition_classes.items()
-            if len(classes) > 1 or "conflicting_pathogenicity" in classes
+            if material_same_condition_conflict(condition, classes)
         }
         distinct_by_condition = {condition: tuple(sorted(classes)) for condition, classes in condition_classes.items()}
         cross = len(set(distinct_by_condition.values())) > 1 and not same
@@ -424,7 +481,7 @@ def apply_gwas_registry(clusters: list[dict], registry: list[dict]) -> list[dict
                 row["evidence_band"] = "high_confidence_replicated"
             else:
                 row["evidence_band"] = "moderate_contextual"
-        elif status == "rejected":
+        elif status in {"rejected", "valid_but_excluded"}:
             row["evidence_band"] = "context_only"
         output.append(row)
     return output
@@ -492,7 +549,7 @@ def build_manifest(payloads: list[dict]) -> list[dict]:
     return output
 
 
-def process(payload: dict) -> dict:
+def process(payload: dict, *, emit_summary: bool = True) -> dict:
     output_dir = Path(payload["outputDir"]).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     detail_rows = read_csv(Path(payload["detailPath"]))
@@ -560,6 +617,20 @@ def process(payload: dict) -> dict:
             built["payload_schema_version"] = PAYLOAD_VERSION
             v6_focus_frequency(built, rows)
             group_conflicts = [conflict_by_variant[item] for item in variant_keys if item in conflict_by_variant]
+            conflict_index = {row["variant_key"]: row for row in group_conflicts}
+            variant_ref_by_key = {v5.clean(row.get("variant_key")): v5.variant_ref(row) for row in rows}
+            for assertion_group in built["clinical_evidence_summary"].get("assertion_groups") or []:
+                assertion_key = v5.clean(assertion_group.get("variant_key"))
+                if assertion_key in variant_ref_by_key:
+                    assertion_group["variant_ref"] = variant_ref_by_key[assertion_key]
+            for focus_item in built.get("focus_variant_evidence") or []:
+                semantics = conflict_index.get(v5.clean(focus_item.get("variant_key")), {})
+                aggregate = focus_item.get("clinical_aggregate") or {}
+                aggregate["legacy_conflict_flag"] = bool(aggregate.get("conflict"))
+                aggregate["same_condition_material_conflict"] = semantics.get("same_condition_conflict") == "true"
+                aggregate["cross_condition_heterogeneity"] = semantics.get("cross_condition_heterogeneity") == "true"
+                aggregate["drug_response_context"] = semantics.get("drug_response_context") == "true"
+                aggregate["conflict"] = aggregate["same_condition_material_conflict"]
             built["clinical_evidence_summary"]["condition_conflict_semantics"] = {
                 "same_condition_conflict_variant_keys": sorted(
                     row["variant_key"] for row in group_conflicts if row["same_condition_conflict"] == "true"
@@ -571,6 +642,12 @@ def process(payload: dict) -> dict:
                     row["variant_key"] for row in group_conflicts if row["drug_response_context"] == "true"
                 ),
             }
+            built["clinical_evidence_summary"]["legacy_conflicting_variant_keys"] = list(
+                built["clinical_evidence_summary"].get("conflicting_variant_keys") or []
+            )
+            built["clinical_evidence_summary"]["conflicting_variant_keys"] = list(
+                built["clinical_evidence_summary"]["condition_conflict_semantics"]["same_condition_conflict_variant_keys"]
+            )
             discordant = [row for row in rows if v5.clean(row.get("vep_target_gene_effect_status")) not in TARGET_READY]
             built["target_gene_discordant_context"] = v5.compact_context(discordant)
             frequencies = [allele_specific_frequency(row) for row in rows]
@@ -581,6 +658,7 @@ def process(payload: dict) -> dict:
                 "audit_artifact": "allele_specific_frequency_audit.csv",
             }
             approved_gwas = [row for row in group_clusters if v5.clean(row.get("module_relevance_status")) == "approved"]
+            excluded_gwas = [row for row in group_clusters if v5.clean(row.get("module_relevance_status")) == "valid_but_excluded"]
             unreviewed_gwas = [row for row in group_clusters if v5.clean(row.get("module_relevance_status")) == "unreviewed"]
             built["professional_curation"] = {
                 "mechanism_registry_version": mechanism.get("registry_version", "mechanism_registry_v1"),
@@ -588,8 +666,31 @@ def process(payload: dict) -> dict:
                 "gwas_registry_version": "gwas_module_relevance_registry_v1",
                 "gwas_relevance_status": "approved" if approved_gwas else "unreviewed" if unreviewed_gwas else "not_applicable",
                 "approved_gwas_cluster_count": len(approved_gwas),
+                "valid_but_excluded_gwas_cluster_count": len(excluded_gwas),
                 "unreviewed_gwas_cluster_count": len(unreviewed_gwas),
+                "pgx_observed_genotype_applicability": "not_confirmed" if group_id == "ABCB1:T1.6" else "not_applicable",
+                "pgx_evidence_strength": "weak_context_only" if group_id == "ABCB1:T1.6" else "not_applicable",
+                "pgx_relevant_structured_medication_present": False,
+                "pgx_escalation_allowed": False,
             }
+            built["patient_context"] = {
+                "schema_version": "llm1_patient_context_v1",
+                "axes": {
+                    "metabolism_nutrients_methylation": {"items": [], "default_state": "not_provided", "allowed_codes": ["homocysteine", "folate", "vitamin_b12", "choline_intake", "methylation_related_symptoms"]},
+                    "immunity_inflammation": {"items": [], "default_state": "not_provided", "allowed_codes": ["crp", "il6", "acute_infection", "chronic_inflammatory_condition", "inflammation_related_symptoms"]},
+                    "xenobiotics_pharmacogenomics": {"items": [], "default_state": "not_provided", "allowed_codes": ["medication", "drug_response_history", "adverse_drug_reaction", "smoking_status", "xenobiotic_exposure"]},
+                },
+                "structured_medications": [],
+                "free_note": "",
+                "free_note_authoritative": False,
+                "interpretation_constraints": {
+                    "may_personalize_explanation": True,
+                    "may_change_genetic_evidence": False,
+                    "may_raise_review_priority": False,
+                    "pgx_escalation_requires_strong_genotype_drug_evidence_and_relevant_medication": True,
+                },
+            }
+            built["traceability_allowlist"] = traceability_allowlist(built)
             target_ready = all(
                 item.get("target_gene_annotation", {}).get("status") in TARGET_READY
                 and item.get("target_gene_annotation", {}).get("local_consequence_concordance") in {"concordant", "splice_window_context"}
@@ -598,6 +699,9 @@ def process(payload: dict) -> dict:
             category = PILOT_GROUPS.get(group_id, "")
             gwas_ready = category != "gwas_relevance" or bool(built["gwas_evidence_summary"].get("prioritized_clusters"))
             built["gates"].update({
+                "mechanism_registry_ready": mechanism.get("curation_status") in {
+                    "approved", "approved_with_conflict", "withheld", "rejected",
+                },
                 "target_gene_annotation_ready": target_ready,
                 "allele_specific_frequency_ready": all(
                     item.get("population", {}).get("frequency_relation") in {"observed_alt", "not_available_for_observed_alt"}
@@ -614,6 +718,8 @@ def process(payload: dict) -> dict:
             ])
             built["gates"]["llm1_pilot_ready"] = False
             tokens, method = v5.estimate_tokens(built, v5.clean(payload.get("tokenizerModel")))
+            if tokens > v5.HARD_TOKENS and compact_v6_optional_text(built):
+                tokens, method = v5.estimate_tokens(built, v5.clean(payload.get("tokenizerModel")))
             built["compression_metadata"].update({
                 "estimated_tokens": tokens,
                 "estimation_method": method,
@@ -635,6 +741,7 @@ def process(payload: dict) -> dict:
                 "estimated_tokens": tokens,
                 "estimation_method": method,
                 "budget_status": built["compression_metadata"]["budget_status"],
+                "compression_strategy": built["compression_metadata"]["strategy"],
                 "focus_variants": len(built["focus_variant_evidence"]),
                 "target_gene_discordant": len(discordant),
                 "group_payload_ready": str(built["gates"]["group_payload_ready"]).lower(),
@@ -691,7 +798,11 @@ def process(payload: dict) -> dict:
             "v6_focus_eligible_rows": len(focus_rows_v6),
             "focus_rows_reclassified": len(focus_rows_v5) - len(focus_rows_v6),
             "legacy_frequency_allele_mismatches": legacy_frequency_mismatches,
-            "groups_with_approved_mechanism": sum(row["gates"]["mechanism_registry_ready"] for row in payloads),
+            "groups_with_approved_mechanism": sum(
+                row.get("curated_mechanism", {}).get("curation_status") in {"approved", "approved_with_conflict"}
+                for row in payloads
+            ),
+            "groups_with_resolved_mechanism": sum(row["gates"]["mechanism_registry_ready"] for row in payloads),
             "groups_payload_ready": sum(row["gates"]["group_payload_ready"] for row in payloads),
             "groups_within_hard_limit": sum(row["gates"]["token_budget_ready"] for row in payloads),
             "max_estimated_tokens": max((row["compression_metadata"]["estimated_tokens"] for row in payloads), default=0),
@@ -737,7 +848,8 @@ def process(payload: dict) -> dict:
         "timestamps": {"completedAt": utc_now()},
     }
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps(summary, ensure_ascii=False))
+    if emit_summary:
+        print(json.dumps(summary, ensure_ascii=False))
     return summary
 
 

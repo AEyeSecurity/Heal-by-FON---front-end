@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healbyfon.local/schemas/llm1_group_payload_v7.schema.json",
+  "title": "HEAL LLM1 production-candidate grouped payload v7",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "payload_schema_version", "execution_mode", "group_id", "gene", "module_id", "group_context",
+    "canonical_status", "curated_mechanism", "focus_variant_evidence", "clinical_evidence_summary",
+    "gwas_evidence_summary", "publication_evidence_digest", "supporting_context", "transcript_discordant_context",
+    "target_gene_discordant_context", "identity_unresolved", "source_failures", "deterministic_summary",
+    "evidence_coverage", "compression_metadata", "provenance", "gates", "allele_specific_frequency_summary",
+    "professional_curation", "patient_context", "traceability_allowlist", "input_completeness", "age_context",
+    "release_context", "internal_scientific_curation", "expert_review_gate", "operational_state"
+  ],
+  "properties": {
+    "payload_schema_version": {"const": "llm1_group_payload_v7"},
+    "execution_mode": {"enum": ["preflight", "internal_auto", "benchmark_compat"]},
+    "group_id": {"type": "string", "minLength": 3},
+    "gene": {"type": "string", "minLength": 1},
+    "module_id": {"type": "string", "pattern": "^(T[1-3]|F[1-9])\\."},
+    "group_context": {"type": "object", "additionalProperties": true},
+    "canonical_status": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "curated_mechanism": {"type": "object", "additionalProperties": true},
+    "focus_variant_evidence": {"type": "array", "maxItems": 20, "items": {"type": "object", "additionalProperties": true}},
+    "clinical_evidence_summary": {"type": "object", "additionalProperties": true},
+    "gwas_evidence_summary": {"type": "object", "additionalProperties": true},
+    "publication_evidence_digest": {"type": "object", "additionalProperties": true},
+    "supporting_context": {"type": "object", "additionalProperties": true},
+    "transcript_discordant_context": {"type": "object", "additionalProperties": true},
+    "target_gene_discordant_context": {"type": "object", "additionalProperties": true},
+    "identity_unresolved": {"type": "object", "additionalProperties": true},
+    "source_failures": {"type": "object", "additionalProperties": true},
+    "deterministic_summary": {"type": "object", "additionalProperties": true},
+    "evidence_coverage": {"type": "object", "additionalProperties": true},
+    "compression_metadata": {"type": "object", "additionalProperties": true},
+    "provenance": {"type": "object", "additionalProperties": true},
+    "gates": {"type": "object", "additionalProperties": true},
+    "allele_specific_frequency_summary": {"type": "object", "additionalProperties": true},
+    "professional_curation": {"type": "object", "additionalProperties": true},
+    "traceability_allowlist": {
+      "type": "object", "additionalProperties": false,
+      "required": ["allowed_evidence_ids", "allowed_variant_refs", "allowed_focus_variant_refs"],
+      "properties": {
+        "allowed_evidence_ids": {"type": "array", "items": {"type": "string"}},
+        "allowed_variant_refs": {"type": "array", "items": {"type": "string"}},
+        "allowed_focus_variant_refs": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "patient_context": {"type": "object", "additionalProperties": true},
+    "input_completeness": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "source_type", "reference_build", "reference_version", "sample_count", "callability_method", "can_assert_hom_ref", "can_assert_not_callable", "absence_semantics"],
+      "properties": {
+        "mode": {"enum": ["observed_variants_only", "callability_aware"]},
+        "source_type": {"enum": ["vcf", "gvcf", "all_sites_vcf"]},
+        "reference_build": {"type": "string", "minLength": 1},
+        "reference_version": {"type": "string", "minLength": 1},
+        "sample_count": {"const": 1},
+        "callability_method": {"type": "string", "minLength": 1},
+        "can_assert_hom_ref": {"type": "boolean"},
+        "can_assert_not_callable": {"type": "boolean"},
+        "absence_semantics": {"enum": ["not_observed_callability_unknown", "explicit_hom_ref_or_not_callable"]}
+      }
+    },
+    "age_context": {
+      "type": "object", "additionalProperties": false,
+      "required": ["band", "source", "enabled"],
+      "properties": {
+        "band": {"enum": ["age_0_7", "age_8_17"]},
+        "source": {"const": "operator_provided"},
+        "enabled": {"type": "boolean"}
+      }
+    },
+    "release_context": {
+      "type": "object", "additionalProperties": false,
+      "required": ["active_tiers", "curation_snapshot_id", "evidence_cutoff", "experimental_canary", "client_visible", "eligible_for_llm2", "execution_scope"],
+      "properties": {
+        "active_tiers": {"type": "array", "items": {"enum": ["T1", "T2", "T3"]}},
+        "curation_snapshot_id": {"type": "string", "minLength": 1},
+        "evidence_cutoff": {"const": "2026-07-28"},
+        "experimental_canary": {"type": "boolean"},
+        "client_visible": {"type": "boolean"},
+        "eligible_for_llm2": {"type": "boolean"},
+        "execution_scope": {"const": "internal_auto"}
+      }
+    },
+    "internal_scientific_curation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["authority", "snapshot_id", "evidence_cutoff", "mechanism_status", "gwas_status", "fully_classified", "source_policy"],
+      "properties": {
+        "authority": {"const": "internal_ai"},
+        "snapshot_id": {"type": "string", "minLength": 1},
+        "evidence_cutoff": {"const": "2026-07-28"},
+        "mechanism_status": {"enum": ["approved", "approved_with_conflict", "withheld", "rejected", "draft", "missing"]},
+        "gwas_status": {"enum": ["approved", "unreviewed", "not_applicable"]},
+        "fully_classified": {"type": "boolean"},
+        "source_policy": {"const": "registered_sources_only_no_studies_after_cutoff"}
+      }
+    },
+    "expert_review_gate": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "condition_1_strong_evidence", "condition_2_material_scientific_conflict",
+        "condition_3_observed_variant_directly_relevant",
+        "condition_4_material_individual_change", "condition_5_unresolved_from_available_context",
+        "conflict_evidence_ids", "directly_relevant_focus_variant_refs"
+      ],
+      "properties": {
+        "condition_1_strong_evidence": {"type": "boolean"},
+        "condition_2_material_scientific_conflict": {"type": "boolean"},
+        "condition_3_observed_variant_directly_relevant": {"type": "boolean"},
+        "condition_4_material_individual_change": {"const": "model_assessment_required"},
+        "condition_5_unresolved_from_available_context": {"const": "model_assessment_required"},
+        "conflict_evidence_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "directly_relevant_focus_variant_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+      }
+    },
+    "operational_state": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "preflight_valid", "llm1_eligible", "blocker_codes", "decision_reason"],
+      "properties": {
+        "status": {"enum": ["preflight_blocked", "eligible", "llm1_running", "valid", "quarantined", "technical_failure", "curation_excluded"]},
+        "preflight_valid": {"type": "boolean"},
+        "llm1_eligible": {"type": "boolean"},
+        "blocker_codes": {"type": "array", "items": {"type": "string"}},
+        "decision_reason": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

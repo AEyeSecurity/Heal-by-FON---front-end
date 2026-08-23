@@ -1,0 +1,12 @@
+##fileformat=VCFv4.2
+##reference=GRCh38
+##contig=<ID=chr1>
+##contig=<ID=chr7>
+##contig=<ID=chr8>
+##contig=<ID=chr16>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	PROTOTYPE
+chr1	11796321	rs1801133	G	A	50	PASS	.	GT	0/1
+chr7	87504050	rs3842	T	C	50	PASS	.	GT	0/1
+chr8	120216440	rs4870723	A	C	50	PASS	.	GT	1/1
+chr16	16045857	rs35587	T	C	50	PASS	.	GT	0/1

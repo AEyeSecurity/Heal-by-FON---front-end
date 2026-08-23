@@ -37,6 +37,7 @@ const VARIANT_ENRICHMENT_ROOT = RUNTIME_PATHS.enrichment;
 const EVIDENCE_REFINEMENT_ROOT = RUNTIME_PATHS.evidenceRefinement;
 const GROUPED_INTERPRETATION_PREP_ROOT = RUNTIME_PATHS.groupedPrep;
 const GROUPED_INDIVIDUAL_INTERPRETATION_ROOT = RUNTIME_PATHS.groupedInterpretation;
+const GROUPED_PROTOTYPE_ROOT = RUNTIME_PATHS.groupedPrototype;
 const INDIVIDUAL_INTERPRETATION_ROOT = RUNTIME_PATHS.individualInterpretation;
 const INTERPRETATION_NORMALIZATION_ROOT = RUNTIME_PATHS.interpretationNormalization;
 const GLOBAL_INTERPRETATION_ROOT = RUNTIME_PATHS.globalInterpretation;
@@ -81,6 +82,8 @@ const N8N_INDIVIDUAL_INTERPRETATION_WEBHOOK_URL =
 const N8N_GLOBAL_INTERPRETATION_WEBHOOK_URL = process.env.HEAL_N8N_GLOBAL_INTERPRETATION_WEBHOOK_URL || "";
 const N8N_WEBHOOK_TOKEN = process.env.HEAL_N8N_WEBHOOK_TOKEN || "";
 const LLM1_MODEL = process.env.HEAL_LLM1_MODEL || "gpt-5-mini";
+const LLM1_PROMPT_PROFILE = process.env.HEAL_LLM1_PROMPT_PROFILE || "default_v6";
+const LLM1_REASONING_EFFORT = process.env.HEAL_LLM1_REASONING_EFFORT || (LLM1_MODEL === "gpt-5-mini" ? "minimal" : "none");
 const LLM2_QUICK_MODEL = process.env.HEAL_LLM2_QUICK_MODEL || "gpt-5-mini";
 const LLM2_FULL_MODEL = process.env.HEAL_LLM2_FULL_MODEL || "gpt-5.2";
 const LLM2_QA_DEFAULT_MODEL = process.env.HEAL_LLM2_QA_DEFAULT_MODEL || "gpt-5-mini";
@@ -92,10 +95,37 @@ const ALLOWED_LLM2_MODELS = new Set(
 );
 const ALLOW_LLM_DRY_RUN = process.env.HEAL_ALLOW_LLM_DRY_RUN === "true";
 const HEAL_V2_LLM1_ENABLED = process.env.HEAL_V2_LLM1_ENABLED === "true";
+const HEAL_GROUPED_PROTOTYPE_ENABLED = process.env.HEAL_GROUPED_PROTOTYPE_ENABLED === "true";
+const HEAL_PROTOTYPE_SNAPSHOT_PATH =
+  process.env.HEAL_PROTOTYPE_SNAPSHOT_PATH ||
+  path.join(DATA_ROOT, "prototype", "tier1-12-snapshot-prototype-v2", "prototype_curation_snapshot_v1.json");
+const HEAL_PROTOTYPE_CANDIDATE_MANIFEST_PATH =
+  process.env.HEAL_PROTOTYPE_CANDIDATE_MANIFEST_PATH ||
+  path.join(DATA_ROOT, "prototype", "tier1-12-snapshot-prototype-v2", "prototype_candidate_manifest.json");
+const HEAL_PROTOTYPE_COVERAGE_MANIFEST_PATH =
+  process.env.HEAL_PROTOTYPE_COVERAGE_MANIFEST_PATH ||
+  path.join(DATA_ROOT, "prototype", "tier1-12-snapshot-prototype-v2", "prototype_coverage_manifest_v1.json");
+const HEAL_PROTOTYPE_LLM1_MODEL = process.env.HEAL_PROTOTYPE_LLM1_MODEL || "gpt-5.6-luna";
+const HEAL_PROTOTYPE_LLM2_MODEL = process.env.HEAL_PROTOTYPE_LLM2_MODEL || "gpt-5.6-luna";
+const HEAL_PROTOTYPE_EXECUTION_MODE = process.env.HEAL_PROTOTYPE_EXECUTION_MODE || "disabled";
 const HEAL_V2_LLM1_PILOT_ENABLED = process.env.HEAL_V2_LLM1_PILOT_ENABLED === "true";
+const HEAL_LLM1_EXECUTION_MODE = process.env.HEAL_LLM1_EXECUTION_MODE || "disabled";
+const HEAL_LLM1_ACTIVE_TIERS = process.env.HEAL_LLM1_ACTIVE_TIERS || "T1";
+const HEAL_LLM1_ACTIVE_AGE_BANDS = process.env.HEAL_LLM1_ACTIVE_AGE_BANDS || "age_0_7";
+const HEAL_LLM1_EXPERIMENTAL_CANARIES = process.env.HEAL_LLM1_EXPERIMENTAL_CANARIES || "IFNG:T3.5";
+const HEAL_LLM1_CURATION_SNAPSHOT_ID =
+  process.env.HEAL_LLM1_CURATION_SNAPSHOT_ID || "internal-scientific-curation-20260728";
 const HEAL_V2_EVIDENCE_DIGEST_ENABLED = process.env.HEAL_V2_EVIDENCE_DIGEST_ENABLED === "true";
 const HEAL_V2_EVIDENCE_DIGEST_MODEL = process.env.HEAL_V2_EVIDENCE_DIGEST_MODEL || "";
 const HEAL_CURATION_ACCESS_TOKEN = process.env.HEAL_CURATION_ACCESS_TOKEN || "";
+const HEAL_TIER1_CURATION_V2_ENABLED = process.env.HEAL_TIER1_CURATION_V2_ENABLED === "true";
+const HEAL_TIER1_CURATION_V2_ROOT = RUNTIME_PATHS.tier1CurationV2;
+const HEAL_TIER1_CURATION_V2_MODEL = process.env.HEAL_TIER1_CURATION_V2_MODEL || "gpt-5.6-sol";
+const HEAL_TIER1_CURATION_V2_CUTOFF = process.env.HEAL_TIER1_CURATION_V2_CUTOFF || "2026-07-28";
+const HEAL_TIER1_CURATION_V2_CANON_RUN_ID = process.env.HEAL_TIER1_CURATION_V2_CANON_RUN_ID || "";
+const HEAL_TIER1_HUMAN_REVIEW_FOUNDATION =
+  process.env.HEAL_TIER1_HUMAN_REVIEW_FOUNDATION ||
+  path.join(DATA_ROOT, "curation-candidates", "tier1-human-review-20260810", "foundation-v1", "tier1_human_review_foundation.json");
 const HEAL_MECHANISM_REGISTRY_PATH =
   process.env.HEAL_MECHANISM_REGISTRY_PATH || path.join(RUNTIME_PATHS.canonCuration, "mechanism_registry_v1.csv");
 const HEAL_GWAS_TRAIT_MODULE_MAP_PATH =
@@ -125,6 +155,7 @@ const TURNSTILE_ALLOWED_HOSTNAMES = (process.env.HEAL_TURNSTILE_ALLOWED_HOSTNAME
   .filter(Boolean);
 
 const jobs = new Map();
+const tier1CurationV2Jobs = new Map();
 const jobLogQueues = new Map();
 const canonJobs = new Map();
 const uploads = new Map();
@@ -701,6 +732,7 @@ function publicArtifactsReady(job) {
     groupedPayloadsV4: artifactExists(artifacts.groupPayloadsCsvV4 || artifacts.groupPayloadsJsonlV4),
     groupedPayloadsV5: artifactExists(artifacts.groupPayloadsCsvV5 || artifacts.groupPayloadsJsonlV5),
     groupedPayloadsV6: artifactExists(artifacts.groupPayloadsCsvV6 || artifacts.groupPayloadsJsonlV6),
+    groupedPayloadsV7: artifactExists(artifacts.groupPayloadsCsvV7 || artifacts.groupPayloadsJsonlV7),
     groupEvidencePackets: artifactExists(artifacts.groupEvidencePacketsJsonlGz),
     groupEvidenceDigests: artifactExists(artifacts.groupEvidenceDigestsJsonl),
     groupEvidenceDigestErrors: artifactExists(artifacts.groupEvidenceDigestErrorsCsv),
@@ -710,6 +742,12 @@ function publicArtifactsReady(job) {
     groupCompressionSummary: artifactExists(artifacts.groupCompressionSummaryJson),
     groupPayloadSchemaV5: artifactExists(artifacts.groupPayloadSchemaV5Json),
     groupPayloadSchemaV6: artifactExists(artifacts.groupPayloadSchemaV6Json),
+    groupPayloadSchemaV7: artifactExists(artifacts.groupPayloadSchemaV7Json),
+    groupPreflightV7: artifactExists(artifacts.groupPreflightV7Csv),
+    groupPayloadV7Summary: artifactExists(artifacts.groupPayloadV7SummaryJson),
+    groupCardsV7: artifactExists(artifacts.groupCardsJson || artifacts.groupCardsV7Json),
+    groupQuarantine: artifactExists(artifacts.groupQuarantineJsonl),
+    llm1InternalReview: artifactExists(artifacts.llm1InternalReviewJson),
     targetGeneConsequenceAudit: artifactExists(artifacts.targetGeneConsequenceAuditCsv),
     alleleSpecificFrequencyAudit: artifactExists(artifacts.alleleSpecificFrequencyAuditCsv),
     clinvarConditionConflictAudit: artifactExists(artifacts.clinvarConditionConflictAuditCsv),
@@ -733,6 +771,11 @@ function publicArtifactsReady(job) {
     interpretationNormalization: artifactExists(artifacts.individualVariantInterpretationsNormalizedCsv),
     globalInterpretation: artifactExists(artifacts.globalInterpretationJson || artifacts.globalInterpretationSectionsCsv),
     finalReport: artifactExists(artifacts.finalReportDocx),
+    groupedPrototype: artifactExists(artifacts.groupedPrototypeSummaryJson),
+    groupedPrototypeDocx: artifactExists(artifacts.groupedPrototypeDocx),
+    groupedPrototypePdf: artifactExists(artifacts.groupedPrototypePdf),
+    groupedPrototypeCards: artifactExists(artifacts.groupedPrototypeCardsCsv),
+    groupedPrototypeAudit: artifactExists(artifacts.groupedPrototypeTechnicalAuditJson),
   };
 }
 
@@ -1372,6 +1415,10 @@ async function processVariantEnrichment(payload, job) {
   return await runBase64JsonScript(SERVICE_SCRIPTS.legacyEnrichment, payload);
 }
 
+function jobArtifactKeyForCards(jobId) {
+  return jobs.get(jobId)?.artifacts?.groupCardsJson ? "groupCardsJson" : "groupCardsV7Json";
+}
+
 async function processEvidenceRefinement(payload, job) {
   return await runBase64JsonScript(SERVICE_SCRIPTS.evidenceRefinement, payload, {
     job,
@@ -1466,6 +1513,10 @@ async function processFinalReport(payload) {
   return await runBase64JsonScript(SERVICE_SCRIPTS.finalReport, payload);
 }
 
+async function processGroupedPrototype(payload) {
+  return await runBase64JsonScript(SERVICE_SCRIPTS.groupedPrototype, payload);
+}
+
 async function processVariantEnrichmentWithRetry(payload, job, attempts = 3) {
   const errors = [];
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -1493,6 +1544,10 @@ async function processGroupedPayloadV5(payload) {
 
 async function processGroupedPayloadV6(payload) {
   return await runBase64JsonScript(SERVICE_SCRIPTS.groupedPayloadV6, payload);
+}
+
+async function processGroupedPayloadV7(payload) {
+  return await runBase64JsonScript(SERVICE_SCRIPTS.groupedPayloadV7, payload);
 }
 
 async function processEvidenceDigest(payload) {
@@ -2051,6 +2106,8 @@ app.get("/api/health", async (_req, res) => {
     runtime,
     individualInterpretationConfigured: Boolean(process.env.HEAL_OPENAI_API_KEY || process.env.OPENAI_API_KEY),
     individualInterpretationModel: LLM1_MODEL,
+    individualInterpretationPromptProfile: LLM1_PROMPT_PROFILE,
+    individualInterpretationReasoningEffort: LLM1_REASONING_EFFORT,
     globalInterpretationConfigured: Boolean(process.env.HEAL_OPENAI_API_KEY || process.env.OPENAI_API_KEY),
     globalInterpretationModels: {
       quick: LLM2_QUICK_MODEL,
@@ -2077,7 +2134,19 @@ app.get("/api/health", async (_req, res) => {
     n8nVcfCanonMatchWebhookConfigured: Boolean(N8N_VCF_CANON_MATCH_WEBHOOK_URL),
     n8nVariantEnrichmentWebhookConfigured: Boolean(N8N_VARIANT_ENRICHMENT_WEBHOOK_URL),
     v2Llm1Enabled: HEAL_V2_LLM1_ENABLED,
+    groupedPrototypeEnabled: HEAL_GROUPED_PROTOTYPE_ENABLED,
+    groupedPrototypeConfigured:
+      existsSync(HEAL_PROTOTYPE_SNAPSHOT_PATH) &&
+      existsSync(HEAL_PROTOTYPE_CANDIDATE_MANIFEST_PATH) &&
+      existsSync(HEAL_PROTOTYPE_COVERAGE_MANIFEST_PATH),
+    groupedPrototypeExecutionMode: HEAL_PROTOTYPE_EXECUTION_MODE,
+    groupedPrototypeModels: { llm1: HEAL_PROTOTYPE_LLM1_MODEL, llm2: HEAL_PROTOTYPE_LLM2_MODEL },
     v2Llm1PilotEnabled: HEAL_V2_LLM1_PILOT_ENABLED,
+    llm1ExecutionMode: HEAL_LLM1_EXECUTION_MODE,
+    llm1ActiveTiers: HEAL_LLM1_ACTIVE_TIERS.split(",").map((value) => value.trim()).filter(Boolean),
+    llm1ActiveAgeBands: HEAL_LLM1_ACTIVE_AGE_BANDS.split(",").map((value) => value.trim()).filter(Boolean),
+    llm1ExperimentalCanaries: HEAL_LLM1_EXPERIMENTAL_CANARIES.split(",").map((value) => value.trim()).filter(Boolean),
+    llm1CurationSnapshotId: HEAL_LLM1_CURATION_SNAPSHOT_ID,
     v2EvidenceDigestEnabled: HEAL_V2_EVIDENCE_DIGEST_ENABLED,
     v2EvidenceDigestModelConfigured: Boolean(HEAL_V2_EVIDENCE_DIGEST_MODEL),
     v2CurationUploadConfigured: Boolean(HEAL_CURATION_ACCESS_TOKEN),
@@ -3368,72 +3437,68 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         };
 
         job.stageProgress = 86;
-        job.message = "Building transcript-aware LLM1 v6 payloads";
+        job.message = "Building production-candidate LLM1 v7 payloads and 180-group preflight";
         job.updatedAt = new Date().toISOString();
         await persistVcfCanonJob(job);
-        const groupedV6Summary = await processGroupedPayloadV6({
-          event: "heal.grouped_payload_v6.requested",
-          runId: `group-payload-v6-${runId}`,
-          detailPath: groupedPrepSummary.outputs?.groupVariantDetailCsvV4,
-          canonicalStatusPath: job.artifacts.canonicalGeneModuleStatusCsv,
-          mechanismRegistryPath: groupedPrepSummary.outputs?.mechanismRegistryV1Csv,
-          persistentMechanismRegistryPath: HEAL_MECHANISM_REGISTRY_PATH,
-          persistentGwasRegistryPath: HEAL_GWAS_TRAIT_MODULE_MAP_PATH,
-          clinvarAssertionsPath: job.artifacts.clinvarSubmitterAssertionsCsv,
-          gwasClustersPath: job.artifacts.gwasEvidenceClustersCsv,
-          publicationsPath: job.artifacts.publicationEvidenceCsv,
-          outputDir: groupedPrepOutputDir,
-          tokenizerModel: LLM1_MODEL,
-          requestedAt: new Date().toISOString(),
-        });
+        const groupedV7Summary = await processGroupedPayloadV7(
+          groupedPayloadV7Request(job, groupedPrepOutputDir, "heal.grouped_payload_v7.requested"),
+        );
         const requiredGroupedV6Artifacts = [
-          groupedV6Summary.outputs?.groupPayloadsJsonlV6,
-          groupedV6Summary.outputs?.groupPayloadsCsvV6,
-          groupedV6Summary.outputs?.groupPayloadSchemaV6Json,
-          groupedV6Summary.outputs?.targetGeneConsequenceAuditCsv,
-          groupedV6Summary.outputs?.alleleSpecificFrequencyAuditCsv,
-          groupedV6Summary.outputs?.clinvarConditionConflictAuditCsv,
-          groupedV6Summary.outputs?.groupTokenBudgetAuditV6Csv,
-          groupedV6Summary.outputs?.llm1PilotCandidateManifestV3Csv,
-          groupedV6Summary.outputs?.groupPayloadV6SummaryJson,
+          groupedV7Summary.outputs?.groupPayloadsJsonlV6,
+          groupedV7Summary.outputs?.groupPayloadsCsvV6,
+          groupedV7Summary.outputs?.groupPayloadSchemaV6Json,
+          groupedV7Summary.outputs?.groupPayloadsJsonlV7,
+          groupedV7Summary.outputs?.groupPayloadsCsvV7,
+          groupedV7Summary.outputs?.groupPayloadSchemaV7Json,
+          groupedV7Summary.outputs?.groupPreflightV7Csv,
+          groupedV7Summary.outputs?.groupCardsV7Json,
+          groupedV7Summary.outputs?.targetGeneConsequenceAuditCsv,
+          groupedV7Summary.outputs?.alleleSpecificFrequencyAuditCsv,
+          groupedV7Summary.outputs?.clinvarConditionConflictAuditCsv,
+          groupedV7Summary.outputs?.groupTokenBudgetAuditV6Csv,
+          groupedV7Summary.outputs?.llm1PilotCandidateManifestV3Csv,
+          groupedV7Summary.outputs?.groupPayloadV6SummaryJson,
         ];
         if (requiredGroupedV6Artifacts.some((artifactPath) => !artifactPath || !existsSync(artifactPath))) {
-          throw new Error("Grouped interpretation prep did not produce its required v6 artifacts.");
+          throw new Error("Grouped interpretation prep did not produce its required v6 compatibility and v7 artifacts.");
         }
-        job.artifacts.groupPayloadsJsonlV6 = groupedV6Summary.outputs?.groupPayloadsJsonlV6 || "";
-        job.artifacts.groupPayloadsCsvV6 = groupedV6Summary.outputs?.groupPayloadsCsvV6 || "";
-        job.artifacts.groupPayloadSchemaV6Json = groupedV6Summary.outputs?.groupPayloadSchemaV6Json || "";
-        job.artifacts.targetGeneConsequenceAuditCsv = groupedV6Summary.outputs?.targetGeneConsequenceAuditCsv || "";
-        job.artifacts.alleleSpecificFrequencyAuditCsv = groupedV6Summary.outputs?.alleleSpecificFrequencyAuditCsv || "";
-        job.artifacts.clinvarConditionConflictAuditCsv = groupedV6Summary.outputs?.clinvarConditionConflictAuditCsv || "";
-        job.artifacts.groupTokenBudgetAuditV6Csv = groupedV6Summary.outputs?.groupTokenBudgetAuditV6Csv || "";
-        job.artifacts.llm1PilotCandidateManifestV3Csv = groupedV6Summary.outputs?.llm1PilotCandidateManifestV3Csv || "";
-        job.artifacts.groupPayloadV6ErrorsCsv = groupedV6Summary.outputs?.groupPayloadV6ErrorsCsv || "";
-        job.artifacts.groupPayloadV6SummaryJson = groupedV6Summary.outputs?.groupPayloadV6SummaryJson || "";
-        job.artifacts.persistentMechanismRegistryCsv = groupedV6Summary.outputs?.persistentMechanismRegistryCsv || "";
-        job.artifacts.persistentGwasRegistryCsv = groupedV6Summary.outputs?.persistentGwasRegistryCsv || "";
+        assignGroupedPayloadV7Artifacts(job, groupedV7Summary);
         job.result.groupPrep = {
           ...(job.result.groupPrep || {}),
-          payloadV6: sanitizeGroupedInterpretationPrepResult(groupedV6Summary),
+          payloadV6: sanitizeGroupedInterpretationPrepResult({ ...groupedV7Summary, payloadSchemaVersion: "llm1_group_payload_v6" }),
+          payloadV7: sanitizeGroupedInterpretationPrepResult(groupedV7Summary),
           metadata: {
             ...(job.result.groupPrep?.metadata || {}),
-            ...(groupedV6Summary.metadata || {}),
+            ...(groupedV7Summary.metadata || {}),
           },
         };
 
+        job.result.llm1InternalAuto = await runInternalAutoLlm1(job, groupedV7Summary);
+        job.result.groupedPrototype = await runGroupedPrototypeForJob(job, { dryRun: false });
+
         job.status = "complete";
         job.progress = 100;
-        job.stage = "grouping_preparation";
+        job.stage = job.result.groupedPrototype?.status?.startsWith("prototype_demo")
+          ? "grouped_prototype"
+          : "grouping_preparation";
         job.stageProgress = 100;
-        job.message = "Grouped payload v6 dry-run completed; LLM1 pilot requires explicit approval";
+        job.message =
+          job.result.groupedPrototype?.status === "prototype_demo_ready_automatic"
+            ? "Grouped prototype report completed"
+            : job.result.llm1InternalAuto?.status === "valid"
+            ? "LLM1 v7 internal-auto completed"
+            : "LLM1 v7 preflight completed; automatic execution remains gated";
         job.result = {
           ...job.result,
           metadata: {
             ...(job.result?.metadata || {}),
-            downstream_supported: false,
-            downstream_input: "llm1_group_payload_v6_dry_run",
-            downstream_message:
-              "All grouped payload v6 artifacts were generated without LLM calls. The five-group pilot remains blocked until professional curation, manifest approval, and explicit pilot enablement.",
+            downstream_supported: job.result.groupedPrototype?.status === "prototype_demo_ready_automatic",
+            downstream_input: job.result.groupedPrototype?.status === "prototype_demo_ready_automatic"
+              ? "grouped_prototype_snapshot_12"
+              : "llm1_group_payload_v6_dry_run",
+            downstream_message: job.result.groupedPrototype?.status === "prototype_demo_ready_automatic"
+              ? "Prototype-only grouped LLM1, grouped LLM2, and Spanish report completed; formal validation remains pending."
+              : "All grouped payload v6 artifacts were generated without LLM calls. The production lane remains gated.",
           },
         };
         return;
@@ -3592,11 +3657,11 @@ function parseCsvRecords(raw) {
 
 function requireCurationAccess(req, res) {
   if (!HEAL_CURATION_ACCESS_TOKEN) {
-    res.status(503).json({ error: "Professional curation uploads are not configured on this deployment." });
+    res.status(503).json({ error: "Internal scientific curation is not configured on this deployment." });
     return false;
   }
   if (!tokenMatches(HEAL_CURATION_ACCESS_TOKEN, String(req.headers["x-heal-curation-token"] || ""))) {
-    res.status(403).json({ error: "A valid professional curation token is required." });
+    res.status(403).json({ error: "A valid internal scientific curation token is required." });
     return false;
   }
   return true;
@@ -3614,7 +3679,7 @@ function validateCurationCsv(kind, rows) {
   const missing = required.filter((header) => !headers.has(header));
   if (missing.length) throw new Error(`Curation CSV is missing required columns: ${missing.join(", ")}`);
   if (kind === "manifest") {
-    const allowed = new Set(["MTHFR:T1.1", "PEMT:T1.3", "IL6:T1.4", "NQO1:T1.6", "IFNG:T3.5"]);
+    const allowed = new Set(["MTHFR:T1.1", "PEMT:T1.3", "IL6:T1.4", "ABCB1:T1.6", "IFNG:T3.5"]);
     const uploadedGroups = new Set(rows.map((row) => row.group_id));
     if (
       rows.length !== 5 ||
@@ -3633,12 +3698,17 @@ function validateCurationCsv(kind, rows) {
     }
   } else {
     const statusField = kind === "mechanism" ? "curation_status" : "relevance_status";
-    const allowedStatuses = kind === "mechanism" ? new Set(["draft", "approved", "rejected"]) : new Set(["unreviewed", "approved", "rejected"]);
+    const allowedStatuses = kind === "mechanism"
+      ? new Set(["draft", "approved", "approved_with_conflict", "withheld", "rejected"])
+      : new Set(["unreviewed", "approved", "valid_but_excluded", "rejected"]);
     for (const row of rows) {
       if (!allowedStatuses.has(row[statusField])) throw new Error(`Unsupported ${statusField}: ${row[statusField]}`);
-      if (["approved", "rejected"].includes(row[statusField])) {
-        if (!row.reviewer || !row.reviewed_at || !row.source_ids_or_urls) {
-          throw new Error(`Professionally reviewed ${kind} row is missing reviewer, reviewed_at, or sources.`);
+      if (!["draft", "unreviewed"].includes(row[statusField])) {
+        const sourcesRequired = kind === "mechanism"
+          ? ["approved", "approved_with_conflict", "rejected"].includes(row[statusField])
+          : ["approved", "valid_but_excluded"].includes(row[statusField]);
+        if (!row.reviewer || !row.reviewed_at || (sourcesRequired && !row.source_ids_or_urls)) {
+          throw new Error(`Resolved ${kind} row is missing reviewer, reviewed_at, or required sources.`);
         }
         if (kind === "gwas" && !row.relevance_reason) {
           throw new Error("Professionally reviewed GWAS relevance rows require relevance_reason.");
@@ -3672,21 +3742,10 @@ async function validateCompleteCurationRegistry(kind, rows, expectedPath) {
   }
 }
 
-async function regenerateGroupedPayloadV6(job) {
-  const outputDir = path.dirname(path.resolve(job.artifacts?.groupPayloadsJsonlV5 || ""));
-  const requiredInputs = [
-    job.artifacts?.groupVariantDetailCsvV4,
-    job.artifacts?.canonicalGeneModuleStatusCsv,
-    job.artifacts?.clinvarSubmitterAssertionsCsv,
-    job.artifacts?.gwasEvidenceClustersCsv,
-    job.artifacts?.publicationEvidenceCsv,
-  ].map((value) => path.resolve(value || ""));
-  if (!isPathInside(RUNTIME_PATHS.runs, outputDir) || requiredInputs.some((value) => !isPathInside(RUNTIME_PATHS.runs, value) || !existsSync(value))) {
-    throw new Error("V6 regeneration inputs are incomplete or outside the HEAL run root.");
-  }
-  const summary = await processGroupedPayloadV6({
-    event: "heal.grouped_payload_v6.regenerate",
-    runId: `group-payload-v6-${job.id}`,
+function groupedPayloadV7Request(job, outputDir, event) {
+  return {
+    event,
+    runId: `group-payload-v7-${job.id}`,
     detailPath: job.artifacts.groupVariantDetailCsvV4,
     canonicalStatusPath: job.artifacts.canonicalGeneModuleStatusCsv,
     mechanismRegistryPath: existsSync(HEAL_MECHANISM_REGISTRY_PATH)
@@ -3699,13 +3758,40 @@ async function regenerateGroupedPayloadV6(job) {
     publicationsPath: job.artifacts.publicationEvidenceCsv,
     outputDir,
     tokenizerModel: LLM1_MODEL,
+    assembly: job.vcfAssembly || "GRCh38",
+    inputCompleteness: {
+      mode: "observed_variants_only",
+      source_type: "vcf",
+      reference_build: job.vcfAssembly || "GRCh38",
+      reference_version: "HEAL_GRCh38_runtime_reference",
+      sample_count: 1,
+      callability_method: "not_available",
+      can_assert_hom_ref: false,
+      can_assert_not_callable: false,
+      absence_semantics: "not_observed_callability_unknown",
+    },
+    ageBand: "age_0_7",
+    activeAgeBands: HEAL_LLM1_ACTIVE_AGE_BANDS,
+    activeTiers: HEAL_LLM1_ACTIVE_TIERS,
+    experimentalCanaryGroups: HEAL_LLM1_EXPERIMENTAL_CANARIES,
+    curationSnapshotId: HEAL_LLM1_CURATION_SNAPSHOT_ID,
+    humanReviewFoundationPath: HEAL_TIER1_HUMAN_REVIEW_FOUNDATION,
     requestedAt: new Date().toISOString(),
-  });
+  };
+}
+
+function assignGroupedPayloadV7Artifacts(job, summary) {
   const outputs = summary.outputs || {};
   Object.assign(job.artifacts, {
     groupPayloadsJsonlV6: outputs.groupPayloadsJsonlV6 || "",
     groupPayloadsCsvV6: outputs.groupPayloadsCsvV6 || "",
     groupPayloadSchemaV6Json: outputs.groupPayloadSchemaV6Json || "",
+    groupPayloadsJsonlV7: outputs.groupPayloadsJsonlV7 || "",
+    groupPayloadsCsvV7: outputs.groupPayloadsCsvV7 || "",
+    groupPayloadSchemaV7Json: outputs.groupPayloadSchemaV7Json || "",
+    groupPreflightV7Csv: outputs.groupPreflightV7Csv || "",
+    groupCardsV7Json: outputs.groupCardsV7Json || "",
+    groupPayloadV7SummaryJson: outputs.groupPayloadV7SummaryJson || "",
     targetGeneConsequenceAuditCsv: outputs.targetGeneConsequenceAuditCsv || "",
     alleleSpecificFrequencyAuditCsv: outputs.alleleSpecificFrequencyAuditCsv || "",
     clinvarConditionConflictAuditCsv: outputs.clinvarConditionConflictAuditCsv || "",
@@ -3716,18 +3802,314 @@ async function regenerateGroupedPayloadV6(job) {
     persistentMechanismRegistryCsv: outputs.persistentMechanismRegistryCsv || "",
     persistentGwasRegistryCsv: outputs.persistentGwasRegistryCsv || "",
   });
+}
+
+async function buildCombinedLlm1Cards(job, summary) {
+  const basePath = path.resolve(job.artifacts?.groupCardsV7Json || "");
+  const interpretationPath = path.resolve(summary.outputs?.groupInterpretationsJsonl || "");
+  const errorPath = path.resolve(summary.outputs?.groupInterpretationErrorsCsv || "");
+  const cards = existsSync(basePath) ? JSON.parse(await readFile(basePath, "utf8")) : [];
+  const interpretations = existsSync(interpretationPath)
+    ? (await readFile(interpretationPath, "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line))
+    : [];
+  const errors = existsSync(errorPath) ? parseCsvRecords(await readFile(errorPath, "utf8")) : [];
+  const interpretationByGroup = new Map(interpretations.map((row) => [row.group_id, row]));
+  const errorByGroup = new Map(errors.map((row) => [row.group_id, row]));
+  const combined = cards.map((card) => {
+    const interpretation = interpretationByGroup.get(card.group_id);
+    const error = errorByGroup.get(card.group_id);
+    if (interpretation) return { ...card, status: "valid", coverage_status: "interpretable", interpretation };
+    if (error) {
+      const quarantined = String(error.error || "").includes("critical_semantic_error:");
+      return {
+        ...card,
+        status: quarantined ? "quarantined" : "technical_failure",
+        coverage_status: "result_unavailable",
+        interpretation: null,
+        error_code: quarantined ? "critical_semantic_error" : "technical_failure",
+      };
+    }
+    return { ...card, interpretation: null };
+  });
+  const outputPath = path.join(path.resolve(summary.outputDir), "llm1_group_cards_combined.json");
+  await writeFile(outputPath, JSON.stringify(combined, null, 2), "utf8");
+  job.artifacts.groupCardsJson = outputPath;
+  return combined;
+}
+
+async function runInternalAutoLlm1(job, v7Summary) {
+  const enabled = HEAL_V2_LLM1_ENABLED && HEAL_LLM1_EXECUTION_MODE === "internal_auto";
+  if (!enabled) return { status: "disabled", reason: "internal_auto_not_enabled" };
+  if (v7Summary.gates?.llm1InternalAutoReady !== "pass") {
+    return { status: "blocked", reason: "v7_preflight_or_tier1_curation_incomplete" };
+  }
+  const payloadPath = path.resolve(v7Summary.outputs?.groupPayloadsJsonlV7 || "");
+  if (!isPathInside(RUNTIME_PATHS.runs, payloadPath) || !existsSync(payloadPath)) {
+    throw new Error("V7 payloads are missing or outside the HEAL run root.");
+  }
+  const allPayloads = (await readFile(payloadPath, "utf8"))
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const eligible = allPayloads
+    .filter((item) => item.operational_state?.status === "eligible" && item.operational_state?.llm1_eligible === true)
+    .map((item) => ({
+      ...item,
+      execution_mode: "internal_auto",
+      operational_state: { ...item.operational_state, status: "llm1_running" },
+    }));
+  if (eligible.length === 0) return { status: "blocked", reason: "no_eligible_groups" };
+  const outputDir = jobStageDirectory(job.id, "llm1-internal");
+  await mkdir(outputDir, { recursive: true });
+  const selectedPath = path.join(outputDir, "llm1_internal_selected_payloads_v7.jsonl");
+  await writeFile(selectedPath, `${eligible.map((item) => JSON.stringify(item)).join("\n")}\n`, "utf8");
+  job.artifacts.llm1InternalSelectedPayloadsJsonl = selectedPath;
+  job.stage = "grouped_individual_interpretation";
+  job.stageProgress = 1;
+  job.message = `Running Luna for ${eligible.length} eligible internal groups`;
+  await persistVcfCanonJob(job);
+  const summary = await processGroupedIndividualInterpretationWithRetry(
+    {
+      event: "heal.llm1_internal_auto.requested",
+      runId: `llm1-internal-${job.id}`,
+      inputPath: selectedPath,
+      outputDir,
+      model: LLM1_MODEL,
+      promptProfile: LLM1_PROMPT_PROFILE,
+      reasoningEffort: LLM1_REASONING_EFFORT,
+      dryRun: false,
+      maxGroups: 0,
+      maxWorkers: 2,
+      groupAttempts: 2,
+      requestedAt: new Date().toISOString(),
+    },
+    job,
+    1,
+  );
+  const outputs = summary.outputs || {};
+  Object.assign(job.artifacts, {
+    groupInterpretationsJsonl: outputs.groupInterpretationsJsonl || "",
+    groupInterpretationsCsv: outputs.groupInterpretationsCsv || "",
+    groupInterpretationErrorsCsv: outputs.groupInterpretationErrorsCsv || "",
+    groupInterpretationProgressJson: outputs.groupInterpretationProgressJson || "",
+    groupInterpretationSummaryJson: outputs.groupInterpretationSummaryJson || "",
+    groupInterpretationRawResponsesJsonl: outputs.groupInterpretationRawResponsesJsonl || "",
+    groupInterpretationCallAuditCsv: outputs.groupInterpretationCallAuditCsv || "",
+    groupQuarantineJsonl: outputs.groupQuarantineJsonl || "",
+    llm1PilotPromptSnapshotMd: outputs.llm1PilotPromptSnapshotMd || "",
+    llm1PilotResponseSchemaSnapshotJson: outputs.llm1PilotResponseSchemaSnapshotJson || "",
+  });
+  const cards = await buildCombinedLlm1Cards(job, summary);
+  return {
+    ...sanitizeGroupedIndividualInterpretationResult(summary),
+    status: summary.metadata?.error_groups > 0 ? "partial" : "valid",
+    card_count: cards.length,
+    quarantined_groups: cards.filter((card) => card.status === "quarantined").length,
+    technical_failure_groups: cards.filter((card) => card.status === "technical_failure").length,
+  };
+}
+
+async function runGroupedPrototypeForJob(job, { dryRun = false } = {}) {
+  if (!HEAL_GROUPED_PROTOTYPE_ENABLED || HEAL_PROTOTYPE_EXECUTION_MODE !== "internal_quick") {
+    return { status: "disabled", reason: "grouped_prototype_not_enabled" };
+  }
+  if (HEAL_PROTOTYPE_LLM1_MODEL !== "gpt-5.6-luna" || HEAL_PROTOTYPE_LLM2_MODEL !== "gpt-5.6-luna") {
+    throw new Error("The isolated grouped prototype requires Luna for both LLM1 and LLM2.");
+  }
+  if (normalizeAnalysisMode(job.analysisMode || "quick") !== "quick") {
+    return { status: "blocked", reason: "prototype_is_available_only_in_quick_mode" };
+  }
+  const payloadPath = path.resolve(job.artifacts?.groupPayloadsJsonlV7 || "");
+  if (!isPathInside(RUNTIME_PATHS.runs, payloadPath) || !existsSync(payloadPath)) {
+    throw new Error("V7 grouped payloads are unavailable for the prototype.");
+  }
+  for (const artifactPath of [
+    HEAL_PROTOTYPE_SNAPSHOT_PATH,
+    HEAL_PROTOTYPE_CANDIDATE_MANIFEST_PATH,
+    HEAL_PROTOTYPE_COVERAGE_MANIFEST_PATH,
+  ]) {
+    const resolved = path.resolve(artifactPath);
+    if (!isPathInside(DATA_ROOT, resolved) || !existsSync(resolved)) {
+      throw new Error("A sealed prototype snapshot artifact is missing or outside HEAL data.");
+    }
+  }
+  const outputDir = jobStageDirectory(job.id, "grouped-prototype");
+  await mkdir(outputDir, { recursive: true });
+  job.stage = "grouped_prototype";
+  job.stageProgress = 5;
+  job.message = "Running isolated grouped prototype with Luna";
+  job.updatedAt = new Date().toISOString();
+  await persistVcfCanonJob(job);
+  const summary = await processGroupedPrototype({
+    event: "heal.grouped_prototype.requested",
+    runId: `grouped-prototype-${job.id}`,
+    payloadPath,
+    outputDir,
+    snapshotPath: HEAL_PROTOTYPE_SNAPSHOT_PATH,
+    candidateManifestPath: HEAL_PROTOTYPE_CANDIDATE_MANIFEST_PATH,
+    coverageManifestPath: HEAL_PROTOTYPE_COVERAGE_MANIFEST_PATH,
+    fileName: job.fileName || `${job.id}.vcf`,
+    dryRun,
+    requestedAt: new Date().toISOString(),
+  });
+  Object.assign(job.artifacts, {
+    groupedPrototypeSummaryJson: path.join(outputDir, "grouped_prototype_run_summary.json"),
+    groupedPrototypeDocx: path.join(outputDir, "HEAL_prototipo_desarrollo.docx"),
+    groupedPrototypePdf: path.join(outputDir, "HEAL_prototipo_desarrollo.pdf"),
+    groupedPrototypeCardsCsv: path.join(outputDir, "cards.csv"),
+    groupedPrototypeCoverageCsv: path.join(outputDir, "coverage.csv"),
+    groupedPrototypeTelemetryCsv: path.join(outputDir, "telemetry_costs.csv"),
+    groupedPrototypeTechnicalAuditJson: path.join(outputDir, "raw_responses_audit.json"),
+    groupedPrototypeCardsJson: path.join(outputDir, "llm1_cards.json"),
+  });
+  job.result = { ...job.result, groupedPrototype: summary };
+  job.stageProgress = 100;
+  return summary;
+}
+
+async function regenerateGroupedPayloadV6(job) {
+  const outputDir = path.dirname(path.resolve(job.artifacts?.groupPayloadsJsonlV5 || ""));
+  const requiredInputs = [
+    job.artifacts?.groupVariantDetailCsvV4,
+    job.artifacts?.canonicalGeneModuleStatusCsv,
+    job.artifacts?.clinvarSubmitterAssertionsCsv,
+    job.artifacts?.gwasEvidenceClustersCsv,
+    job.artifacts?.publicationEvidenceCsv,
+  ].map((value) => path.resolve(value || ""));
+  if (!isPathInside(RUNTIME_PATHS.runs, outputDir) || requiredInputs.some((value) => !isPathInside(RUNTIME_PATHS.runs, value) || !existsSync(value))) {
+    throw new Error("V6 regeneration inputs are incomplete or outside the HEAL run root.");
+  }
+  const summary = await processGroupedPayloadV7(groupedPayloadV7Request(job, outputDir, "heal.grouped_payload_v7.regenerate"));
+  assignGroupedPayloadV7Artifacts(job, summary);
   job.result = {
     ...job.result,
     groupPrep: {
       ...(job.result?.groupPrep || {}),
-      payloadV6: sanitizeGroupedInterpretationPrepResult(summary),
+      payloadV6: sanitizeGroupedInterpretationPrepResult({ ...summary, payloadSchemaVersion: "llm1_group_payload_v6" }),
+      payloadV7: sanitizeGroupedInterpretationPrepResult(summary),
       metadata: { ...(job.result?.groupPrep?.metadata || {}), ...(summary.metadata || {}) },
     },
   };
+  job.result.llm1InternalAuto = await runInternalAutoLlm1(job, summary);
   job.updatedAt = new Date().toISOString();
   await persistVcfCanonJob(job);
   return summary;
 }
+
+app.post("/api/vcf-canon-matches/:jobId/grouped-prototype", async (req, res) => {
+  if (!HEAL_GROUPED_PROTOTYPE_ENABLED || HEAL_PROTOTYPE_EXECUTION_MODE !== "internal_quick") {
+    res.status(409).json({ error: "The grouped prototype is disabled." });
+    return;
+  }
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload && !canAccessUpload(req, upload)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+  if (job.status === "running") {
+    res.status(409).json({ error: "This job is already running." });
+    return;
+  }
+  const dryRun = req.body?.dryRun === true;
+  if (dryRun && !ALLOW_LLM_DRY_RUN) {
+    res.status(409).json({ error: "LLM dry-run mode is disabled." });
+    return;
+  }
+  job.status = "running";
+  job.progress = 90;
+  job.error = null;
+  job.updatedAt = new Date().toISOString();
+  await persistVcfCanonJob(job);
+  (async () => {
+    try {
+      const summary = await runGroupedPrototypeForJob(job, { dryRun });
+      job.status = summary.status === "prototype_demo_ready_automatic" ? "complete" : "failed";
+      job.progress = 100;
+      job.stageProgress = 100;
+      job.message = summary.status === "prototype_demo_ready_automatic"
+        ? "Grouped prototype report completed"
+        : "Grouped prototype completed with isolated failures";
+      if (job.status === "failed") job.error = summary.status;
+    } catch (error) {
+      job.status = "failed";
+      job.progress = 100;
+      job.stage = "grouped_prototype";
+      job.stageProgress = 100;
+      job.error = error.message || String(error);
+      job.message = "Grouped prototype failed";
+    } finally {
+      job.updatedAt = new Date().toISOString();
+      await persistVcfCanonJob(job);
+    }
+  })();
+  res.status(202).json(publicJob(job));
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-prototype/download/:artifact", async (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload && !canAccessUpload(req, upload)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+  const definitions = {
+    docx: ["groupedPrototypeDocx", "HEAL_prototipo_desarrollo.docx"],
+    pdf: ["groupedPrototypePdf", "HEAL_prototipo_desarrollo.pdf"],
+    cards: ["groupedPrototypeCardsCsv", "HEAL_prototipo_tarjetas.csv"],
+    coverage: ["groupedPrototypeCoverageCsv", "HEAL_prototipo_cobertura.csv"],
+    telemetry: ["groupedPrototypeTelemetryCsv", "HEAL_prototipo_telemetria.csv"],
+  };
+  const definition = definitions[String(req.params.artifact || "").toLowerCase()];
+  if (!definition) {
+    res.status(404).json({ error: "Unknown grouped prototype artifact." });
+    return;
+  }
+  const artifactPath = path.resolve(job.artifacts?.[definition[0]] || "");
+  if (!isPathInside(GROUPED_PROTOTYPE_ROOT, artifactPath) || !existsSync(artifactPath)) {
+    res.status(404).json({ error: "Grouped prototype artifact is not ready." });
+    return;
+  }
+  res.download(artifactPath, definition[1]);
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-prototype/cards", async (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload && !canAccessUpload(req, upload)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+  const cardsPath = path.resolve(job.artifacts?.groupedPrototypeCardsJson || "");
+  if (!isPathInside(GROUPED_PROTOTYPE_ROOT, cardsPath) || !existsSync(cardsPath)) {
+    res.status(404).json({ error: "Grouped prototype cards are not ready." });
+    return;
+  }
+  const cards = JSON.parse(await readFile(cardsPath, "utf8"));
+  res.json(cards.map((card) => ({
+    ...card,
+    tier: String(card.module_id || "").startsWith("T1.") ? "T1" : "inactive",
+    client_visible: card.status === "valid",
+    experimental_canary: false,
+    interpretation: card.status === "valid" ? card : null,
+    input_completeness: { mode: card.input_completeness_mode || "observed_variants_only" },
+    focus_variant_count: (card.focus_variant_refs || []).length,
+    focus_variants: card.focus_variant_refs || [],
+    decision_reason: card.interpretation_one_sentence_es || "",
+  })));
+});
 
 app.post("/api/vcf-canon-matches/:jobId/curation/:kind", async (req, res) => {
   if (!requireCurationAccess(req, res)) return;
@@ -3780,6 +4162,32 @@ app.post("/api/vcf-canon-matches/:jobId/curation/:kind", async (req, res) => {
     await rename(temporary, resolvedDestination);
     const summary = kind === "manifest" ? null : await regenerateGroupedPayloadV6(job);
     res.json({ status: "accepted", kind, regenerated: Boolean(summary), metadata: summary?.metadata || null });
+  } catch (error) {
+    res.status(400).json({ error: error.message || String(error) });
+  }
+});
+
+app.post("/api/vcf-canon-matches/:jobId/llm1-preflight-v7", async (req, res) => {
+  if (!requireCurationAccess(req, res)) return;
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (upload && !canAccessUpload(req, upload)) {
+    res.status(403).json({ error: "Match belongs to a different client." });
+    return;
+  }
+  try {
+    const summary = await regenerateGroupedPayloadV6(job);
+    res.json({
+      status: summary.status,
+      payloadSchemaVersion: summary.payloadSchemaVersion,
+      metadata: summary.metadata,
+      gates: summary.gates,
+      llm1InternalAuto: job.result?.llm1InternalAuto || null,
+    });
   } catch (error) {
     res.status(400).json({ error: error.message || String(error) });
   }
@@ -3866,6 +4274,8 @@ app.post("/api/vcf-canon-matches/:jobId/llm1-pilot", async (req, res) => {
           inputPath: selectedPath,
           outputDir,
           model: LLM1_MODEL,
+          promptProfile: LLM1_PROMPT_PROFILE,
+          reasoningEffort: LLM1_REASONING_EFFORT,
           dryRun: false,
           maxGroups: 5,
           maxWorkers: 2,
@@ -3901,6 +4311,79 @@ app.post("/api/vcf-canon-matches/:jobId/llm1-pilot", async (req, res) => {
     }
   })();
   res.status(202).json({ jobId: job.id, status: "running", selectedGroups: selected.length });
+});
+
+app.post("/api/vcf-canon-matches/:jobId/llm1-internal-review", async (req, res) => {
+  if (!requireCurationAccess(req, res)) return;
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  const decision = String(req.body?.decision || "").trim().toLowerCase();
+  const reviewer = String(req.body?.reviewer || "").trim();
+  const notes = String(req.body?.notes || "").trim();
+  if (!new Set(["approved", "rejected"]).has(decision) || !reviewer) {
+    res.status(400).json({ error: "decision=approved|rejected and reviewer are required." });
+    return;
+  }
+  const cardsPath = path.resolve(job.artifacts?.groupCardsJson || job.artifacts?.groupCardsV7Json || "");
+  const summaryPath = path.resolve(job.artifacts?.groupPayloadV7SummaryJson || "");
+  if (
+    !isPathInside(RUNTIME_PATHS.runs, cardsPath) ||
+    !isPathInside(RUNTIME_PATHS.runs, summaryPath) ||
+    !existsSync(cardsPath) ||
+    !existsSync(summaryPath)
+  ) {
+    res.status(409).json({ error: "V7 cards or preflight summary are not available." });
+    return;
+  }
+  const cards = JSON.parse(await readFile(cardsPath, "utf8"));
+  const preflight = JSON.parse(await readFile(summaryPath, "utf8"));
+  const releaseBlockingCards = cards.filter(
+    (card) =>
+      ["quarantined", "technical_failure", "preflight_blocked", "llm1_running"].includes(card.status) ||
+      (card.client_visible === true && card.status !== "valid"),
+  );
+  const acceptanceReady =
+    preflight.gates?.all180StructurallyPresent === "pass" &&
+    preflight.gates?.tier1CurationComplete === "pass" &&
+    releaseBlockingCards.length === 0;
+  if (decision === "approved" && !acceptanceReady) {
+    res.status(409).json({
+      error: "The run cannot be approved until all 180 groups pass preflight, Tier 1 is classified, and every visible card is valid.",
+      blockingGroups: releaseBlockingCards.map((card) => card.group_id),
+    });
+    return;
+  }
+  const review = {
+    schema_version: "llm1_internal_review_v1",
+    job_id: job.id,
+    decision,
+    reviewer,
+    notes,
+    reviewed_at: new Date().toISOString(),
+    review_scope: "all_enabled_cards",
+    acceptance_ready: acceptanceReady,
+    total_cards: cards.length,
+    client_visible_cards: cards.filter((card) => card.client_visible === true).length,
+    experimental_canaries: cards.filter((card) => card.experimental_canary === true).length,
+    blocking_groups: releaseBlockingCards.map((card) => card.group_id),
+    payload_sha256: preflight.metadata?.payload_sha256 || "",
+    curation_snapshot_id: HEAL_LLM1_CURATION_SNAPSHOT_ID,
+  };
+  const reviewPath = path.join(jobStageDirectory(job.id, "llm1-internal"), "llm1_internal_review.json");
+  await mkdir(path.dirname(reviewPath), { recursive: true });
+  await writeFile(reviewPath, JSON.stringify(review, null, 2), "utf8");
+  job.artifacts.llm1InternalReviewJson = reviewPath;
+  job.result = {
+    ...job.result,
+    llm1InternalReview: review,
+    llm1Maturity: decision === "approved" ? "internal_stable" : "development_review_rejected",
+  };
+  job.updatedAt = new Date().toISOString();
+  await persistVcfCanonJob(job);
+  res.json(review);
 });
 
 app.post("/api/vcf-canon-matches/:jobId/evidence-digest", async (req, res) => {
@@ -5151,6 +5634,14 @@ app.get("/api/vcf-canon-matches/:jobId/grouped-payloads-v6-jsonl", async (req, r
   await downloadGroupedArtifact(req, res, "groupPayloadsJsonlV6", "llm1_group_payloads_v6", { jsonl: true });
 });
 
+app.get("/api/vcf-canon-matches/:jobId/grouped-payloads-v7", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadsCsvV7", "llm1_group_payloads_v7");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-payloads-v7-jsonl", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadsJsonlV7", "llm1_group_payloads_v7", { jsonl: true });
+});
+
 app.get("/api/vcf-canon-matches/:jobId/group-evidence-packets", async (req, res) => {
   await downloadGroupedArtifact(req, res, "groupEvidencePacketsJsonlGz", "group_evidence_packets", { jsonl: true });
 });
@@ -5189,6 +5680,26 @@ app.get("/api/vcf-canon-matches/:jobId/grouped-payload-v5-schema", async (req, r
 
 app.get("/api/vcf-canon-matches/:jobId/grouped-payload-v6-schema", async (req, res) => {
   await downloadGroupedArtifact(req, res, "groupPayloadSchemaV6Json", "llm1_group_payload_v6_schema", { json: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-payload-v7-schema", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadSchemaV7Json", "llm1_group_payload_v7_schema", { json: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/group-preflight-v7", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPreflightV7Csv", "llm1_group_preflight_v7");
+});
+
+app.get("/api/vcf-canon-matches/:jobId/group-payload-v7-summary", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupPayloadV7SummaryJson", "llm1_group_payload_v7_summary", { json: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/llm1-group-cards", async (req, res) => {
+  await downloadGroupedArtifact(req, res, jobArtifactKeyForCards(req.params.jobId), "llm1_group_cards", { json: true });
+});
+
+app.get("/api/vcf-canon-matches/:jobId/llm1-group-quarantine", async (req, res) => {
+  await downloadGroupedArtifact(req, res, "groupQuarantineJsonl", "llm1_group_quarantine", { jsonl: true });
 });
 
 app.get("/api/vcf-canon-matches/:jobId/target-gene-consequence-audit", async (req, res) => {
@@ -5574,6 +6085,257 @@ app.get("/api/vcf-canon-matches/:jobId/final-report", async (req, res) => {
   const baseName = safeFileName(String(job.fileName || "heal-vcf").replace(/\.(vcf\.gz|vcf|gz)$/i, ""));
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
   res.download(reportPath, `${baseName}_final_report.docx`);
+});
+
+function safeCurationSnapshotId(value) {
+  const normalized = String(value || "").trim();
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{2,79}$/.test(normalized)) {
+    throw new Error("snapshotId must contain 3-80 safe characters.");
+  }
+  return normalized;
+}
+
+function tier1CurationV2Paths(snapshotId) {
+  const root = path.resolve(HEAL_TIER1_CURATION_V2_ROOT);
+  const snapshot = path.join(root, "snapshots", safeCurationSnapshotId(snapshotId));
+  return {
+    root,
+    snapshot,
+    evidence: path.join(snapshot, "evidence"),
+    evidenceManifest: path.join(snapshot, "evidence", "evidence_manifest.json"),
+    gold: path.join(snapshot, "gold", "gold_manifest.json"),
+    optimization: path.join(snapshot, "prompt-optimization"),
+    fullCandidate: path.join(snapshot, "full-candidate"),
+    reviews: path.join(snapshot, "manual-review", "review_manifest.json"),
+    approval: path.join(snapshot, "manual-review", "snapshot_approval.json"),
+  };
+}
+
+async function resolveTier1CanonArtifacts() {
+  const current = JSON.parse(await readFile(path.join(CANON_ROOT, "current", "current.json"), "utf8"));
+  const runId = HEAL_TIER1_CURATION_V2_CANON_RUN_ID || current.runId;
+  const runRoot = path.resolve(CANON_ROOT, "runs", runId);
+  if (!isPathInside(path.resolve(CANON_ROOT, "runs"), runRoot)) throw new Error("Canon run is outside the allowed root.");
+  const artifacts = {
+    runId,
+    cleanRows: path.join(runRoot, "heal-canon-v2-clean-rows.csv"),
+    geneMaster: path.join(runRoot, "heal-canon-v2-gene-master.csv"),
+    mechanismRegistry: path.resolve(HEAL_MECHANISM_REGISTRY_PATH),
+  };
+  for (const artifact of Object.values(artifacts).filter((value) => value !== runId)) {
+    if (!existsSync(artifact)) throw new Error(`Required Tier 1 curation input is missing: ${artifact}`);
+  }
+  return artifacts;
+}
+
+async function persistTier1CurationV2Job(job) {
+  const jobsRoot = path.join(path.resolve(HEAL_TIER1_CURATION_V2_ROOT), "jobs");
+  await mkdir(jobsRoot, { recursive: true });
+  await writeFile(path.join(jobsRoot, `${job.id}.json`), JSON.stringify(job, null, 2), "utf8");
+}
+
+async function startTier1CurationV2Task(operation, args, snapshotId) {
+  const activeDuplicate = [...tier1CurationV2Jobs.values()].find(
+    (item) => item.snapshotId === snapshotId && item.operation === operation && item.status === "running",
+  );
+  if (activeDuplicate) throw new Error(`A ${operation} task is already running for this snapshot.`);
+  const job = {
+    id: crypto.randomUUID(), operation, snapshotId, status: "running", startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), completedAt: null, exitCode: null, outputTail: [], error: "",
+  };
+  tier1CurationV2Jobs.set(job.id, job);
+  await persistTier1CurationV2Job(job);
+  const child = spawn(PYTHON_EXE, args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  const appendOutput = (stream, chunk) => {
+    const lines = chunk.toString("utf8").split(/\r?\n/).filter(Boolean);
+    job.outputTail = [...job.outputTail, ...lines.map((line) => `${stream}:${line}`)].slice(-30);
+    job.updatedAt = new Date().toISOString();
+  };
+  child.stdout.on("data", (chunk) => appendOutput("stdout", chunk));
+  child.stderr.on("data", (chunk) => appendOutput("stderr", chunk));
+  child.on("error", async (error) => {
+    job.status = "technical_failure"; job.error = error.message; job.completedAt = new Date().toISOString(); job.updatedAt = job.completedAt;
+    await persistTier1CurationV2Job(job).catch(() => {});
+  });
+  child.on("close", async (code) => {
+    job.exitCode = code; job.status = code === 0 ? "completed" : "blocked";
+    job.completedAt = new Date().toISOString(); job.updatedAt = job.completedAt;
+    if (code !== 0 && !job.error) job.error = job.outputTail.filter((line) => line.startsWith("stderr:")).slice(-1)[0] || `Process exited with ${code}.`;
+    await persistTier1CurationV2Job(job).catch(() => {});
+  });
+  return job;
+}
+
+async function readOptionalJson(filePath, fallback = null) {
+  const raw = await readFile(filePath, "utf8").catch(() => null);
+  return raw ? JSON.parse(raw) : fallback;
+}
+
+app.get("/api/tier1-curation-v2/status", async (req, res) => {
+  if (!requireCurationAccess(req, res)) return;
+  const snapshotsRoot = path.join(path.resolve(HEAL_TIER1_CURATION_V2_ROOT), "snapshots");
+  const entries = await readdir(snapshotsRoot, { withFileTypes: true }).catch(() => []);
+  const snapshots = [];
+  for (const entry of entries.filter((item) => item.isDirectory())) {
+    const paths = tier1CurationV2Paths(entry.name);
+    snapshots.push({
+      snapshotId: entry.name,
+      evidence: await readOptionalJson(paths.evidenceManifest),
+      gold: await readOptionalJson(paths.gold),
+      fullCandidate: await readOptionalJson(path.join(paths.fullCandidate, "candidate_summary.json")),
+      approval: await readOptionalJson(paths.approval),
+    });
+  }
+  res.json({
+    enabled: HEAL_TIER1_CURATION_V2_ENABLED, model: HEAL_TIER1_CURATION_V2_MODEL,
+    evidenceCutoff: HEAL_TIER1_CURATION_V2_CUTOFF, activeRegistryModified: false,
+    snapshots, runningJobs: [...tier1CurationV2Jobs.values()],
+  });
+});
+
+app.get("/api/tier1-curation-v2/tasks/:taskId", async (req, res) => {
+  if (!requireCurationAccess(req, res)) return;
+  const memory = tier1CurationV2Jobs.get(req.params.taskId);
+  const stored = memory || await readOptionalJson(path.join(path.resolve(HEAL_TIER1_CURATION_V2_ROOT), "jobs", `${req.params.taskId}.json`));
+  if (!stored) return res.status(404).json({ error: "Tier 1 curation task not found." });
+  res.json(stored);
+});
+
+app.post("/api/tier1-curation-v2/tasks", async (req, res) => {
+  if (!requireCurationAccess(req, res)) return;
+  if (!HEAL_TIER1_CURATION_V2_ENABLED) return res.status(409).json({ error: "Tier 1 curation v2 is disabled by configuration." });
+  if (HEAL_TIER1_CURATION_V2_MODEL !== "gpt-5.6-sol" || HEAL_TIER1_CURATION_V2_CUTOFF !== "2026-07-28") {
+    return res.status(409).json({ error: "Tier 1 curation model or evidence cutoff differs from the frozen v2 contract." });
+  }
+  try {
+    const operation = String(req.body?.operation || "");
+    const snapshotId = safeCurationSnapshotId(req.body?.snapshotId);
+    const paths = tier1CurationV2Paths(snapshotId);
+    await mkdir(paths.snapshot, { recursive: true });
+    const canon = await resolveTier1CanonArtifacts();
+    let command;
+    if (operation === "collect_evidence") {
+      if (existsSync(paths.evidenceManifest)) throw new Error("Evidence manifest already exists; snapshots are immutable.");
+      command = [SERVICE_SCRIPTS.tier1CurationV2Evidence, "--mechanism-registry", canon.mechanismRegistry, "--clean-canon-rows", canon.cleanRows, "--gene-master", canon.geneMaster, "--output-dir", paths.evidence, "--scope", req.body?.scope === "gold" ? "gold" : "all"];
+    } else if (operation === "prepare_gold") {
+      if (!existsSync(paths.evidenceManifest)) throw new Error("Evidence collection must complete before preparing gold.");
+      command = [SERVICE_SCRIPTS.tier1CurationV2Runner, "prepare-gold", "--evidence-manifest", paths.evidenceManifest, "--output", paths.gold];
+    } else if (operation === "calibrate") {
+      const candidate = String(req.body?.candidate || "");
+      const promptPath = req.body?.promptCandidate
+        ? path.join(paths.optimization, safeFileName(req.body.promptCandidate))
+        : path.join(APP_ROOT, "services", "heal-tier1-curation-v2", "prompt_mechanism_curator_v2.md");
+      if (!existsSync(paths.gold)) throw new Error("An approved gold manifest is required.");
+      if (!existsSync(promptPath) || (req.body?.promptCandidate && !isPathInside(paths.optimization, promptPath))) throw new Error("Prompt candidate is missing or outside the snapshot.");
+      command = [SERVICE_SCRIPTS.tier1CurationV2Runner, "calibrate", "--evidence-manifest", paths.evidenceManifest, "--gold", paths.gold, "--output-root", paths.optimization, "--candidate", candidate, "--prompt", promptPath];
+    } else if (operation === "optimize_prompt") {
+      const sourceName = String(req.body?.currentPrompt || "prompt_mechanism_curator_v2.md");
+      const currentPrompt = sourceName === "prompt_mechanism_curator_v2.md"
+        ? path.join(APP_ROOT, "services", "heal-tier1-curation-v2", sourceName)
+        : path.join(paths.optimization, safeFileName(sourceName));
+      const outputName = safeFileName(String(req.body?.outputPrompt || ""));
+      const outputPrompt = path.join(paths.optimization, outputName);
+      if (!outputName.endsWith(".md") || !existsSync(currentPrompt) || !isPathInside(paths.optimization, outputPrompt)) throw new Error("Prompt optimizer paths are invalid.");
+      command = [SERVICE_SCRIPTS.tier1CurationV2Runner, "optimize", "--output-root", paths.optimization, "--current-prompt", currentPrompt, "--output", outputPrompt];
+    } else if (operation === "run_full") {
+      const candidate = String(req.body?.candidate || "");
+      const candidateRoot = path.join(paths.optimization, candidate);
+      const promptPath = path.join(candidateRoot, "curator_prompt_snapshot.md");
+      command = [SERVICE_SCRIPTS.tier1CurationV2Runner, "run-full", "--evidence-manifest", paths.evidenceManifest, "--acceptance-report", path.join(candidateRoot, "acceptance_report.json"), "--prompt", promptPath, "--output-dir", paths.fullCandidate];
+    } else {
+      throw new Error("Unsupported Tier 1 curation v2 operation.");
+    }
+    const job = await startTier1CurationV2Task(operation, [command[0], ...command.slice(1)], snapshotId);
+    res.status(202).json(job);
+  } catch (error) {
+    res.status(400).json({ error: error.message || String(error) });
+  }
+});
+
+app.put("/api/tier1-curation-v2/snapshots/:snapshotId/gold", async (req, res) => {
+  if (!requireCurationAccess(req, res)) return;
+  try {
+    const paths = tier1CurationV2Paths(req.params.snapshotId);
+    if (!existsSync(paths.evidenceManifest)) throw new Error("Evidence manifest is required before gold approval.");
+    if (existsSync(paths.gold) && (await readOptionalJson(paths.gold))?.approval_status === "approved") throw new Error("Approved gold manifests are immutable.");
+    await mkdir(path.dirname(paths.gold), { recursive: true });
+    const temporary = `${paths.gold}.${process.pid}.tmp`;
+    const sealed = `${paths.gold}.${process.pid}.sealed`;
+    await writeFile(temporary, JSON.stringify(req.body, null, 2), "utf8");
+    const validation = await runPythonJsonCommand(SERVICE_SCRIPTS.tier1CurationV2Runner, ["validate-gold", "--evidence-manifest", paths.evidenceManifest, "--gold", temporary, "--seal-output", sealed]);
+    await unlink(temporary).catch(() => {});
+    await rename(sealed, paths.gold);
+    res.json({ status: "accepted", validation });
+  } catch (error) {
+    res.status(400).json({ error: error.message || String(error) });
+  }
+});
+
+app.get("/api/tier1-curation-v2/snapshots/:snapshotId/review", async (req, res) => {
+  if (!requireCurationAccess(req, res)) return;
+  try {
+    const paths = tier1CurationV2Paths(req.params.snapshotId);
+    const summary = await readOptionalJson(path.join(paths.fullCandidate, "candidate_summary.json"));
+    const flags = await readOptionalJson(path.join(paths.fullCandidate, "cross_group_audit_flags.json"), []);
+    const registryPath = path.join(paths.fullCandidate, "mechanism_curation_v2_candidate.jsonl");
+    const registryRaw = await readFile(registryPath, "utf8").catch(() => "");
+    const candidates = registryRaw.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    const activeRows = existsSync(HEAL_MECHANISM_REGISTRY_PATH)
+      ? parseCsvRecords(await readFile(HEAL_MECHANISM_REGISTRY_PATH, "utf8"))
+      : [];
+    const activeByGroup = new Map(activeRows.map((row) => [`${row.gene}:${row.module_id}`, row.curation_status || "draft"]));
+    const records = [];
+    const recordsRoot = path.join(paths.fullCandidate, "records");
+    for (const entry of await readdir(recordsRoot, { withFileTypes: true }).catch(() => [])) {
+      if (entry.isFile() && entry.name.endsWith(".json")) {
+        const record = await readOptionalJson(path.join(recordsRoot, entry.name));
+        if (record) records.push({
+          group_id: record.group_id,
+          curator: record.curator,
+          critic: record.critic,
+          arbiter: record.arbiter,
+          arbitration_reasons: record.arbitration_reasons,
+        });
+      }
+    }
+    const promptVersions = [];
+    for (const entry of await readdir(paths.optimization, { withFileTypes: true }).catch(() => [])) {
+      if (entry.isDirectory() && entry.name.startsWith("candidate-")) {
+        const candidateRoot = path.join(paths.optimization, entry.name);
+        promptVersions.push({
+          candidate: entry.name,
+          manifest: await readOptionalJson(path.join(candidateRoot, "run_manifest.json")),
+          acceptance: await readOptionalJson(path.join(candidateRoot, "acceptance_report.json")),
+        });
+      }
+    }
+    res.json({
+      snapshotId: req.params.snapshotId, summary, flags, promptVersions, records,
+      candidates: candidates.map((candidate) => ({ ...candidate, current_core_status: activeByGroup.get(candidate.group_id) || "absent" })),
+      activeRegistryModified: false,
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message || String(error) });
+  }
+});
+
+app.put("/api/tier1-curation-v2/snapshots/:snapshotId/review", async (req, res) => {
+  if (!requireCurationAccess(req, res)) return;
+  try {
+    const paths = tier1CurationV2Paths(req.params.snapshotId);
+    if (!existsSync(path.join(paths.fullCandidate, "candidate_summary.json"))) throw new Error("Full candidate is not ready for review.");
+    if (existsSync(paths.approval)) throw new Error("Snapshot approval already exists and is immutable.");
+    await mkdir(path.dirname(paths.reviews), { recursive: true });
+    await writeFile(paths.reviews, JSON.stringify(req.body?.reviewManifest || {}, null, 2), "utf8");
+    const result = await runPythonJsonCommand(SERVICE_SCRIPTS.tier1CurationV2Runner, [
+      "approve-snapshot", "--candidate-dir", paths.fullCandidate, "--review-manifest", paths.reviews,
+      "--owner", String(req.body?.owner || ""), "--approval-reference", String(req.body?.approvalReference || ""),
+      "--output", paths.approval,
+    ]);
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ error: error.message || String(error) });
+  }
 });
 
 await loadPersistedVcfCanonJobs();

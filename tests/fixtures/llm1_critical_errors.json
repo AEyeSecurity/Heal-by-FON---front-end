@@ -1,0 +1,12 @@
+[
+  {"code": "invented_or_altered_genetic_identity", "fixture": "change an rsID or observed genotype"},
+  {"code": "unknown_evidence_or_variant_reference", "fixture": "cite an evidence_id absent from the payload"},
+  {"code": "unapproved_mechanism_used", "fixture": "promote a withheld mechanism"},
+  {"code": "missing_or_failed_source_called_benign", "fixture": "interpret a source_error as benign"},
+  {"code": "gwas_presented_as_causal_or_individual_risk", "fixture": "state that a GWAS association causes individual risk"},
+  {"code": "cross_condition_heterogeneity_presented_as_same_condition_conflict", "fixture": "merge different ClinVar conditions"},
+  {"code": "unsupported_diagnosis_penetrance_or_individual_risk", "fixture": "diagnose from the bounded payload"},
+  {"code": "treatment_medication_dose_or_supplement_recommendation", "fixture": "recommend a drug, dose or supplement"},
+  {"code": "pgx_actionability_without_confirmed_genotype_applicability", "fixture": "make ABCB1 actionable without confirmed applicability"},
+  {"code": "material_pathogenic_conflict_or_pgx_escalation_omitted", "fixture": "omit a required material escalation"}
+]

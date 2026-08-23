@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HEAL Grouped LLM2 Payload V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "prototype_readiness", "formal_validation_readiness", "input_completeness", "coverage_summary", "valid_llm1_cards", "excluded_groups", "allowlists"],
+  "properties": {
+    "schema_version": {"const": "llm2_grouped_payload_v1"},
+    "prototype_readiness": {"enum": ["prototype_candidate", "prototype_demo_ready_automatic"]},
+    "formal_validation_readiness": {"const": "pending_new_unseen_holdout"},
+    "input_completeness": {"type": "object"},
+    "coverage_summary": {"type": "object"},
+    "valid_llm1_cards": {"type": "array", "items": {"type": "object"}},
+    "excluded_groups": {"type": "array", "items": {"type": "object"}},
+    "allowlists": {
+      "type": "object", "additionalProperties": false,
+      "required": ["group_ids", "variant_refs", "evidence_ids"],
+      "properties": {
+        "group_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "variant_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "evidence_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    }
+  }
+}

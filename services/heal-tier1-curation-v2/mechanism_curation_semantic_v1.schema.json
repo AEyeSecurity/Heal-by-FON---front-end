@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://heal.local/schemas/mechanism_curation_semantic_v1.schema.json",
+  "title": "HEAL Tier 1 semantic mechanism assessment v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "core_status", "identity_exact", "module_relation_direct",
+    "used_evidence", "excluded_evidence", "scientific_reason_codes", "limitations", "confidence"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "mechanism_curation_semantic_v1"},
+    "core_status": {"type": "string", "enum": ["approved", "approved_with_conflict", "withheld", "rejected"]},
+    "identity_exact": {"type": "boolean"},
+    "module_relation_direct": {"type": "boolean"},
+    "used_evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "evidence_id", "roles", "supports_direction", "human_applicability",
+          "functional_compatibility", "quality"
+        ],
+        "properties": {
+          "evidence_id": {"type": "string"},
+          "roles": {
+            "type": "array",
+            "items": {"type": "string", "enum": ["functional", "human", "canonical", "conflict_or_null"]}
+          },
+          "supports_direction": {"type": "string", "enum": ["positive", "negative", "null", "mixed", "not_applicable"]},
+          "human_applicability": {"type": "boolean"},
+          "functional_compatibility": {"type": "boolean"},
+          "quality": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["methodology", "applicability", "independence", "precision_size", "recency"],
+            "properties": {
+              "methodology": {"type": "integer", "minimum": 0, "maximum": 100},
+              "applicability": {"type": "integer", "minimum": 0, "maximum": 100},
+              "independence": {"type": "integer", "minimum": 0, "maximum": 100},
+              "precision_size": {"type": "integer", "minimum": 0, "maximum": 100},
+              "recency": {"type": "integer", "minimum": 0, "maximum": 100}
+            }
+          }
+        }
+      }
+    },
+    "excluded_evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidence_id", "reason_code"],
+        "properties": {
+          "evidence_id": {"type": "string"},
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "not_used_in_final_assessment", "not_directly_relevant", "review_only",
+              "metadata_insufficient", "duplicate_or_derived", "result_not_interpretable"
+            ]
+          }
+        }
+      }
+    },
+    "scientific_reason_codes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "insufficient_primary_evidence", "only_authoritative_source", "only_review_evidence",
+          "only_functional_evidence", "only_human_evidence", "identity_unresolved",
+          "module_relation_indirect", "wrong_gene_mapping", "irrelevant_to_module",
+          "material_contradiction", "metadata_insufficient"
+        ]
+      }
+    },
+    "limitations": {"type": "array", "items": {"type": "string"}},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+  }
+}

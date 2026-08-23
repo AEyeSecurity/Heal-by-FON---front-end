@@ -189,7 +189,7 @@ def transcript_class(row: dict) -> str:
 def mechanism_for_group(rows: list[dict], key: tuple[str, str]) -> dict:
     index = {(clean(row.get("gene") or row.get("approved_symbol")), clean(row.get("module_id"))): row for row in rows}
     row = index.get(key, {})
-    usable = clean(row.get("curation_status")) == "approved" and bool(clean(row.get("source_ids_or_urls")))
+    usable = clean(row.get("curation_status")) in {"approved", "approved_with_conflict"} and bool(clean(row.get("source_ids_or_urls")))
     return {
         "evidence_id": stable_id("evm", *key),
         "source": "mechanism_registry_v1",

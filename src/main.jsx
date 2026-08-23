@@ -331,6 +331,34 @@ const COPY = {
     llm1CanaryTokens: "Tokens",
     llm1CanaryBlockers: "Bloqueos",
     groupedInterpretationTitle: "Interpretacion individual agrupada",
+    llm1CardsTitle: "Tarjetas LLM1 v7",
+    groupedPrototypeTitle: "Prototipo agrupado HEAL",
+    groupedPrototypeNotice: "Prototipo de desarrollo: cobertura científica limitada a 12 grupos. La validación formal con un nuevo holdout permanece pendiente.",
+    groupedPrototypeCovered: "Grupos cubiertos",
+    groupedPrototypeValid: "Tarjetas válidas",
+    groupedPrototypeNotCovered: "Grupos no cubiertos",
+    groupedPrototypeDocx: "Descargar reporte DOCX",
+    groupedPrototypePdf: "Descargar reporte PDF",
+    groupedPrototypeCardsDownload: "Descargar tarjetas CSV",
+    groupedPrototypeCoverageDownload: "Descargar cobertura CSV",
+    llm1CardsCoverage: "Cobertura Tier 1",
+    llm1CardsActive: "Interpretaciones activas",
+    llm1CardsExperimental: "Anexo experimental",
+    llm1CardsExcluded: "Grupos no interpretados",
+    llm1CardsLoading: "Cargando tarjetas auditables...",
+    llm1CardsUnavailable: "Las tarjetas LLM1 todavia no estan disponibles.",
+    llm1CardsInference: "Modo de inferencia",
+    llm1CardsConfidence: "Confianza",
+    llm1CardsPriority: "Prioridad de revision",
+    llm1CardsCompleteness: "Completitud del VCF",
+    llm1CardsEvidence: "Evidencia y trazabilidad",
+    llm1CardsLimitations: "Limitaciones",
+    llm1CardsDisclaimer: "Inferencia inicial generada por una LLM; no es un diagnostico ni una indicacion terapeutica.",
+    llm1CardsExperimentalNotice: "Experimental: este tier no esta activado y no cuenta como cobertura Tier 1 ni alimenta LLM2.",
+    llm1CardsNotObserved: "No observado; la callability es desconocida y no se presume homocigosis de referencia.",
+    llm1CardsShowDetails: "Ver evidencia, gates y procedencia",
+    llm1ReviewApprove: "Aprobar revision interna completa",
+    llm1ReviewReject: "Rechazar revision interna",
     groupedInterpretationGroups: "Grupos interpretados",
     groupedInterpretationSourceGroups: "Grupos fuente",
     groupedInterpretationSourceVariants: "Variantes agrupadas",
@@ -450,6 +478,11 @@ const COPY = {
     groupingPayloadsV4Download: "Descargar payloads agrupados v4",
     groupingPayloadsV5Download: "Descargar payloads acotados v5",
     groupingPayloadsV6Download: "Descargar payloads transcript-aware v6",
+    groupingPayloadsV7Download: "Descargar payloads de produccion v7",
+    groupPreflightV7Download: "Descargar preflight de 180 grupos",
+    groupPayloadV7SummaryDownload: "Descargar resumen LLM1 v7",
+    groupPayloadSchemaV7Download: "Descargar schema del payload v7",
+    llm1CardsDownload: "Descargar tarjetas LLM1",
     targetGeneAuditDownload: "Descargar auditoria gen-transcrito",
     alleleFrequencyAuditDownload: "Descargar auditoria de frecuencia ALT",
     clinvarConflictAuditDownload: "Descargar conflictos ClinVar por condicion",
@@ -458,11 +491,12 @@ const COPY = {
     groupPayloadV6ErrorsDownload: "Descargar errores LLM1 v6",
     llm1PilotCandidateManifestV3Download: "Descargar manifest canary v3",
     groupPayloadSchemaV6Download: "Descargar schema del payload v6",
-    persistentMechanismRegistryDownload: "Descargar mecanismos profesionales",
-    persistentGwasRegistryDownload: "Descargar relevancia GWAS profesional",
-    curationMechanismUpload: "Cargar mecanismos revisados",
-    curationGwasUpload: "Cargar relevancia GWAS revisada",
+    persistentMechanismRegistryDownload: "Descargar mecanismos de curacion interna",
+    persistentGwasRegistryDownload: "Descargar relevancia GWAS de curacion interna",
+    curationMechanismUpload: "Cargar mecanismos aprobados internamente",
+    curationGwasUpload: "Cargar relevancia GWAS aprobada internamente",
     curationManifestUpload: "Cargar aprobacion del canary",
+    llm1PreflightV7Start: "Regenerar preflight LLM1 v7",
     groupEvidencePacketsDownload: "Descargar ledger por grupo",
     groupEvidenceDigestsDownload: "Descargar digests de evidencia",
     groupEvidenceDigestErrorsDownload: "Descargar errores de digest",
@@ -725,6 +759,34 @@ const COPY = {
     llm1CanaryTokens: "Tokens",
     llm1CanaryBlockers: "Blockers",
     groupedInterpretationTitle: "Grouped individual interpretation",
+    llm1CardsTitle: "LLM1 v7 cards",
+    groupedPrototypeTitle: "HEAL grouped prototype",
+    groupedPrototypeNotice: "Development prototype: scientific coverage is limited to 12 groups. Formal validation with a new holdout remains pending.",
+    groupedPrototypeCovered: "Covered groups",
+    groupedPrototypeValid: "Valid cards",
+    groupedPrototypeNotCovered: "Uncovered groups",
+    groupedPrototypeDocx: "Download DOCX report",
+    groupedPrototypePdf: "Download PDF report",
+    groupedPrototypeCardsDownload: "Download cards CSV",
+    groupedPrototypeCoverageDownload: "Download coverage CSV",
+    llm1CardsCoverage: "Tier 1 coverage",
+    llm1CardsActive: "Active interpretations",
+    llm1CardsExperimental: "Experimental appendix",
+    llm1CardsExcluded: "Groups not interpreted",
+    llm1CardsLoading: "Loading auditable cards...",
+    llm1CardsUnavailable: "LLM1 cards are not available yet.",
+    llm1CardsInference: "Inference mode",
+    llm1CardsConfidence: "Confidence",
+    llm1CardsPriority: "Review priority",
+    llm1CardsCompleteness: "VCF completeness",
+    llm1CardsEvidence: "Evidence and traceability",
+    llm1CardsLimitations: "Limitations",
+    llm1CardsDisclaimer: "Initial inference generated by an LLM; it is not a diagnosis or a treatment instruction.",
+    llm1CardsExperimentalNotice: "Experimental: this tier is inactive and does not count toward Tier 1 coverage or feed LLM2.",
+    llm1CardsNotObserved: "Not observed; callability is unknown and homozygous-reference status is not assumed.",
+    llm1CardsShowDetails: "View evidence, gates, and provenance",
+    llm1ReviewApprove: "Approve complete internal review",
+    llm1ReviewReject: "Reject internal review",
     groupedInterpretationGroups: "Interpreted groups",
     groupedInterpretationSourceGroups: "Source groups",
     groupedInterpretationSourceVariants: "Grouped source variants",
@@ -844,6 +906,11 @@ const COPY = {
     groupingPayloadsV4Download: "Download grouped payloads v4",
     groupingPayloadsV5Download: "Download bounded v5 payloads",
     groupingPayloadsV6Download: "Download transcript-aware v6 payloads",
+    groupingPayloadsV7Download: "Download production-candidate v7 payloads",
+    groupPreflightV7Download: "Download 180-group preflight",
+    groupPayloadV7SummaryDownload: "Download LLM1 v7 summary",
+    groupPayloadSchemaV7Download: "Download v7 payload schema",
+    llm1CardsDownload: "Download LLM1 cards",
     targetGeneAuditDownload: "Download gene-transcript audit",
     alleleFrequencyAuditDownload: "Download ALT-frequency audit",
     clinvarConflictAuditDownload: "Download condition-aware ClinVar conflicts",
@@ -852,11 +919,12 @@ const COPY = {
     groupPayloadV6ErrorsDownload: "Download LLM1 v6 errors",
     llm1PilotCandidateManifestV3Download: "Download canary manifest v3",
     groupPayloadSchemaV6Download: "Download v6 payload schema",
-    persistentMechanismRegistryDownload: "Download professional mechanism registry",
-    persistentGwasRegistryDownload: "Download professional GWAS relevance registry",
-    curationMechanismUpload: "Upload reviewed mechanisms",
-    curationGwasUpload: "Upload reviewed GWAS relevance",
+    persistentMechanismRegistryDownload: "Download internal-curation mechanism registry",
+    persistentGwasRegistryDownload: "Download internal-curation GWAS relevance registry",
+    curationMechanismUpload: "Upload internally approved mechanisms",
+    curationGwasUpload: "Upload internally approved GWAS relevance",
     curationManifestUpload: "Upload canary approval",
+    llm1PreflightV7Start: "Regenerate LLM1 v7 preflight",
     groupEvidencePacketsDownload: "Download group evidence ledger",
     groupEvidenceDigestsDownload: "Download evidence digests",
     groupEvidenceDigestErrorsDownload: "Download digest errors",
@@ -1713,8 +1781,157 @@ function ResultPanel({ result, analysisMode, locale, t }) {
   );
 }
 
+function parseJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function Llm1GroupCard({ card, language, t }) {
+  const interpretation = card.interpretation || null;
+  const suffix = language === "es" ? "es" : "en";
+  const oneSentence = interpretation?.[`interpretation_one_sentence_${suffix}`] || "";
+  const longText = interpretation?.[`interpretation_long_${suffix}`] || "";
+  const technical = interpretation?.[`technical_interpretation_${suffix}`] || "";
+  const rationale = interpretation?.[`confidence_rationale_${suffix}`] || "";
+  const familyNotes = interpretation?.[`family_notes_${suffix}`] || "";
+  const nextStep = interpretation?.[`recommended_next_review_step_${suffix}`] || "";
+  const evidenceUsed = parseJsonArray(interpretation?.evidence_used);
+  const limitations = parseJsonArray(interpretation?.evidence_limitations);
+  const focusVariants = card.focus_variants || [];
+  const isUnavailable = ["quarantined", "technical_failure"].includes(card.status);
+  const isCoverageOnly = !interpretation;
+  return (
+    <article className={`llm1-card llm1-card-${card.status || "unknown"}`}>
+      <div className="llm1-card-heading">
+        <div>
+          <strong>{card.gene || card.group_id}</strong>
+          <span>{card.module_id} · {card.module_name || "-"}</span>
+        </div>
+        <span className="llm1-status-badge">{card.status || card.coverage_status}</span>
+      </div>
+      {card.experimental_canary && <p className="llm1-card-notice">{t.llm1CardsExperimentalNotice}</p>}
+      {isUnavailable ? (
+        <p className="error">{language === "es" ? "Resultado no disponible; el grupo fue aislado." : "Result unavailable; the group was isolated."}</p>
+      ) : isCoverageOnly ? (
+        <>
+          <p>{card.decision_reason}</p>
+          {card.input_completeness?.mode === "observed_variants_only" && card.focus_variant_count === 0 && (
+            <p className="llm1-card-notice">{t.llm1CardsNotObserved}</p>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="llm1-card-summary">{oneSentence}</p>
+          <div className="llm1-card-metadata">
+            <span><b>{t.llm1CardsInference}:</b> {interpretation.inference_mode}</span>
+            <span><b>{t.llm1CardsConfidence}:</b> {interpretation.final_confidence_level}</span>
+            <span><b>{t.llm1CardsPriority}:</b> {interpretation.review_priority}</span>
+            <span><b>{t.llm1CardsCompleteness}:</b> {card.input_completeness?.mode || interpretation.input_completeness_mode}</span>
+          </div>
+          {longText && <p>{longText}</p>}
+          <p className="llm1-card-disclaimer">{t.llm1CardsDisclaimer}</p>
+        </>
+      )}
+      <details className="llm1-card-details">
+        <summary>{t.llm1CardsShowDetails}</summary>
+        <div className="llm1-card-detail-grid">
+          <div>
+            <h5>{t.llm1CardsEvidence}</h5>
+            <p>{technical || card.deterministic_summary?.statement || "-"}</p>
+            {evidenceUsed.length > 0 && <pre>{JSON.stringify(evidenceUsed, null, 2)}</pre>}
+            {focusVariants.length > 0 && <pre>{JSON.stringify(focusVariants, null, 2)}</pre>}
+          </div>
+          <div>
+            <h5>{t.llm1CardsLimitations}</h5>
+            {rationale && <p>{rationale}</p>}
+            {familyNotes && <p>{familyNotes}</p>}
+            {nextStep && <p>{nextStep}</p>}
+            {limitations.length > 0 && <ul>{limitations.map((item) => <li key={String(item)}>{String(item)}</li>)}</ul>}
+            {card.blocker_codes?.length > 0 && <p><b>Blockers:</b> {card.blocker_codes.join(", ")}</p>}
+          </div>
+        </div>
+        <pre>{JSON.stringify({
+          mechanism: card.curated_mechanism,
+          conflicts: card.clinical_conflicts,
+          gwas: card.gwas_context,
+          gates: card.gates,
+          provenance: card.provenance,
+          allowed_evidence_ids: card.allowed_evidence_ids,
+          allowed_variant_refs: card.allowed_variant_refs,
+        }, null, 2)}</pre>
+      </details>
+    </article>
+  );
+}
+
+function Llm1CardsPanel({ cards, loading, error, language, onLanguageChange, t }) {
+  if (loading) return <p>{t.llm1CardsLoading}</p>;
+  if (error) return <p className="error">{error}</p>;
+  if (!cards?.length) return <p>{t.llm1CardsUnavailable}</p>;
+  const active = cards.filter((card) => card.client_visible === true || (card.interpretation && !card.experimental_canary));
+  const experimental = cards.filter((card) => card.experimental_canary === true);
+  const excluded = cards.filter((card) => !active.includes(card) && !experimental.includes(card));
+  const tier1 = cards.filter((card) => card.tier === "T1");
+  return (
+    <div className="llm1-cards-panel">
+      <div className="llm1-cards-toolbar">
+        <div>
+          <strong>{t.llm1CardsCoverage}</strong>
+          <span>{tier1.length} total · {active.length} active · {excluded.length} coverage-only</span>
+        </div>
+        <div className="llm1-language-switch" role="group" aria-label="LLM1 card language">
+          <button type="button" className={language === "es" ? "active" : ""} onClick={() => onLanguageChange("es")}>ES</button>
+          <button type="button" className={language === "en" ? "active" : ""} onClick={() => onLanguageChange("en")}>EN</button>
+        </div>
+      </div>
+      {active.length > 0 && <><h4>{t.llm1CardsActive}</h4><div className="llm1-cards-grid">{active.map((card) => <Llm1GroupCard key={card.group_id} card={card} language={language} t={t} />)}</div></>}
+      {experimental.length > 0 && <><h4>{t.llm1CardsExperimental}</h4><div className="llm1-cards-grid">{experimental.map((card) => <Llm1GroupCard key={card.group_id} card={card} language={language} t={t} />)}</div></>}
+      <details className="llm1-coverage-details">
+        <summary>{t.llm1CardsExcluded} ({excluded.length})</summary>
+        <div className="llm1-cards-grid compact">{excluded.map((card) => <Llm1GroupCard key={card.group_id} card={card} language={language} t={t} />)}</div>
+      </details>
+    </div>
+  );
+}
+
 function MatchResultPanel({ result, locale, t }) {
   const [downloadError, setDownloadError] = useState(null);
+  const [llm1Cards, setLlm1Cards] = useState([]);
+  const [llm1CardsLoading, setLlm1CardsLoading] = useState(false);
+  const [llm1CardsError, setLlm1CardsError] = useState(null);
+  const [llm1CardLanguage, setLlm1CardLanguage] = useState(locale?.startsWith("es") ? "es" : "en");
+  const prototypeCardsReady = Boolean(result?.artifactsReady?.groupedPrototypeCards);
+  const cardsReady = prototypeCardsReady || Boolean(result?.artifactsReady?.groupCardsV7);
+  useEffect(() => {
+    if (!result?.jobId || !cardsReady) {
+      setLlm1Cards([]);
+      return;
+    }
+    let cancelled = false;
+    setLlm1CardsLoading(true);
+    setLlm1CardsError(null);
+    const cardsEndpoint = prototypeCardsReady
+      ? `/api/vcf-canon-matches/${result.jobId}/grouped-prototype/cards`
+      : `/api/vcf-canon-matches/${result.jobId}/llm1-group-cards`;
+    fetch(`${API_BASE}${cardsEndpoint}`, {
+      headers: accessHeaders(result.accessToken || getJobAccessToken(result.jobId)),
+    })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(payload?.error || "Could not load LLM1 cards.");
+        return payload;
+      })
+      .then((payload) => { if (!cancelled) setLlm1Cards(Array.isArray(payload) ? payload : []); })
+      .catch((loadError) => { if (!cancelled) setLlm1CardsError(loadError.message || String(loadError)); })
+      .finally(() => { if (!cancelled) setLlm1CardsLoading(false); });
+    return () => { cancelled = true; };
+  }, [result?.jobId, result?.updatedAt, cardsReady, prototypeCardsReady]);
   if (!result) return null;
 
   const isValid = result.status === "valid";
@@ -1738,6 +1955,7 @@ function MatchResultPanel({ result, locale, t }) {
   const interpretationNormalization = result.interpretationNormalization?.metadata || {};
   const globalInterpretation = result.globalInterpretation?.metadata || {};
   const finalReport = result.finalReport?.metadata || {};
+  const groupedPrototype = result.groupedPrototype || {};
   const normalizedConfidenceCounts = interpretationNormalization.confidence_level_counts || {};
   const globalConfidenceCounts = globalInterpretation.confidence_distribution || {};
   const enrichmentSourceErrors = Object.values(enrichment.source_error_counts || {}).reduce(
@@ -1936,6 +2154,13 @@ function MatchResultPanel({ result, locale, t }) {
         [t.globalInterpretationVariants, formatNumber(finalReport.variant_count_observed, locale)],
         [t.globalInterpretationGenes, formatNumber(finalReport.unique_gene_count, locale)],
         [t.globalInterpretationLanguage, finalReport.language_mode || "-"],
+      ]
+    : [];
+  const groupedPrototypeCards = groupedPrototype.status
+    ? [
+        [t.groupedPrototypeCovered, formatNumber(groupedPrototype.counts?.scientifically_covered, locale)],
+        [t.groupedPrototypeValid, formatNumber(groupedPrototype.counts?.valid_llm1_cards, locale)],
+        [t.groupedPrototypeNotCovered, formatNumber(groupedPrototype.counts?.not_covered, locale)],
       ]
     : [];
 
@@ -2166,6 +2391,64 @@ function MatchResultPanel({ result, locale, t }) {
     if (artifact) await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/${artifact[0]}`, artifact[1]);
   }
 
+  async function downloadGroupedV7Artifact(kind) {
+    const artifacts = {
+      payloads: ["grouped-payloads-v7", "llm1_group_payloads_v7.csv"],
+      preflight: ["group-preflight-v7", "llm1_group_preflight_v7.csv"],
+      summary: ["group-payload-v7-summary", "llm1_group_payload_v7_summary.json"],
+      schema: ["grouped-payload-v7-schema", "llm1_group_payload_v7.schema.json"],
+      cards: ["llm1-group-cards", "llm1_group_cards.json"],
+    };
+    const artifact = artifacts[kind];
+    if (artifact) await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/${artifact[0]}`, artifact[1]);
+  }
+
+  async function submitLlm1InternalReview(decision) {
+    const curationToken = window.prompt("Internal scientific curation token");
+    if (!curationToken) return;
+    const reviewer = window.prompt("Reviewer name or internal identifier");
+    if (!reviewer) return;
+    const notes = window.prompt("Review notes (optional)") || "";
+    try {
+      const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${result.jobId}/llm1-internal-review`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-HEAL-Curation-Token": curationToken,
+          ...accessHeaders(result.accessToken || getJobAccessToken(result.jobId)),
+        },
+        body: JSON.stringify({ decision, reviewer, notes }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Could not store the LLM1 internal review.");
+      window.alert(`LLM1 internal review stored: ${payload.decision}`);
+    } catch (reviewError) {
+      setDownloadError(reviewError.message || String(reviewError));
+    }
+  }
+
+  async function startLlm1PreflightV7() {
+    const curationToken = window.prompt("Internal scientific curation token");
+    if (!curationToken) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${result.jobId}/llm1-preflight-v7`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-HEAL-Curation-Token": curationToken,
+          ...accessHeaders(result.accessToken || getJobAccessToken(result.jobId)),
+        },
+        body: JSON.stringify({}),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Could not regenerate the LLM1 v7 preflight.");
+      window.alert(`LLM1 v7 preflight: ${payload.status}. The job view will reload with the new artifacts.`);
+      window.location.reload();
+    } catch (preflightError) {
+      setDownloadError(preflightError.message || String(preflightError));
+    }
+  }
+
   function uploadProfessionalCuration(kind) {
     const input = document.createElement("input");
     input.type = "file";
@@ -2173,7 +2456,7 @@ function MatchResultPanel({ result, locale, t }) {
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return;
-      const curationToken = window.prompt("Professional curation token");
+      const curationToken = window.prompt("Internal scientific curation token");
       if (!curationToken) return;
       try {
         const bytes = new Uint8Array(await file.arrayBuffer());
@@ -2191,8 +2474,8 @@ function MatchResultPanel({ result, locale, t }) {
           body: JSON.stringify({ csvBase64: window.btoa(binary) }),
         });
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.error || "Could not upload professional curation.");
-        window.alert("Professional curation accepted. V6 readiness was recalculated.");
+        if (!response.ok) throw new Error(payload.error || "Could not upload internal scientific curation.");
+        window.alert("Internal scientific curation accepted. V7 preflight and eligibility were recalculated.");
       } catch (error) {
         setDownloadError(error.message || String(error));
       }
@@ -2312,6 +2595,10 @@ function MatchResultPanel({ result, locale, t }) {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/final-report`, "heal-final-report.docx");
   }
 
+  async function downloadGroupedPrototypeArtifact(kind, fallbackName) {
+    await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/grouped-prototype/download/${kind}`, fallbackName);
+  }
+
   async function downloadDebugArtifact(artifact, fallbackName) {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/debug/${artifact}`, fallbackName);
   }
@@ -2375,6 +2662,34 @@ function MatchResultPanel({ result, locale, t }) {
           <h3 className="result-subtitle">{t.groupingPreparationTitle}</h3>
           <div className="metrics-grid">
             {groupingPreparationCards.map(([label, value]) => (
+              <MetricCard label={label} value={value} key={label} />
+            ))}
+          </div>
+        </>
+      )}
+      {isGeneModuleV2 && cardsReady && (
+        <>
+          <h3 className="result-subtitle">{t.llm1CardsTitle}</h3>
+          <Llm1CardsPanel
+            cards={llm1Cards}
+            loading={llm1CardsLoading}
+            error={llm1CardsError}
+            language={llm1CardLanguage}
+            onLanguageChange={setLlm1CardLanguage}
+            t={t}
+          />
+          {!prototypeCardsReady && <div className="match-download-actions">
+            <button className="secondary-button match-download-button" type="button" onClick={() => submitLlm1InternalReview("approved")}>{t.llm1ReviewApprove}</button>
+            <button className="secondary-button match-download-button" type="button" onClick={() => submitLlm1InternalReview("rejected")}>{t.llm1ReviewReject}</button>
+          </div>}
+        </>
+      )}
+      {groupedPrototypeCards.length > 0 && (
+        <>
+          <h3 className="result-subtitle">{t.groupedPrototypeTitle}</h3>
+          <p className="llm1-card-notice">{t.groupedPrototypeNotice}</p>
+          <div className="metrics-grid">
+            {groupedPrototypeCards.map(([label, value]) => (
               <MetricCard label={label} value={value} key={label} />
             ))}
           </div>
@@ -2468,6 +2783,10 @@ function MatchResultPanel({ result, locale, t }) {
         </>
       )}
       <div className="match-download-actions">
+        {artifactReady.groupedPrototypeDocx && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("docx", "HEAL_prototipo_desarrollo.docx")}><Download size={17} />{t.groupedPrototypeDocx}</button>}
+        {artifactReady.groupedPrototypePdf && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("pdf", "HEAL_prototipo_desarrollo.pdf")}><Download size={17} />{t.groupedPrototypePdf}</button>}
+        {artifactReady.groupedPrototypeCards && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("cards", "HEAL_prototipo_tarjetas.csv")}><Download size={17} />{t.groupedPrototypeCardsDownload}</button>}
+        {artifactReady.groupedPrototype && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("coverage", "HEAL_prototipo_cobertura.csv")}><Download size={17} />{t.groupedPrototypeCoverageDownload}</button>}
         {!isGeneModuleV2 && artifactReady.finalReport && <button className="secondary-button match-download-button" type="button" onClick={downloadFinalReport}>
           <Download size={17} />
           {t.finalReportDownload}
@@ -2655,6 +2974,11 @@ function MatchResultPanel({ result, locale, t }) {
         {isGeneModuleV2 && artifactReady.llm1PilotCandidateManifestV2 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV5Artifact("manifest")}><Download size={17} />{t.llm1PilotCandidateManifestV2Download}</button>}
         {isGeneModuleV2 && artifactReady.groupPayloadSchemaV5 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV5Artifact("schema")}><Download size={17} />{t.groupPayloadSchemaV5Download}</button>}
         {isGeneModuleV2 && artifactReady.groupedPayloadsV6 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV6Artifact("payloads")}><Download size={17} />{t.groupingPayloadsV6Download}</button>}
+        {isGeneModuleV2 && artifactReady.groupedPayloadsV7 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV7Artifact("payloads")}><Download size={17} />{t.groupingPayloadsV7Download}</button>}
+        {isGeneModuleV2 && artifactReady.groupPreflightV7 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV7Artifact("preflight")}><Download size={17} />{t.groupPreflightV7Download}</button>}
+        {isGeneModuleV2 && artifactReady.groupPayloadV7Summary && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV7Artifact("summary")}><Download size={17} />{t.groupPayloadV7SummaryDownload}</button>}
+        {isGeneModuleV2 && artifactReady.groupPayloadSchemaV7 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV7Artifact("schema")}><Download size={17} />{t.groupPayloadSchemaV7Download}</button>}
+        {isGeneModuleV2 && artifactReady.groupCardsV7 && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV7Artifact("cards")}><Download size={17} />{t.llm1CardsDownload}</button>}
         {isGeneModuleV2 && artifactReady.targetGeneConsequenceAudit && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV6Artifact("targetGene")}><Download size={17} />{t.targetGeneAuditDownload}</button>}
         {isGeneModuleV2 && artifactReady.alleleSpecificFrequencyAudit && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV6Artifact("frequency")}><Download size={17} />{t.alleleFrequencyAuditDownload}</button>}
         {isGeneModuleV2 && artifactReady.clinvarConditionConflictAudit && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV6Artifact("clinvar")}><Download size={17} />{t.clinvarConflictAuditDownload}</button>}
@@ -2668,6 +2992,7 @@ function MatchResultPanel({ result, locale, t }) {
         {isGeneModuleV2 && artifactReady.persistentMechanismRegistry && <button className="secondary-button match-download-button" type="button" onClick={() => uploadProfessionalCuration("mechanism")}>{t.curationMechanismUpload}</button>}
         {isGeneModuleV2 && artifactReady.persistentGwasRegistry && <button className="secondary-button match-download-button" type="button" onClick={() => uploadProfessionalCuration("gwas")}>{t.curationGwasUpload}</button>}
         {isGeneModuleV2 && artifactReady.llm1PilotCandidateManifestV3 && <button className="secondary-button match-download-button" type="button" onClick={() => uploadProfessionalCuration("manifest")}>{t.curationManifestUpload}</button>}
+        {isGeneModuleV2 && artifactReady.groupedPayloadsV6 && <button className="secondary-button match-download-button" type="button" onClick={startLlm1PreflightV7}>{t.llm1PreflightV7Start}</button>}
         {isGeneModuleV2 && Number(groupingPreparation.groups_requiring_compression_review || 0) > 0 && artifactReady.groupEvidencePackets && <button className="secondary-button match-download-button" type="button" onClick={startEvidenceDigest}>{t.evidenceDigestStart}</button>}
         {isGeneModuleV2 && artifactReady.mechanismRegistry && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedV4Artifact("mechanisms")}>
           <Download size={17} />
@@ -2772,9 +3097,127 @@ function MatchResultPanel({ result, locale, t }) {
   );
 }
 
+function Tier1CurationV2Modal({ open, onClose, language }) {
+  const [token, setToken] = useState("");
+  const [snapshotId, setSnapshotId] = useState("tier1-v2-20260805");
+  const [status, setStatus] = useState(null);
+  const [review, setReview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const es = language === "es";
+
+  async function request(endpoint, options = {}) {
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+      ...options,
+      headers: { "Content-Type": "application/json", "X-HEAL-Curation-Token": token, ...(options.headers || {}) },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    return payload;
+  }
+
+  async function refresh() {
+    if (!token) return;
+    setBusy(true); setError("");
+    try {
+      const next = await request("/api/tier1-curation-v2/status");
+      setStatus(next);
+      const selected = next.snapshots?.find((item) => item.snapshotId === snapshotId);
+      if (selected?.fullCandidate) setReview(await request(`/api/tier1-curation-v2/snapshots/${encodeURIComponent(snapshotId)}/review`));
+    } catch (caught) { setError(caught.message || String(caught)); }
+    finally { setBusy(false); }
+  }
+
+  async function start(operation, extra = {}) {
+    setBusy(true); setError("");
+    try {
+      await request("/api/tier1-curation-v2/tasks", { method: "POST", body: JSON.stringify({ operation, snapshotId, ...extra }) });
+      await refresh();
+    } catch (caught) { setError(caught.message || String(caught)); setBusy(false); }
+  }
+
+  async function uploadJson(file, kind) {
+    if (!file) return;
+    setBusy(true); setError("");
+    try {
+      const value = JSON.parse(await file.text());
+      if (kind === "gold") {
+        await request(`/api/tier1-curation-v2/snapshots/${encodeURIComponent(snapshotId)}/gold`, { method: "PUT", body: JSON.stringify(value) });
+      } else {
+        const owner = window.prompt(es ? "Responsable interno" : "Internal owner") || "";
+        const approvalReference = window.prompt(es ? "Referencia de aprobación" : "Approval reference") || "";
+        await request(`/api/tier1-curation-v2/snapshots/${encodeURIComponent(snapshotId)}/review`, { method: "PUT", body: JSON.stringify({ reviewManifest: value, owner, approvalReference }) });
+      }
+      await refresh();
+    } catch (caught) { setError(caught.message || String(caught)); }
+    finally { setBusy(false); }
+  }
+
+  if (!open) return null;
+  const selected = status?.snapshots?.find((item) => item.snapshotId === snapshotId);
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="tier1-curation-title">
+      <section className="canon-modal tier1-curation-modal">
+        <div className="modal-heading">
+          <div>
+            <p className="eyebrow">{es ? "Curación científica interna" : "Internal scientific curation"}</p>
+            <h2 id="tier1-curation-title">Tier 1 mechanism curation v2</h2>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="curation-toolbar">
+          <label><span>Token</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} /></label>
+          <label><span>Snapshot ID</span><input value={snapshotId} onChange={(event) => setSnapshotId(event.target.value)} /></label>
+          <button className="secondary-button" type="button" disabled={!token || busy} onClick={refresh}>{busy ? <Loader2 className="spin" size={17} /> : <RefreshCw size={17} />}{es ? "Actualizar" : "Refresh"}</button>
+        </div>
+        {error && <p className="error-message">{error}</p>}
+        {status && (
+          <>
+            <div className="canon-mini-grid">
+              <MetricCard label={es ? "Estado" : "State"} value={status.enabled ? "enabled" : "disabled"} />
+              <MetricCard label="Model" value={status.model} />
+              <MetricCard label="Cutoff" value={status.evidenceCutoff} />
+              <MetricCard label={es ? "Registro activo modificado" : "Active registry changed"} value={status.activeRegistryModified ? "yes" : "no"} />
+            </div>
+            <div className="match-download-actions">
+              <button className="secondary-button" type="button" disabled={!status.enabled || busy || Boolean(selected?.evidence)} onClick={() => start("collect_evidence", { scope: "all" })}>{es ? "Recolectar evidencia 105 grupos" : "Collect evidence for 105 groups"}</button>
+              <button className="secondary-button" type="button" disabled={!status.enabled || busy || !selected?.evidence || Boolean(selected?.gold)} onClick={() => start("prepare_gold")}>{es ? "Preparar gold de 12" : "Prepare 12-group gold"}</button>
+              <label className="secondary-button file-action">{es ? "Cargar gold aprobado" : "Upload approved gold"}<input type="file" accept="application/json,.json" onChange={(event) => uploadJson(event.target.files?.[0], "gold")} /></label>
+              <label className="secondary-button file-action">{es ? "Cargar revisión del snapshot" : "Upload snapshot review"}<input type="file" accept="application/json,.json" onChange={(event) => uploadJson(event.target.files?.[0], "review")} /></label>
+            </div>
+            <p className="curation-safety-note">{es ? "Este panel sólo crea candidatos. La activación de Luna y la modificación del registro activo permanecen bloqueadas." : "This panel only creates candidates. Luna activation and active-registry changes remain blocked."}</p>
+          </>
+        )}
+        {selected && (
+          <div className="canon-preview">
+            <h3>{es ? "Estado del snapshot" : "Snapshot state"}</h3>
+            <div className="canon-mini-grid">
+              <MetricCard label={es ? "Paquetes" : "Packets"} value={selected.evidence?.completed_groups ?? 0} />
+              <MetricCard label="Gold" value={selected.gold?.approval_status || "not prepared"} />
+              <MetricCard label={es ? "Candidato completo" : "Full candidate"} value={selected.fullCandidate?.groups ?? 0} />
+              <MetricCard label={es ? "Aprobación" : "Approval"} value={selected.approval?.status || "pending"} />
+            </div>
+          </div>
+        )}
+        {review?.promptVersions?.length > 0 && (
+          <div className="canon-preview"><h3>{es ? "Versiones del prompt" : "Prompt versions"}</h3><div className="table-wrap"><table><thead><tr><th>Candidate</th><th>Hash</th><th>Phase</th><th>Passed</th><th>Dominant failure</th></tr></thead><tbody>{review.promptVersions.map((row) => <tr key={row.candidate}><td>{row.candidate}</td><td>{row.manifest?.prompt_sha256?.slice(0, 12) || "-"}</td><td>{row.acceptance?.phase || "-"}</td><td>{String(Boolean(row.acceptance?.passed))}</td><td>{row.acceptance?.dominant_failure_signature || "-"}</td></tr>)}</tbody></table></div></div>
+        )}
+        {review?.candidates?.length > 0 && (
+          <div className="canon-preview">
+            <h3>{es ? "Registro actual vs candidato v2" : "Current registry vs v2 candidate"}</h3>
+            <div className="table-wrap"><table><thead><tr><th>Group</th><th>Current</th><th>Candidate</th><th>Context</th><th>Ceiling</th><th>Confidence</th><th>Evidence</th><th>Arbiter</th></tr></thead><tbody>{review.candidates.map((row) => <tr key={row.group_id}><td>{row.group_id}</td><td>{row.current_core_status}</td><td>{row.core_status}</td><td>{String(row.context_usable)}</td><td>{row.inference_ceiling}</td><td>{row.confidence}</td><td>{row.evidence_selected_count}</td><td>{String(row.adjudicated)}</td></tr>)}</tbody></table></div>
+          </div>
+        )}
+        {review?.flags?.length > 0 && <div className="canon-preview"><h3>{es ? "Flags transversales (no modifican decisiones)" : "Cross-group flags (do not change decisions)"}</h3>{review.flags.map((flag) => <p className="warning" key={`${flag.module_id}-${flag.flag}`}>{flag.module_id}: {flag.flag} ({flag.count})</p>)}</div>}
+      </section>
+    </div>
+  );
+}
+
 function App() {
   const fileInputRef = useRef(null);
   const [language, setLanguage] = useState("es");
+  const [tier1CurationOpen, setTier1CurationOpen] = useState(false);
   const [analysisMode, setAnalysisMode] = useState("quick");
   const [vcfParser, setVcfParser] = useState("streaming");
   const [vcfAssembly, setVcfAssembly] = useState("auto");
@@ -3435,6 +3878,11 @@ function App() {
       interpretationNormalization: Boolean(ready.interpretationNormalization),
       globalInterpretation: Boolean(ready.globalInterpretation),
       finalReport: Boolean(ready.finalReport),
+      groupedPrototype: Boolean(ready.groupedPrototype),
+      groupedPrototypeDocx: Boolean(ready.groupedPrototypeDocx),
+      groupedPrototypePdf: Boolean(ready.groupedPrototypePdf),
+      groupedPrototypeCards: Boolean(ready.groupedPrototypeCards),
+      groupedPrototypeAudit: Boolean(ready.groupedPrototypeAudit),
       finalReportEs: current.finalReportEs,
       finalReportEn: current.finalReportEn,
     }));
@@ -3470,7 +3918,8 @@ function App() {
       ready.individualInterpretation ||
       ready.interpretationNormalization ||
       ready.globalInterpretation ||
-      ready.finalReport
+      ready.finalReport ||
+      ready.groupedPrototype
     ) {
       setMatchResult({
         ...(job.result || {}),
@@ -4471,6 +4920,10 @@ function App() {
       <header className="topbar">
         <img className="fon-logo" src={forceLogo} alt="Force of Nature" />
         <div className="topbar-actions">
+          <button className="secondary-button small" type="button" onClick={() => setTier1CurationOpen(true)}>
+            <ShieldCheck size={16} />
+            {language === "es" ? "Curación Tier 1" : "Tier 1 curation"}
+          </button>
           <button className="secondary-button small" type="button" onClick={() => setCanonOpen(true)}>
             <FileSpreadsheet size={16} />
             {t.changeCanon}
@@ -4485,6 +4938,8 @@ function App() {
           </label>
         </div>
       </header>
+
+      <Tier1CurationV2Modal open={tier1CurationOpen} onClose={() => setTier1CurationOpen(false)} language={language} />
 
       <section className="intro">
         <div className="brand-mark">

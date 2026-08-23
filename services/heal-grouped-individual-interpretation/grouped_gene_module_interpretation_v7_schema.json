@@ -1,0 +1,44 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "group_id", "gene", "module_id", "module_name", "system_within_module",
+    "group_size_total", "focus_variant_count", "interpretation_scope", "inference_mode",
+    "interpretation_one_sentence_en", "interpretation_one_sentence_es", "interpretation_long_en", "interpretation_long_es",
+    "technical_interpretation_en", "technical_interpretation_es", "final_confidence_level",
+    "confidence_rationale_en", "confidence_rationale_es", "family_notes_en", "family_notes_es",
+    "recommended_next_review_step_en", "recommended_next_review_step_es", "review_priority", "review_reason_codes",
+    "myth_correction_required", "requires_professional_review", "group_conflict_flag", "focus_variant_refs",
+    "evidence_used", "evidence_limitations", "expert_review_conditions", "expert_review_candidate"
+  ],
+  "properties": {
+    "group_id": {"type": "string"}, "gene": {"type": "string"}, "module_id": {"type": "string"},
+    "module_name": {"type": "string"}, "system_within_module": {"type": "string"},
+    "group_size_total": {"type": "integer"}, "focus_variant_count": {"type": "integer"},
+    "interpretation_scope": {"type": "string", "enum": ["coding_signal_dominant", "mixed_signal_with_priority_variants", "utr_contextual_signal", "conflicting_group_review_needed", "limited_group_signal", "abstained_insufficient_evidence"]},
+    "inference_mode": {"type": "string", "enum": ["initial_guide", "context_only", "abstained_insufficient_evidence"]},
+    "interpretation_one_sentence_en": {"type": "string"}, "interpretation_one_sentence_es": {"type": "string"},
+    "interpretation_long_en": {"type": "string"}, "interpretation_long_es": {"type": "string"},
+    "technical_interpretation_en": {"type": "string"}, "technical_interpretation_es": {"type": "string"},
+    "final_confidence_level": {"type": "string", "enum": ["High", "Moderate", "Low", "Conflicting", "Abstain"]},
+    "confidence_rationale_en": {"type": "string"}, "confidence_rationale_es": {"type": "string"},
+    "family_notes_en": {"type": "string"}, "family_notes_es": {"type": "string"},
+    "recommended_next_review_step_en": {"type": "string"}, "recommended_next_review_step_es": {"type": "string"},
+    "review_priority": {"type": "string", "enum": ["none", "optional_contextual", "recommended", "urgent"]},
+    "review_reason_codes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "enum": ["same_condition_clinical_conflict", "pathogenic_or_likely_pathogenic", "pharmacogenomic_context", "material_identity_or_transcript_ambiguity", "high_impact_evidence_gap", "unresolved_variant_specific_material_conflict"]}},
+    "myth_correction_required": {"type": "boolean"}, "requires_professional_review": {"type": "boolean"},
+    "group_conflict_flag": {"type": "boolean"}, "focus_variant_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "evidence_used": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["evidence_id", "variant_ref", "source", "field", "value"], "properties": {"evidence_id": {"type": "string"}, "variant_ref": {"type": "string"}, "source": {"type": "string"}, "field": {"type": "string"}, "value": {"type": "string"}}}},
+    "evidence_limitations": {"type": "array", "items": {"type": "string"}},
+    "expert_review_conditions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["strong_evidence", "material_scientific_conflict", "observed_variant_directly_relevant", "individual_interpretation_materially_affected", "unresolved_from_available_evidence_context"],
+      "properties": {
+        "strong_evidence": {"type": "boolean"}, "material_scientific_conflict": {"type": "boolean"},
+        "observed_variant_directly_relevant": {"type": "boolean"}, "individual_interpretation_materially_affected": {"type": "boolean"},
+        "unresolved_from_available_evidence_context": {"type": "boolean"}
+      }
+    },
+    "expert_review_candidate": {"type": "boolean"}
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HEAL Grouped Global Interpretation V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "report_title_es", "summary_es", "key_findings", "coverage_statement_es", "limitations_es", "disclaimer_es"],
+  "properties": {
+    "schema_version": {"const": "grouped_global_interpretation_v1"},
+    "report_title_es": {"type": "string", "minLength": 1},
+    "summary_es": {"type": "string", "minLength": 1},
+    "key_findings": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["group_id", "headline_es", "explanation_es", "confidence", "inference_mode", "variant_refs", "evidence_ids"],
+        "properties": {
+          "group_id": {"type": "string"},
+          "headline_es": {"type": "string", "minLength": 1},
+          "explanation_es": {"type": "string", "minLength": 1},
+          "confidence": {"enum": ["Low", "Moderate", "High", "Conflicting", "Abstain"]},
+          "inference_mode": {"enum": ["initial_guide", "context_only", "abstained_insufficient_evidence"]},
+          "variant_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "evidence_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+        }
+      }
+    },
+    "coverage_statement_es": {"type": "string", "minLength": 1},
+    "limitations_es": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "uniqueItems": true},
+    "disclaimer_es": {"type": "string", "minLength": 1}
+  }
+}

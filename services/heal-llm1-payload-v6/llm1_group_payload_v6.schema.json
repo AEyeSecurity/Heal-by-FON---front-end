@@ -9,15 +9,47 @@
     "group_context", "canonical_status", "curated_mechanism", "focus_variant_evidence",
     "clinical_evidence_summary", "gwas_evidence_summary", "publication_evidence_digest",
     "supporting_context", "target_gene_discordant_context", "identity_unresolved",
-    "source_failures", "allele_specific_frequency_summary", "professional_curation",
+    "source_failures", "allele_specific_frequency_summary", "professional_curation", "patient_context", "traceability_allowlist",
     "deterministic_summary", "evidence_coverage", "compression_metadata", "provenance", "gates"
   ],
   "properties": {
     "payload_schema_version": {"const": "llm1_group_payload_v6"},
     "execution_mode": {"enum": ["dry_run", "pilot"]},
+    "traceability_allowlist": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed_evidence_ids", "allowed_variant_refs", "allowed_focus_variant_refs"],
+      "properties": {
+        "allowed_evidence_ids": {"type": "array", "items": {"type": "string"}},
+        "allowed_variant_refs": {"type": "array", "items": {"type": "string"}},
+        "allowed_focus_variant_refs": {"type": "array", "items": {"type": "string"}}
+      }
+    },
     "group_id": {"type": "string", "minLength": 3},
     "gene": {"type": "string", "minLength": 1},
     "module_id": {"type": "string", "minLength": 1},
+    "patient_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "axes", "structured_medications", "free_note", "free_note_authoritative", "interpretation_constraints"],
+      "properties": {
+        "schema_version": {"const": "llm1_patient_context_v1"},
+        "axes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["metabolism_nutrients_methylation", "immunity_inflammation", "xenobiotics_pharmacogenomics"],
+          "properties": {
+            "metabolism_nutrients_methylation": {"$ref": "#/$defs/metabolismAxis"},
+            "immunity_inflammation": {"$ref": "#/$defs/immunityAxis"},
+            "xenobiotics_pharmacogenomics": {"$ref": "#/$defs/xenobioticAxis"}
+          }
+        },
+        "structured_medications": {"type": "array", "items": {"type": "object"}},
+        "free_note": {"type": "string"},
+        "free_note_authoritative": {"const": false},
+        "interpretation_constraints": {"type": "object"}
+      }
+    },
     "focus_variant_evidence": {
       "type": "array",
       "maxItems": 20,
@@ -54,6 +86,47 @@
         "token_budget_ready", "mechanism_registry_ready", "target_gene_annotation_ready",
         "allele_specific_frequency_ready", "gwas_relevance_ready", "group_payload_ready", "llm1_pilot_ready"
       ]
+    }
+  },
+  "$defs": {
+    "metabolismAxis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "default_state", "allowed_codes"],
+      "properties": {
+        "allowed_codes": {"const": ["homocysteine", "folate", "vitamin_b12", "choline_intake", "methylation_related_symptoms"]},
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "state"],
+            "properties": {
+              "code": {"enum": ["homocysteine", "folate", "vitamin_b12", "choline_intake", "methylation_related_symptoms"]},
+              "state": {"enum": ["present", "absent", "unknown", "not_provided"]},
+              "value": {},
+              "unit": {"type": "string"}
+            }
+          }
+        },
+        "default_state": {"enum": ["present", "absent", "unknown", "not_provided"]}
+      }
+    },
+    "immunityAxis": {
+      "type": "object", "additionalProperties": false, "required": ["items", "default_state", "allowed_codes"],
+      "properties": {
+        "allowed_codes": {"const": ["crp", "il6", "acute_infection", "chronic_inflammatory_condition", "inflammation_related_symptoms"]},
+        "items": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["code", "state"], "properties": {"code": {"enum": ["crp", "il6", "acute_infection", "chronic_inflammatory_condition", "inflammation_related_symptoms"]}, "state": {"enum": ["present", "absent", "unknown", "not_provided"]}, "value": {}, "unit": {"type": "string"}}}},
+        "default_state": {"enum": ["present", "absent", "unknown", "not_provided"]}
+      }
+    },
+    "xenobioticAxis": {
+      "type": "object", "additionalProperties": false, "required": ["items", "default_state", "allowed_codes"],
+      "properties": {
+        "allowed_codes": {"const": ["medication", "drug_response_history", "adverse_drug_reaction", "smoking_status", "xenobiotic_exposure"]},
+        "items": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["code", "state"], "properties": {"code": {"enum": ["medication", "drug_response_history", "adverse_drug_reaction", "smoking_status", "xenobiotic_exposure"]}, "state": {"enum": ["present", "absent", "unknown", "not_provided"]}, "value": {}, "unit": {"type": "string"}}}},
+        "default_state": {"enum": ["present", "absent", "unknown", "not_provided"]}
+      }
     }
   }
 }
