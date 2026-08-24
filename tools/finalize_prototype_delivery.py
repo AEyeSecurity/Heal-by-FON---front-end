@@ -45,6 +45,7 @@ def main() -> int:
     parser.add_argument("--fresh-job-json")
     parser.add_argument("--synthetic-vcf")
     parser.add_argument("--signed-source", action="append", default=[])
+    parser.add_argument("--deployment-sha", required=True)
     args = parser.parse_args()
     output = Path(args.output_dir).resolve()
     repo = Path(args.repo).resolve()
@@ -55,7 +56,7 @@ def main() -> int:
     evidence_rows = [
         {"control": "tests", "resultado": "172 passed", "detalle": "Suite completa"},
         {"control": "web_build", "resultado": "passed", "detalle": "npm run build"},
-        {"control": "git_commit", "resultado": "ec7c3ecbc1f02ce89d7735bc33907ce91208f951", "detalle": "codex/llm1-readiness-v3"},
+        {"control": "git_commit", "resultado": args.deployment_sha, "detalle": "codex/llm1-readiness-v3"},
         {"control": "docker_image", "resultado": "sha256:48b09d265f624da682a6043cb8d1d09af6aa8bfe7d864039949ebceefb3c3000", "detalle": "heal-vcf-normalizer:1.0.0"},
         {"control": "active_registry", "resultado": "73b94c09c31c184135bc16b2e756fa447f4c040a8bf38b49181168a8c62a967f", "detalle": "intacto"},
     ]
