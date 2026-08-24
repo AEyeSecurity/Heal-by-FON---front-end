@@ -120,6 +120,18 @@ def technical_retry_allowed(error: Exception) -> bool:
     ))
 
 
+def global_technical_blocker_code(error: Exception) -> str | None:
+    """Classify campaign-wide failures without persisting provider error bodies."""
+    message = str(error).lower()
+    if "http_401" in message or "invalid_api_key" in message:
+        return "openai_authentication_failed"
+    if "http_403" in message:
+        return "openai_access_forbidden"
+    if "insufficient_quota" in message or "billing_hard_limit" in message:
+        return "openai_quota_unavailable"
+    return None
+
+
 def call_with_one_technical_retry(*, payload: dict, api_key: str, model: str, prompt: str,
                                   schema: dict, timeout_seconds: int) -> tuple[dict, dict]:
     errors: list[str] = []
@@ -729,6 +741,8 @@ def process(request: dict) -> dict:
         if state.get("llm2_result"):
             value["llm2_result"] = state["llm2_result"]
             value["llm2_metadata"] = state.get("llm2_metadata") or {}
+        if state.get("fatal_error_code"):
+            value["fatal_error_code"] = state["fatal_error_code"]
         write_json(state_path, value)
 
     ordered_coverage = coverage["groups"]
@@ -779,6 +793,13 @@ def process(request: dict) -> dict:
                 raise ValueError(";".join(errors))
             cards.append(llm1_card(item, envelope))
         except Exception as error:  # noqa: BLE001
+            fatal_code = global_technical_blocker_code(error)
+            if fatal_code:
+                state["fatal_error_code"] = fatal_code
+                persist_state()
+                update_progress(progress_path, substage="llm1", processed=len(completed_groups), total=len(planned_envelopes),
+                                message="Campaña detenida por un bloqueo técnico global", metrics={"error_code": fatal_code})
+                raise RuntimeError(fatal_code) from error
             quarantine = {"group_id": group_id, "status": "quarantined", "error": str(error), "created_at": now_iso(),
                           "timeout": "timed out" in str(error).lower(), "retry_exhausted": " | " in str(error)}
             quarantines.append(quarantine)

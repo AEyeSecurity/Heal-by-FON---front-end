@@ -70,6 +70,11 @@ class GroupedPrototypeTests(unittest.TestCase):
         self.assertFalse(MODULE.has_prohibited_language("El alcance excluye el diagnóstico de toxinas."))
         self.assertTrue(MODULE.has_prohibited_language("Se recomienda iniciar medicación."))
 
+    def test_invalid_key_is_a_campaign_wide_blocker_without_provider_body(self):
+        error = RuntimeError('OpenAI API http_401: {"error":{"code":"invalid_api_key","message":"masked"}}')
+        self.assertEqual(MODULE.global_technical_blocker_code(error), "openai_authentication_failed")
+        self.assertIsNone(MODULE.global_technical_blocker_code(RuntimeError("single group schema mismatch")))
+
     def test_runtime_allowlist_uses_traceability_and_excludes_legacy_mechanism(self):
         payload = {
             "traceability_allowlist": {
