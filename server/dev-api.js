@@ -3758,10 +3758,27 @@ function validateCurationCsv(kind, rows) {
 }
 
 const recoveringVcfCanonJobs = new Set();
+const recoveringVcfCanonInputs = new Set();
+
+function recoveryInputKey(job) {
+  return [
+    job?.uploadId || "",
+    job?.analysisMode || "quick",
+    job?.vcfAssembly || "",
+    job?.vcfParser || "streaming",
+  ].join("|");
+}
 
 async function recoverPersistedVcfCanonJob(parent) {
-  if (!parent || parent.status !== "recovery_pending" || recoveringVcfCanonJobs.has(parent.id)) return;
+  const inputKey = recoveryInputKey(parent);
+  if (
+    !parent ||
+    parent.status !== "recovery_pending" ||
+    recoveringVcfCanonJobs.has(parent.id) ||
+    recoveringVcfCanonInputs.has(inputKey)
+  ) return;
   recoveringVcfCanonJobs.add(parent.id);
+  recoveringVcfCanonInputs.add(inputKey);
   try {
     const upload = await loadUpload(parent.uploadId);
     if (!upload?.accessToken) throw new Error("The upload access binding is unavailable for recovery.");
@@ -3821,14 +3838,27 @@ async function recoverPersistedVcfCanonJob(parent) {
     await persistVcfCanonJob(parent);
   } finally {
     recoveringVcfCanonJobs.delete(parent.id);
+    recoveringVcfCanonInputs.delete(inputKey);
   }
 }
 
 function requeuePersistedVcfCanonJobs() {
-  for (const job of jobs.values()) {
-    if (job.status === "recovery_pending" && !job.recoveryShadowOf) {
-      recoverPersistedVcfCanonJob(job).catch(() => {});
+  const pending = [...jobs.values()]
+    .filter((job) => job.status === "recovery_pending" && !job.recoveryShadowOf)
+    .sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
+  const claimedInputs = new Set();
+  for (const job of pending) {
+    const inputKey = recoveryInputKey(job);
+    if (claimedInputs.has(inputKey)) {
+      job.status = "recovery_duplicate_superseded";
+      job.error = null;
+      job.message = "A prior active job owns recovery for the same upload and analysis configuration";
+      job.updatedAt = new Date().toISOString();
+      persistVcfCanonJob(job).catch(() => {});
+      continue;
     }
+    claimedInputs.add(inputKey);
+    recoverPersistedVcfCanonJob(job).catch(() => {});
   }
 }
 
