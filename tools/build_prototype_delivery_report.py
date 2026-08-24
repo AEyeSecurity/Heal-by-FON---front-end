@@ -52,6 +52,7 @@ def report_data(smoke: Path, deployment_sha: str, docker_digest: str, tests: int
         "telemetry": telemetry,
         "reason_counts": reason_counts,
         "modes": modes,
+        "cards": {row.get("group_id"): row for row in cards},
         "deployment_sha": deployment_sha,
         "docker_digest": docker_digest,
         "tests": tests,
@@ -133,6 +134,18 @@ def build_docx(data: dict, path: Path) -> None:
         document.add_heading("Motivos de cuarentena", level=2)
         add_docx_table(document, [(reason, str(count)) for reason, count in data["reason_counts"].most_common()])
 
+    document.add_heading("Ejemplos representativos", level=2)
+    example_rows = []
+    for group_id, purpose in (
+        ("MTHFR:T1.3", "guía inicial limitada"),
+        ("ABCB1:T1.6", "contexto PGx no accionable"),
+        ("IL6:T1.4", "sin variante observada; callability desconocida"),
+        ("COL14A1:T1.5", "aislada por el validador; no llegó a LLM2"),
+    ):
+        row = data["cards"].get(group_id, {})
+        example_rows.append((group_id, f"{row.get('status', 'no disponible')} — {purpose}"))
+    add_docx_table(document, example_rows)
+
     document.add_heading("Evidencia de ingeniería", level=1)
     add_docx_table(document, [
         ("Tests", f"{data['tests']} aprobados"),
@@ -212,6 +225,12 @@ def build_pdf(data: dict, path: Path) -> None:
     ):
         story.append(Paragraph(item, styles["BodyText"], bulletText="•"))
     story += [Paragraph("Motivos de cuarentena", styles["HealH1"]), pdf_table([(reason, str(count)) for reason, count in data["reason_counts"].most_common()])]
+    story += [Paragraph("Ejemplos representativos", styles["HealH1"]), pdf_table([
+        ("MTHFR:T1.3", "Guía inicial limitada"),
+        ("ABCB1:T1.6", "Contexto PGx no accionable"),
+        ("IL6:T1.4", "Sin variante observada; callability desconocida"),
+        ("COL14A1:T1.5", "Aislada por el validador; no llegó a LLM2"),
+    ])]
     story += [PageBreak(), Paragraph("Evidencia de ingeniería", styles["HealH1"]), pdf_table([
         ("Tests", f"{data['tests']} aprobados"),
         ("Build", "npm run build aprobado"),
