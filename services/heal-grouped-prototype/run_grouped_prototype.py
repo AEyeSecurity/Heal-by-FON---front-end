@@ -657,8 +657,18 @@ def write_pdf(view: dict, path: Path) -> None:
     table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#275D38")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#A0A0A0")), ("ALIGN", (0, 0), (-1, -1), "CENTER"), ("PADDING", (0, 0), (-1, -1), 6)]))
     story += [Spacer(1, 3 * mm), table, PageBreak(), Paragraph("Hallazgos por módulo", styles["HealH1"])]
     for module in view["modules"]:
-        story.append(Paragraph(f"Módulo {module['module_id']}", styles["HealH1"]))
-        for row in module["findings"]:
+        findings = list(module["findings"])
+        if not findings:
+            continue
+        first, *remaining = findings
+        story.append(KeepTogether([
+            Paragraph(f"Módulo {module['module_id']}", styles["HealH1"]),
+            Paragraph(f"{first['group_id']} - {first['headline_es']}", styles["Heading2"]),
+            Paragraph(first["explanation_es"], styles["BodyText"]),
+            Paragraph(f"Modo: {first['inference_mode']} | Confianza: {first['confidence']}", styles["BodyText"]),
+            Spacer(1, 3 * mm),
+        ]))
+        for row in remaining:
             story.append(KeepTogether([
                 Paragraph(f"{row['group_id']} - {row['headline_es']}", styles["Heading2"]),
                 Paragraph(row["explanation_es"], styles["BodyText"]),

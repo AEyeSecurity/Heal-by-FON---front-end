@@ -68,6 +68,7 @@ def main() -> int:
         "Tarjetas_LLM1.csv": smoke / "cards.csv",
         "Cobertura_180_grupos.csv": smoke / "coverage.csv",
         "Telemetria_y_costos.csv": smoke / "telemetry_costs.csv",
+        "Snapshot_Tier1_105_Firmado.csv": snapshot / "tier1_prototype_snapshot_groups.csv",
     }
     for name, source in human_files.items():
         copy(source, human / name)
@@ -111,6 +112,8 @@ Este paquete demuestra el recorrido agrupado LLM1 → LLM2 → reporte sobre un 
     cards = read_csv(smoke / "cards.csv")
     coverage = read_csv(smoke / "coverage.csv")
     telemetry = read_csv(smoke / "telemetry_costs.csv")
+    quarantine = read_json(smoke / "quarantine.json")
+    snapshot_groups = read_csv(snapshot / "tier1_prototype_snapshot_groups.csv")
     card_columns = (
         "group_id", "coverage_status", "status", "inference_mode",
         "final_confidence_level", "review_priority", "focus_variant_refs",
@@ -137,6 +140,8 @@ Este paquete demuestra el recorrido agrupado LLM1 → LLM2 → reporte sobre un 
         ],
         "TARJETAS": compact_cards,
         "COBERTURA": coverage,
+        "CUARENTENAS": quarantine,
+        "SNAPSHOT_TIER1": snapshot_groups,
         "TELEMETRIA": telemetry,
         "HASHES": [
             {"artefacto": "Active registry antes", "sha256": summary["active_registry_sha256_before"], "estado": "intacto"},
