@@ -326,6 +326,7 @@ class EnrichmentCache:
         legacy_fingerprint: str | None = None,
     ) -> dict | None:
         connection = connection or self.thread_connection()
+        reused_legacy_fingerprint = False
         with self._lock:
             row = connection.execute(
                 """SELECT response_json, status, status_reason, http_status, retry_after, fetched_at, expires_at,
@@ -334,6 +335,15 @@ class EnrichmentCache:
                    WHERE assembly = ? AND variant_key = ? AND source = ? AND query_mode = ? AND request_fingerprint = ?""",
                 (assembly, variant_key, source, query_mode, fingerprint),
             ).fetchone()
+            if not row and legacy_fingerprint:
+                row = connection.execute(
+                    """SELECT response_json, status, status_reason, http_status, retry_after, fetched_at, expires_at,
+                              query_mode, identity_fingerprint
+                       FROM enrichment_cache
+                       WHERE assembly = ? AND variant_key = ? AND source = ? AND query_mode = ? AND request_fingerprint = ?""",
+                    (assembly, variant_key, source, query_mode, legacy_fingerprint),
+                ).fetchone()
+                reused_legacy_fingerprint = bool(row)
         if not row:
             return self.legacy_get(
                 assembly,
@@ -354,7 +364,7 @@ class EnrichmentCache:
         return {
             "payload": payload,
             "status": row["status"],
-            "status_reason": row["status_reason"],
+            "status_reason": "legacy_fingerprint_cache_reused" if reused_legacy_fingerprint else row["status_reason"],
             "http_status": row["http_status"],
             "retry_after": row["retry_after"],
             "fetched_at": row["fetched_at"],

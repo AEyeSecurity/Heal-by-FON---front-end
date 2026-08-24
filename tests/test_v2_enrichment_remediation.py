@@ -427,6 +427,25 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
         self.assertEqual(cached["payload"], {"data": {"count": "1"}, "error": ""})
         self.assertEqual(cached["status_reason"], "legacy_cache_reused")
 
+    def test_current_cache_reuses_explicit_legacy_fingerprint(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = enrichment.EnrichmentCache(Path(temporary) / "enrichment_cache_v2.sqlite", ttl_days=1)
+            legacy_key = enrichment.fingerprint({"rsid": "rs1", "source": "clinvar", "pipeline": "gene-module-v2-enrichment-1"})
+            current_key = enrichment.fingerprint({"identifier": "rs1", "source": "clinvar", "query_mode": "exact_rsid", "pipeline": enrichment.PIPELINE_VERSION})
+            cache.put(
+                "GRCh38", "v2_current_legacy", "clinvar", legacy_key,
+                {"data": {"count": "1"}, "error": ""}, "success", 200,
+                query_mode="exact_rsid", status_reason="usable_payload",
+            )
+            cached = cache.get(
+                "GRCh38", "v2_current_legacy", "clinvar", current_key,
+                query_mode="exact_rsid", legacy_fingerprint=legacy_key,
+            )
+            cache.close()
+
+        self.assertEqual(cached["payload"], {"data": {"count": "1"}, "error": ""})
+        self.assertEqual(cached["status_reason"], "legacy_fingerprint_cache_reused")
+
     def test_physical_matrix_row_has_one_variant_and_all_secondary_statuses(self):
         variant = {
             "variant_key": "v2_test",
