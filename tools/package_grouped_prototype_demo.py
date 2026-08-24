@@ -88,7 +88,7 @@ Este paquete demuestra el recorrido agrupado LLM1 → LLM2 → reporte sobre un 
 ## Orden recomendado
 
 1. Abra `Reporte_HEAL_Prototipo.pdf` para ver la experiencia de una familia.
-2. Abra `HEAL_Prototipo_Auditoria.xlsx` y lea primero `RESUMEN`.
+2. Abra `HEAL_Prototipo_Tier1_105_Auditoria.xlsx` y lea primero `RESUMEN`.
 3. En `TARJETAS`, filtre `status=valid` para revisar las {valid} tarjetas generadas por Luna.
 4. En `COBERTURA`, compare los {covered} grupos cubiertos con los {not_covered} no cubiertos, sobre {canonical} grupos canónicos.
 5. En `TELEMETRIA`, revise tokens, latencia y costo de las {calls} llamadas registradas.
