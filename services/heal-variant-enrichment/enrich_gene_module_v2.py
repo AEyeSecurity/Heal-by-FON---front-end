@@ -17,6 +17,7 @@ import gzip
 import hashlib
 import json
 import os
+import random
 import re
 import sqlite3
 import threading
@@ -31,6 +32,7 @@ import enrich_observed_variants as legacy
 
 
 PIPELINE_VERSION = "gene-module-v2-enrichment-2"
+RESUME_CONTRACT_VERSION = "enrichment-resume-manifest-v1"
 CACHE_SCHEMA_VERSION = 2
 DEFAULT_MIN_VEP_COVERAGE = 0.90
 VEP_URL = "https://rest.ensembl.org/vep/human/region"
@@ -53,6 +55,7 @@ SECONDARY_SOURCE_ORDER = (
     "gwas",
     "pharmgkb",
 )
+TRANSIENT_HTTP_CODES = {408, 425, 429, 500, 502, 503, 504}
 
 
 def utc_now() -> str:
@@ -61,6 +64,48 @@ def utc_now() -> str:
 
 def clean(value: object) -> str:
     return legacy.clean_str(value)
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def transient_provider_error(error: str, http_status: int | None = None) -> bool:
+    value = clean(error).lower()
+    if http_status in TRANSIENT_HTTP_CODES:
+        return True
+    if any(re.search(rf"\bhttp[_ :/-]*{code}\b", value) for code in TRANSIENT_HTTP_CODES):
+        return True
+    return any(token in value for token in (
+        "timed out", "timeout", "connection reset", "remote end closed", "temporarily unavailable",
+    ))
+
+
+def retry_delay_seconds(attempt: int, headers: dict | None = None) -> float:
+    retry_after = clean((headers or {}).get("Retry-After") or (headers or {}).get("retry-after"))
+    if retry_after.isdigit():
+        return min(30.0, max(0.0, float(retry_after)))
+    return min(30.0, 1.0 * (2 ** max(0, attempt - 1)) + random.uniform(0.0, 0.5))
+
+
+def write_resume_manifest(output_dir: Path, *, input_sha256: str, assembly: str, phase: str,
+                          processed: int, total: int, metrics: dict | None = None) -> None:
+    write_json(output_dir / "enrichment_resume_manifest_v1.json", {
+        "schema_version": "enrichment_resume_manifest_v1",
+        "resume_contract_version": RESUME_CONTRACT_VERSION,
+        "input_sha256": input_sha256,
+        "assembly": assembly,
+        "phase": phase,
+        "processed": int(processed),
+        "total": int(total),
+        "metrics": metrics or {},
+        "cache_is_checkpoint_authority": True,
+        "updated_at": utc_now(),
+    }, tolerate_replace_lock=True)
 
 
 def configured_min_vep_coverage() -> float:
@@ -482,11 +527,12 @@ def fetch_vep_batch(batch: list[dict], assembly: str, cache: EnrichmentCache, ti
     error = ""
     http_status: int | None = None
     headers: dict = {}
-    for attempt in range(3):
+    for attempt in range(1, 4):
         response, error, http_status, headers = post_json(query_url, payload, timeout_seconds)
-        if not error or (http_status is not None and http_status < 500 and http_status != 429):
+        if not error or not transient_provider_error(error, http_status):
             break
-        time.sleep(1.2 * (attempt + 1))
+        if attempt < 3:
+            time.sleep(retry_delay_seconds(attempt, headers))
     provenance.setdefault("ensembl_vep_region", {"url": query_url, "requestParameters": VEP_PARAMS, "responses": []})
     provenance["ensembl_vep_region"]["responses"].append({"at": utc_now(), "httpStatus": http_status, "headers": headers})
     items_by_id: dict[str, dict] = {}
@@ -529,11 +575,11 @@ def _vep_failure_can_split(result: dict) -> bool:
             "timeout",
             "connection reset",
             "remote end closed",
-            "http error 413",
-            "http error 500",
-            "http error 502",
-            "http error 503",
-            "http error 504",
+            "http error 413", "http_413",
+            "http error 500", "http_500",
+            "http error 502", "http_502",
+            "http error 503", "http_503",
+            "http error 504", "http_504",
         )
     )
 
@@ -1063,7 +1109,14 @@ def cached_secondary(
             cached.get("status_reason") or "cached_result",
             time.perf_counter() - started,
         )
-    payload, error = func(identifier, timeout_seconds)
+    payload: dict = {}
+    error = ""
+    for attempt in range(1, 4):
+        payload, error = func(identifier, timeout_seconds)
+        if not error or not transient_provider_error(error):
+            break
+        if attempt < 3:
+            time.sleep(retry_delay_seconds(attempt))
     status = secondary_source_status(source, payload, error)
     reason = secondary_status_reason(source, payload, error, status)
     cache.put(
@@ -1718,6 +1771,7 @@ def main_process(payload: dict) -> dict:
     analysis_mode = clean(payload.get("analysisMode") or payload.get("analysis_mode") or "quick").lower()
     if analysis_mode not in {"quick", "complete", "qa"}:
         analysis_mode = "quick"
+    input_sha256 = sha256_file(input_path)
     coordinate_identity_enabled = analysis_mode in {"complete", "qa"}
     rows = [row for row in read_csv(input_path) if clean(row.get("variant_key")) and clean(row.get("has_genotype")).lower() in {"true", "1", "yes"}]
     if not rows:
@@ -1783,6 +1837,11 @@ def main_process(payload: dict) -> dict:
                 "elapsed_seconds": round(vep_elapsed, 3),
                 "items_per_second": round(min(offset + VEP_BATCH_SIZE, len(physical_variants)) / max(vep_elapsed, 0.001), 3),
             },
+        )
+        write_resume_manifest(
+            output_dir, input_sha256=input_sha256, assembly=assembly, phase="vep_base",
+            processed=min(offset + VEP_BATCH_SIZE, len(physical_variants)), total=len(physical_variants),
+            metrics={"cache_hits": vep_cache_hits, "network_variants": vep_requests},
         )
     vep_elapsed_seconds = time.perf_counter() - vep_started
 
@@ -1965,6 +2024,10 @@ def main_process(payload: dict) -> dict:
                 message=f"Querying {source}",
                 metrics=metrics,
             )
+            write_resume_manifest(
+                output_dir, input_sha256=input_sha256, assembly=assembly, phase=f"secondary_{source}",
+                processed=completed, total=total, metrics={"source_stats": metrics.get("source_stats") or {}},
+            )
 
     secondary_started = time.perf_counter()
     secondary_enrichments, secondary_metrics = fetch_secondary_sources(
@@ -2117,6 +2180,11 @@ def main_process(payload: dict) -> dict:
     }
     identity_summary_path = output_dir / "enrichment_identity_resolution_summary.json"
     write_json(identity_summary_path, identity_summary)
+    write_resume_manifest(
+        output_dir, input_sha256=input_sha256, assembly=assembly, phase="complete",
+        processed=len(physical_variants), total=len(physical_variants),
+        metrics={"retry_queue": str(retry_queue_path), "source_errors": sum(len(value.get("errors") or {}) for value in enrichments_by_variant.values())},
+    )
 
     performance = {
         "schemaVersion": "gene_module_v2",

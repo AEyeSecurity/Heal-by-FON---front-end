@@ -38,6 +38,33 @@ enrichment = load_module("heal_v2_enrichment_test", ENRICHMENT_PATH)
 
 
 class V2EnrichmentRemediationTests(unittest.TestCase):
+    def test_transient_provider_errors_are_retriable_but_not_permanent_failures(self):
+        for error in ("HTTP 408", "http_425", "HTTP 429 rate limited", "http_500", "http_502", "http_503", "http_504", "request timed out", "connection reset by peer"):
+            self.assertTrue(enrichment.transient_provider_error(error), error)
+        for error in ("HTTP 400 bad request", "HTTP 404 not found", "invalid allele"):
+            self.assertFalse(enrichment.transient_provider_error(error), error)
+
+    def test_resume_manifest_is_atomic_and_binds_input_assembly_and_phase(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            enrichment.write_resume_manifest(
+                root,
+                input_sha256="a" * 64,
+                assembly="GRCh38",
+                phase="secondary_sources",
+                processed=12,
+                total=20,
+                metrics={"source": "clinvar"},
+            )
+            payload = json.loads((root / "enrichment_resume_manifest_v1.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["schema_version"], "enrichment_resume_manifest_v1")
+        self.assertEqual(payload["resume_contract_version"], enrichment.RESUME_CONTRACT_VERSION)
+        self.assertEqual(payload["input_sha256"], "a" * 64)
+        self.assertEqual(payload["assembly"], "GRCh38")
+        self.assertEqual(payload["phase"], "secondary_sources")
+        self.assertEqual(payload["processed"], 12)
+        self.assertEqual(payload["total"], 20)
+
     def test_clinvar_esummary_failure_is_not_reported_as_success(self):
         search_payload = {"esearchresult": {"idlist": ["123"]}}
         with patch.object(

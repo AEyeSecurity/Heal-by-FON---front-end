@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HEAL LLM1 Prototype Envelope V3",
+  "description": "Closed model-visible v7 projection governed by the signed Tier 1 snapshot. Legacy curation remains audit-only and non-citable.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "payload_v7", "scientific_decision", "runtime_variant_gate", "technical_gates", "coverage_status", "readiness", "allowlists", "provenance", "source_payload_audit", "prototype_hashes"],
+  "properties": {
+    "schema_version": {"const": "llm1_prototype_envelope_v3"},
+    "payload_v7": {"type": "object"},
+    "scientific_decision": {"type": "object"},
+    "runtime_variant_gate": {"type": "object"},
+    "technical_gates": {"type": "object"},
+    "coverage_status": {"const": "covered_by_prototype_snapshot"},
+    "readiness": {"type": "object"},
+    "allowlists": {"type": "object"},
+    "provenance": {"type": "object"},
+    "source_payload_audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "excluded_model_fields", "legacy_context_citable"],
+      "properties": {
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "excluded_model_fields": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "legacy_context_citable": {"const": false}
+      }
+    },
+    "prototype_hashes": {"type": "object"}
+  }
+}

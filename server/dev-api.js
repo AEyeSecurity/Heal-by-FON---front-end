@@ -372,6 +372,10 @@ function canAccessUpload(req, upload) {
   return !upload.clientFingerprint || upload.clientFingerprint === clientFingerprint(req);
 }
 
+function hasUploadAccessToken(req, upload) {
+  return Boolean(upload && tokenMatches(upload.accessToken, requestAccessToken(req)));
+}
+
 function checkInitRateLimit(req) {
   const ip = clientIp(req);
   const now = Date.now();
@@ -1833,6 +1837,28 @@ async function verifyTurnstile(token, remoteIp) {
   return { ok: true };
 }
 
+function sanitizePublicResult(value, key = "") {
+  if (Array.isArray(value)) return value.map((item) => sanitizePublicResult(item, key)).filter((item) => item !== undefined);
+  if (value && typeof value === "object") {
+    const output = {};
+    for (const [childKey, childValue] of Object.entries(value)) {
+      if (/path$|paths$|raw_response|authorization|headers|stack|api_key|sha256|hash|stderr|stdout|response_body|provider_body/i.test(childKey)) continue;
+      const sanitized = sanitizePublicResult(childValue, childKey);
+      if (sanitized !== undefined) output[childKey] = sanitized;
+    }
+    return output;
+  }
+  if (typeof value === "string" && (/^[A-Za-z]:\\/.test(value) || value.includes("HEAL_OPENAI_API_KEY"))) return undefined;
+  return value;
+}
+
+function publicErrorMessage(job) {
+  if (!job?.error) return null;
+  if (job.stage === "grouped_prototype") return "El prototipo agrupado no pudo completar esta ejecución.";
+  if (isVariantEnrichmentStage(job.stage)) return "El enriquecimiento externo no pudo completar esta ejecución.";
+  return "La ejecución no pudo completarse. Use el Job ID para solicitar soporte.";
+}
+
 function publicJob(job) {
   return {
     id: job.id,
@@ -1843,12 +1869,12 @@ function publicJob(job) {
     analysisMode: job.analysisMode,
     fileName: job.fileName,
     sizeBytes: job.sizeBytes,
-    result: job.result,
+    result: sanitizePublicResult(job.result),
     artifactsReady: publicArtifactsReady(job),
     stage: job.stage || null,
     stageProgress: job.stageProgress ?? null,
     stageProgressDetail: job.stageProgressDetail || null,
-    error: job.error,
+    error: publicErrorMessage(job),
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
   };
@@ -1956,12 +1982,12 @@ async function loadPersistedVcfCanonJobs() {
     try {
       const job = hydrateJobArtifacts(JSON.parse(await readFile(path.join(paths.jobs, entry.name), "utf8")));
       if (job?.id && shouldPersistVcfCanonJob(job)) {
-        if (job.status === "running") {
-          job.status = "failed";
-          job.progress = 100;
-          job.stageProgress = 100;
-          job.error = "Job was interrupted by an API restart. Please retry this stage.";
-          job.message = "Interrupted job can be retried";
+        if (["running", "recovering", "recovery_pending"].includes(job.status)) {
+          job.status = job.recoveryShadowOf ? "recovery_shadow_interrupted" : "recovery_pending";
+          job.error = null;
+          job.message = job.recoveryShadowOf
+            ? "Internal recovery attempt was interrupted"
+            : "Rehydrating the active job from durable checkpoints";
           job.updatedAt = new Date().toISOString();
           await persistVcfCanonJob(job);
         }
@@ -2072,6 +2098,7 @@ async function runtimeHealth() {
 
 async function v2NormalizationPreflight(uploadSizeBytes) {
   const requiredBytes = Math.max(20 * 1024 * 1024 * 1024, Number(uploadSizeBytes || 0) * 10);
+  await mkdir(VCF_NORMALIZATION_ROOT, { recursive: true });
   const [workspace, docker] = await Promise.all([
     statfs(VCF_NORMALIZATION_ROOT).catch(() => null),
     runCommand("docker", ["image", "inspect", NORMALIZER_IMAGE], { timeoutMs: 5_000 }).catch(() => ({ ok: false })),
@@ -3575,10 +3602,15 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
   res.status(202).json(publicJob(job));
 });
 
-app.get("/api/vcf-canon-matches/:jobId", (req, res) => {
+app.get("/api/vcf-canon-matches/:jobId", async (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job) {
     res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (!hasUploadAccessToken(req, upload)) {
+    res.status(403).json({ error: "Job access denied." });
     return;
   }
   res.json(publicJob(job));
@@ -3588,6 +3620,11 @@ app.get("/api/vcf-canon-matches/:jobId/logs", async (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job) {
     res.status(404).json({ error: "VCF-canon match job not found." });
+    return;
+  }
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (!hasUploadAccessToken(req, upload)) {
+    res.status(403).json({ error: "Job access denied." });
     return;
   }
   const requestedLimit = Number.parseInt(String(req.query.limit || "250"), 10);
@@ -3716,6 +3753,77 @@ function validateCurationCsv(kind, rows) {
           throw new Error("Professionally reviewed GWAS relevance rows require relevance_reason.");
         }
       }
+    }
+  }
+}
+
+const recoveringVcfCanonJobs = new Set();
+
+async function recoverPersistedVcfCanonJob(parent) {
+  if (!parent || parent.status !== "recovery_pending" || recoveringVcfCanonJobs.has(parent.id)) return;
+  recoveringVcfCanonJobs.add(parent.id);
+  try {
+    const upload = await loadUpload(parent.uploadId);
+    if (!upload?.accessToken) throw new Error("The upload access binding is unavailable for recovery.");
+    const response = await fetch(`http://127.0.0.1:${PORT}/api/vcf-canon-matches`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-HEAL-Access-Token": upload.accessToken },
+      body: JSON.stringify({
+        uploadId: parent.uploadId,
+        vcfParser: parent.vcfParser || "streaming",
+        analysisMode: parent.analysisMode || "quick",
+        vcfAssembly: parent.vcfAssembly || undefined,
+      }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || !body.id) throw new Error(`Recovery requeue was rejected (${response.status}).`);
+    const child = jobs.get(body.id);
+    if (!child) throw new Error("Recovery child job was not registered.");
+    child.recoveryShadowOf = parent.id;
+    parent.status = "recovering";
+    parent.recoveryChildJobId = child.id;
+    parent.message = "Job requeued from durable enrichment checkpoints";
+    parent.updatedAt = new Date().toISOString();
+    await Promise.all([persistVcfCanonJob(parent), persistVcfCanonJob(child)]);
+
+    while (["running", "recovering", "recovery_pending"].includes(child.status)) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      parent.progress = child.progress;
+      parent.stage = child.stage;
+      parent.stageProgress = child.stageProgress;
+      parent.stageProgressDetail = child.stageProgressDetail || null;
+      parent.message = child.message;
+      parent.updatedAt = new Date().toISOString();
+      await persistVcfCanonJob(parent);
+    }
+    parent.status = child.status;
+    parent.progress = child.progress;
+    parent.stage = child.stage;
+    parent.stageProgress = child.stageProgress;
+    parent.stageProgressDetail = child.stageProgressDetail || null;
+    parent.message = child.message;
+    parent.error = child.error;
+    parent.result = child.result;
+    parent.artifacts = child.artifacts;
+    parent.recoveredFromCheckpoint = true;
+    parent.updatedAt = new Date().toISOString();
+    await persistVcfCanonJob(parent);
+  } catch (error) {
+    parent.status = "recovery_pending";
+    parent.error = null;
+    parent.message = "Durable recovery is pending; no completed provider result was discarded";
+    parent.recoveryDiagnostic = error.message || String(error);
+    parent.updatedAt = new Date().toISOString();
+    await persistVcfCanonJob(parent);
+  } finally {
+    recoveringVcfCanonJobs.delete(parent.id);
+  }
+}
+
+function requeuePersistedVcfCanonJobs() {
+  for (const job of jobs.values()) {
+    if (job.status === "recovery_pending" && !job.recoveryShadowOf) {
+      recoverPersistedVcfCanonJob(job).catch(() => {});
     }
   }
 }
@@ -4013,8 +4121,8 @@ app.post("/api/vcf-canon-matches/:jobId/grouped-prototype", async (req, res) => 
     return;
   }
   const upload = await loadUpload(job.uploadId).catch(() => null);
-  if (upload && !canAccessUpload(req, upload)) {
-    res.status(403).json({ error: "Match belongs to a different client." });
+  if (!hasUploadAccessToken(req, upload)) {
+    res.status(403).json({ error: "Job access denied." });
     return;
   }
   if (job.status === "running") {
@@ -4063,7 +4171,7 @@ app.get("/api/vcf-canon-matches/:jobId/grouped-prototype/download/:artifact", as
     return;
   }
   const upload = await loadUpload(job.uploadId).catch(() => null);
-  if (upload && !canAccessUpload(req, upload)) {
+  if (!hasUploadAccessToken(req, upload)) {
     res.status(403).json({ error: "Match belongs to a different client." });
     return;
   }
@@ -4094,7 +4202,7 @@ app.get("/api/vcf-canon-matches/:jobId/grouped-prototype/cards", async (req, res
     return;
   }
   const upload = await loadUpload(job.uploadId).catch(() => null);
-  if (upload && !canAccessUpload(req, upload)) {
+  if (!hasUploadAccessToken(req, upload)) {
     res.status(403).json({ error: "Match belongs to a different client." });
     return;
   }
@@ -6350,4 +6458,5 @@ app.listen(PORT, "127.0.0.1", () => {
   console.log(`HEAL local API listening on http://127.0.0.1:${PORT}`);
   console.log(`Upload root: ${UPLOAD_ROOT}`);
   console.log(`Chunk size: ${CHUNK_SIZE_BYTES}`);
+  setTimeout(requeuePersistedVcfCanonJobs, 250);
 });

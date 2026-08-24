@@ -66,9 +66,13 @@ class GroupedPrototypeTests(unittest.TestCase):
 
     def test_prohibited_language_allows_safety_negation(self):
         self.assertFalse(MODULE.has_prohibited_language("Este prototipo no es un diagnóstico."))
+        self.assertFalse(MODULE.has_prohibited_language("Esta variante no permite establecer un diagnóstico."))
+        self.assertFalse(MODULE.has_prohibited_language("The result explicitly excludes a disease diagnosis."))
+        self.assertFalse(MODULE.has_prohibited_language("This is an initial guide rather than a diagnosis."))
         self.assertFalse(MODULE.has_prohibited_language("No iniciar ni suspender medicación por este resultado."))
         self.assertFalse(MODULE.has_prohibited_language("El alcance excluye el diagnóstico de toxinas."))
         self.assertTrue(MODULE.has_prohibited_language("Se recomienda iniciar medicación."))
+        self.assertTrue(MODULE.has_prohibited_language("Esta variante diagnostica una enfermedad."))
 
     def test_invalid_key_is_a_campaign_wide_blocker_without_provider_body(self):
         error = RuntimeError('OpenAI API http_401: {"error":{"code":"invalid_api_key","message":"masked"}}')
@@ -139,6 +143,49 @@ class GroupedPrototypeTests(unittest.TestCase):
         item = {"interpretation_long_es": "El GWAS no establece causalidad ni riesgo individual."}
         payload = {"gwas_evidence_summary": {"prioritized_clusters": [{"cluster_ref": "gwc_1"}]}}
         self.assertNotIn("gwas_causality_or_individual_risk", MODULE.prototype_critical_semantic_errors(item, payload))
+        item_en = {"interpretation_long_en": "GWAS findings are population associations and do not establish causality or individual risk."}
+        self.assertNotIn("gwas_causality_or_individual_risk", MODULE.prototype_critical_semantic_errors(item_en, payload))
+        unsafe = {"interpretation_long_en": "This GWAS proves that the individual has increased risk."}
+        self.assertIn("individual_gwas_risk", MODULE.prototype_critical_semantic_errors(unsafe, payload))
+
+    def test_referential_evidence_duplicates_are_coalesced(self):
+        item = {"evidence_used": [
+            {"evidence_id": "evv_1", "variant_ref": "rs1", "source": "vcf", "field": "genotype", "value": "A/G"},
+            {"evidence_id": "evv_1", "variant_ref": "rs1", "source": "vep", "field": "consequence", "value": "missense_variant"},
+        ]}
+        normalized, errors, audit = MODULE.normalize_evidence_used(item)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(normalized["evidence_used"]), 1)
+        self.assertEqual(normalized["evidence_used"][0]["supported_properties"], ["consequence", "genotype"])
+        self.assertEqual(audit[0]["raw_entry_count"], 2)
+
+    def test_evidence_duplicate_with_different_variant_is_scientific_error(self):
+        item = {"evidence_used": [
+            {"evidence_id": "PMID:1", "variant_ref": "rs1", "source": "pubmed", "field": "result", "value": "positive"},
+            {"evidence_id": "PMID:1", "variant_ref": "rs2", "source": "pubmed", "field": "result", "value": "positive"},
+        ]}
+        _normalized, errors, _audit = MODULE.normalize_evidence_used(item)
+        self.assertIn("llm1_scientific_evidence_double_counting", errors)
+
+    def test_v3_model_projection_excludes_legacy_scientific_state(self):
+        payload = {
+            "payload_schema_version": "llm1_group_payload_v7", "group_id": "GENE:T1.1", "gene": "GENE", "module_id": "T1.1",
+            "focus_variant_evidence": [], "traceability_allowlist": {"allowed_evidence_ids": ["evv_1", "evm_legacy"]},
+            "input_completeness": {"absence_semantics": "not_observed_callability_unknown"},
+            "curated_mechanism": {"status": "withheld", "evidence_id": "evm_legacy"},
+            "internal_scientific_curation": {"mechanism_status": "withheld"}, "gates": {"scientific_curation_ready": False},
+        }
+        scientific = {
+            "group_id": "GENE:T1.1", "gene": "GENE", "valid_evidence_ids": ["PMID:1"],
+            "prototype_inference_ceiling": "context_only", "core_status": "approved", "dominant_direction": "supportive",
+            "material_conflict": False, "limitations": [], "evidence_records": [], "provenance": {},
+        }
+        envelope = MODULE.build_envelope(payload, scientific, {"manifest_sha256": "a" * 64}, {"snapshot_sha256": "b" * 64, "prototype_readiness": "approved_for_sandbox_smoke_test"})
+        MODULE.validate_envelope(envelope)
+        self.assertEqual(envelope["schema_version"], "llm1_prototype_envelope_v3")
+        self.assertNotIn("curated_mechanism", envelope["payload_v7"])
+        self.assertNotIn("internal_scientific_curation", envelope["payload_v7"])
+        self.assertNotIn("evm_legacy", envelope["allowlists"]["evidence_ids"])
 
     def test_llm2_cannot_add_group_variant_or_evidence(self):
         payload = {
@@ -176,9 +223,15 @@ class GroupedPrototypeTests(unittest.TestCase):
             self.assertTrue((Path(temporary) / "HEAL_prototipo_desarrollo.docx").exists())
             self.assertTrue((Path(temporary) / "HEAL_prototipo_desarrollo.pdf").exists())
             cards = json.loads((Path(temporary) / "llm1_cards.json").read_text(encoding="utf-8"))
+            view = json.loads((Path(temporary) / "report_view_model_v2.json").read_text(encoding="utf-8"))
             self.assertEqual(len(cards), 180)
             self.assertEqual(sum(row["coverage_status"] == "covered_by_prototype_snapshot" for row in cards), 105)
             self.assertEqual(result["counts"]["not_covered"], 75)
+            self.assertEqual(view["schema_version"], "report_view_model_v2")
+            self.assertEqual(view["modules"][0]["title"], "Resiliencia de sistemas fundamentales")
+            self.assertEqual(view["modules"][3]["title"], "Inmunidad e inflamación")
+            self.assertNotIn("draft", " ".join(view["limitations"]).lower())
+            self.assertNotIn("curación profesional", " ".join(view["limitations"]).lower())
         self.assertEqual(before, MODULE.sha256_file(MODULE.ACTIVE_REGISTRY))
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import csv
 import hashlib
 import importlib.util
@@ -53,10 +54,13 @@ PROHIBITED = re.compile(
     re.I,
 )
 SAFE_NEGATION = re.compile(
-    r"\b(no|sin|nunca|tampoco|evita(?:r)?|exclu(?:ye|ir|ido|ida)|prohibid[oa]s?|"
-    r"not|without|never|cannot|can't|does\s+not|do\s+not|must\s+not|no\s+se\s+debe)\b",
+    r"\b(no|sin|nunca|tampoco|ni|evita(?:r)?|exclu(?:ye|yen|ir|ido|ida|idos|idas|si[oó]n|siones)|"
+    r"descarta(?:r)?|prohibid[oa]s?|not|without|never|neither|nor|cannot|can't|doesn['’]?t|"
+    r"does\s+not|do\s+not|must\s+not|rules?\s+out|excludes?|excluded|exclusion|exclusions|"
+    r"rather\s+than|instead\s+of|en\s+vez\s+de|en\s+lugar\s+de|no\s+se\s+debe)\b",
     re.I,
 )
+CLAUSE_BOUNDARY = re.compile(r"[.;:!?\n]+|\b(?:pero|sin\s+embargo|but|however)\b", re.I)
 CEILING_ALLOWED_MODES = {
     "none": {"abstained_insufficient_evidence"},
     "context_only": {"context_only", "abstained_insufficient_evidence"},
@@ -200,13 +204,60 @@ def has_affirmative_pattern(value: str, pattern: re.Pattern) -> bool:
     the same clause before it.
     """
     text = str(value or "")
+    boundaries = [0]
+    boundaries.extend(match.end() for match in CLAUSE_BOUNDARY.finditer(text))
+    boundaries.append(len(text))
     for match in pattern.finditer(text):
-        clause_start = max(text.rfind(mark, 0, match.start()) for mark in ".;:!?\n") + 1
-        prefix = text[clause_start:match.start()]
-        if SAFE_NEGATION.search(prefix):
+        clause_start = max((value for value in boundaries if value <= match.start()), default=0)
+        clause_end = min((value for value in boundaries if value >= match.end()), default=len(text))
+        clause = text[clause_start:clause_end]
+        polarity_window = re.sub(r"\b(?:not\s+only|no\s+solo)\b", "", clause, flags=re.I)
+        if SAFE_NEGATION.search(polarity_window):
             continue
         return True
     return False
+
+
+def normalize_evidence_used(item: dict) -> tuple[dict, list[str], list[dict]]:
+    """Coalesce referential repetition without hiding scientific conflicts."""
+    normalized = copy.deepcopy(item)
+    grouped: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for row in normalized.get("evidence_used") or []:
+        evidence_id = str(row.get("evidence_id") or "")
+        if evidence_id not in grouped:
+            grouped[evidence_id] = []
+            order.append(evidence_id)
+        grouped[evidence_id].append(row)
+    errors: list[str] = []
+    audit: list[dict] = []
+    coalesced: list[dict] = []
+    for evidence_id in order:
+        rows = grouped[evidence_id]
+        variants = {str(row.get("variant_ref") or "") for row in rows}
+        sources = {str(row.get("source") or "") for row in rows}
+        if len(variants) > 1:
+            errors.append("llm1_scientific_evidence_double_counting")
+            coalesced.extend(rows)
+            continue
+        first = dict(rows[0])
+        properties = sorted({str(row.get("field") or "") for row in rows if row.get("field")})
+        values = sorted({str(row.get("value") or "") for row in rows if row.get("value")})
+        if len(rows) > 1:
+            first["supported_properties"] = properties
+            first["supported_values"] = values
+            first["supporting_sources"] = sorted(sources)
+            audit.append({
+                "evidence_id": evidence_id,
+                "variant_ref": next(iter(variants), ""),
+                "source": next(iter(sources), ""),
+                "raw_entry_count": len(rows),
+                "supported_properties": properties,
+                "normalization": "referential_duplicates_coalesced",
+            })
+        coalesced.append(first)
+    normalized["evidence_used"] = coalesced
+    return normalized, sorted(set(errors)), audit
 
 
 def has_prohibited_language(value: str) -> bool:
@@ -374,9 +425,19 @@ def build_envelope(payload: dict, scientific: dict, candidate: dict, snapshot: d
         "dominant_direction": scientific["dominant_direction"], "material_conflict": scientific["material_conflict"],
         "limitations": scientific["limitations"], "evidence_records": scientific.get("evidence_records") or [],
     }
+    model_payload_fields = {
+        "payload_schema_version", "execution_mode", "group_id", "gene", "module_id", "group_context",
+        "focus_variant_evidence", "clinical_evidence_summary", "gwas_evidence_summary",
+        "publication_evidence_digest", "supporting_context", "transcript_discordant_context",
+        "identity_unresolved", "source_failures", "deterministic_summary", "evidence_coverage",
+        "compression_metadata", "provenance", "target_gene_discordant_context",
+        "allele_specific_frequency_summary", "professional_curation", "patient_context",
+        "traceability_allowlist", "input_completeness", "age_context", "release_context",
+    }
+    model_payload = {key: copy.deepcopy(value) for key, value in payload.items() if key in model_payload_fields}
     return {
-        "schema_version": "llm1_prototype_envelope_v2",
-        "payload_v7": payload,
+        "schema_version": "llm1_prototype_envelope_v3",
+        "payload_v7": model_payload,
         "scientific_decision": decision,
         "runtime_variant_gate": variant_gate,
         "technical_gates": {
@@ -397,6 +458,11 @@ def build_envelope(payload: dict, scientific: dict, candidate: dict, snapshot: d
             "allowlist": scientific.get("provenance", {}).get("allowlist", "signed_gold"),
             "legacy_curation_override_scope": "curation_fields_only",
         },
+        "source_payload_audit": {
+            "sha256": sha256_json(payload),
+            "excluded_model_fields": sorted(set(payload) - set(model_payload)),
+            "legacy_context_citable": False,
+        },
         "prototype_hashes": {
             "candidate_manifest": candidate["manifest_sha256"], "snapshot": snapshot["snapshot_sha256"],
             "payload": sha256_json(payload), "packet": scientific.get("provenance", {}).get("packet_sha256", "0" * 64),
@@ -407,15 +473,23 @@ def build_envelope(payload: dict, scientific: dict, candidate: dict, snapshot: d
 def validate_envelope(envelope: dict) -> None:
     v1 = {"schema_version", "payload_v7", "scientific_decision", "coverage_status", "readiness", "allowlists", "prototype_hashes"}
     v2 = v1 | {"runtime_variant_gate", "technical_gates", "provenance"}
-    expected = v2 if envelope.get("schema_version") == "llm1_prototype_envelope_v2" else v1
-    if set(envelope) != expected or envelope.get("schema_version") not in {"llm1_prototype_envelope_v1", "llm1_prototype_envelope_v2"}:
+    v3 = v2 | {"source_payload_audit"}
+    version = envelope.get("schema_version")
+    expected = v3 if version == "llm1_prototype_envelope_v3" else v2 if version == "llm1_prototype_envelope_v2" else v1
+    if set(envelope) != expected or version not in {"llm1_prototype_envelope_v1", "llm1_prototype_envelope_v2", "llm1_prototype_envelope_v3"}:
         raise ValueError("Invalid or open prototype envelope")
     if envelope["payload_v7"].get("group_id") != envelope["scientific_decision"].get("group_id"):
         raise ValueError("Prototype envelope identity mismatch")
     if envelope["payload_v7"].get("input_completeness", {}).get("absence_semantics") != "not_observed_callability_unknown":
         raise ValueError("Prototype requires safe sparse-VCF absence semantics")
-    if envelope.get("schema_version") == "llm1_prototype_envelope_v2" and not all(envelope["technical_gates"].values()):
+    if version in {"llm1_prototype_envelope_v2", "llm1_prototype_envelope_v3"} and not all(envelope["technical_gates"].values()):
         raise ValueError("Prototype envelope failed a deterministic technical gate")
+    if version == "llm1_prototype_envelope_v3":
+        forbidden = {"curated_mechanism", "internal_scientific_curation", "operational_state", "canonical_status", "gates"}
+        if forbidden & set(envelope["payload_v7"]):
+            raise ValueError("Legacy scientific state leaked into the model-visible projection")
+        if any(str(value).startswith("evm_") for value in envelope["allowlists"]["evidence_ids"]):
+            raise ValueError("Legacy mechanism evidence leaked into the execution allowlist")
 
 
 def validate_llm1_output(item: dict, envelope: dict) -> list[str]:
@@ -434,7 +508,7 @@ def validate_llm1_output(item: dict, envelope: dict) -> list[str]:
     evidence_rows = item.get("evidence_used") or []
     evidence_ids = [row.get("evidence_id") for row in evidence_rows]
     if len(evidence_ids) != len(set(evidence_ids)):
-        errors.append("llm1_duplicate_evidence")
+        errors.append("llm1_duplicate_evidence_not_normalized")
     focus_refs = item.get("focus_variant_refs") or []
     if len(focus_refs) != len(set(focus_refs)):
         errors.append("llm1_duplicate_focus_variant")
@@ -455,6 +529,25 @@ def validate_llm1_output(item: dict, envelope: dict) -> list[str]:
         errors.append("llm1_prohibited_language")
     errors.extend(prototype_critical_semantic_errors(item, payload))
     return sorted(set(errors))
+
+
+CONTENT_SAFETY_ERRORS = {
+    "diagnosis_claim", "individual_gwas_risk", "gwas_causality_or_individual_risk",
+    "treatment_recommendation", "new_testing_recommendation", "generic_professional_referral",
+    "unconfirmed_pgx_actionability", "llm1_prohibited_language",
+    "llm1_evidence_outside_allowlist", "llm1_variant_outside_allowlist",
+    "llm1_focus_variant_outside_allowlist", "llm1_inference_ceiling_exceeded",
+    "llm1_scientific_evidence_double_counting",
+}
+
+
+def quarantine_class_for(errors: list[str] | None, error: Exception | str) -> str:
+    codes = set(errors or [])
+    if codes and codes <= CONTENT_SAFETY_ERRORS:
+        return "content_safety"
+    if codes:
+        return "structural_contract"
+    return "technical_isolated"
 
 
 def deterministic_coverage_card(group_id: str, status: str, *, scientific: dict | None = None, payload: dict | None = None) -> dict:
@@ -587,6 +680,14 @@ def deterministic_llm2(payload: dict) -> dict:
 
 
 def report_view_model(llm2_result: dict, cards: list[dict], coverage: dict, source_name: str) -> dict:
+    module_titles_es = {
+        "T1.1": "Resiliencia de sistemas fundamentales",
+        "T1.2": "Sueño y ritmos circadianos",
+        "T1.3": "Nutrientes y cofactores esenciales",
+        "T1.4": "Inmunidad e inflamación",
+        "T1.5": "Tejido conectivo y resiliencia física",
+        "T1.6": "Detoxificación y manejo del estrés oxidativo",
+    }
     findings = []
     by_card = {row["group_id"]: row for row in cards}
     for finding in llm2_result["key_findings"]:
@@ -594,23 +695,90 @@ def report_view_model(llm2_result: dict, cards: list[dict], coverage: dict, sour
         card = by_card.get(row["group_id"], {})
         row["module_id"] = card.get("module_id") or row["group_id"].split(":", 1)[1]
         row["gene"] = card.get("gene") or row["group_id"].split(":", 1)[0]
+        row["module_name"] = card.get("module_name") or ""
         findings.append(row)
+    def rank(row: dict) -> tuple:
+        return (
+            0 if row.get("inference_mode") == "initial_guide" else 1,
+            0 if row.get("confidence") == "Conflicting" else 1,
+            -len(row.get("evidence_ids") or []),
+            row.get("group_id") or "",
+        )
+
+    module_ids = [f"T1.{index}" for index in range(1, 7)]
     modules = []
-    for module_id in sorted({row["module_id"] for row in findings}):
-        modules.append({"module_id": module_id, "findings": [row for row in findings if row["module_id"] == module_id]})
-    ready = not any(row.get("status") == "quarantined" for row in cards) and any(row.get("status") == "valid" for row in cards)
+    primary: list[dict] = []
+    secondary: list[dict] = []
+    for module_id in module_ids:
+        module_findings = sorted([row for row in findings if row["module_id"] == module_id], key=rank)
+        selected = module_findings[:2]
+        primary.extend(selected)
+        secondary.extend(module_findings[2:])
+        modules.append({
+            "module_id": module_id,
+            "title": module_titles_es[module_id],
+            "summary": (
+                f"{len(module_findings)} hallazgo(s) válido(s): "
+                f"{sum(row.get('inference_mode') == 'initial_guide' for row in module_findings)} con guía inicial y "
+                f"{sum(row.get('inference_mode') == 'context_only' for row in module_findings)} de interpretación contextual."
+                if module_findings else "No se priorizaron hallazgos interpretables para este módulo en el VCF observado."
+            ),
+            "findings": module_findings,
+        })
+    primary = sorted(primary, key=lambda row: (module_ids.index(row["module_id"]), rank(row)))[:12]
+    structural_quarantine = any(row.get("quarantine_class") == "structural_contract" for row in cards)
+    ready = not structural_quarantine and any(row.get("status") == "valid" for row in cards)
+    for row in findings:
+        row["client_interpretation_type"] = "Guía inicial acotada" if row.get("inference_mode") == "initial_guide" else "Interpretación contextual"
+        row["individual_applicability"] = "Moderada" if row.get("inference_mode") == "initial_guide" else "Limitada"
+        row["scientific_relationship_confidence"] = (
+            "Con evidencia conflictiva" if row.get("confidence") == "Conflicting" else
+            "Respaldada con limitaciones" if row.get("confidence") in {"Low", "Moderate"} else "Respaldada"
+        )
+    valid_count = sum(row.get("status") == "valid" for row in cards)
+    initial_count = sum(row.get("status") == "valid" and row.get("inference_mode") == "initial_guide" for row in cards)
+    contextual_count = sum(row.get("status") == "valid" and row.get("inference_mode") == "context_only" for row in cards)
+    no_observed_count = sum(row.get("status") == "covered_no_observed_variant" for row in cards)
+    client_summary = (
+        f"Este prototipo ofrece una interpretación inicial y acotada para contexto familiar. "
+        f"El snapshot científico cubre {coverage['covered_count']} de {coverage['canonical_group_count']} grupos: "
+        f"{valid_count} generaron tarjetas válidas, {no_observed_count} no presentaron una variante observada y "
+        f"{coverage['not_covered_count']} quedaron explícitamente fuera de cobertura. Entre las tarjetas válidas, "
+        f"{initial_count} permiten una guía inicial limitada y {contextual_count} aportan contexto biológico. "
+        "El resultado no establece diagnósticos, causalidad, penetrancia, riesgo individual ni recomendaciones de tratamiento."
+    )
+    coverage_statement = (
+        f"Cobertura cerrada: {coverage['covered_count']} grupos científicamente cubiertos de "
+        f"{coverage['canonical_group_count']}; {valid_count} tarjetas válidas; {no_observed_count} grupos cubiertos "
+        f"sin variante observada; {coverage['not_covered_count']} grupos no cubiertos. La ausencia de una variante "
+        "en este VCF no se interpreta como homocigosis de referencia, benignidad ni falta de capacidad de llamada."
+    )
     return {
-        "schema_version": "report_view_model_v1", "source_file_name": source_name,
+        "schema_version": "report_view_model_v2", "source_file_name": source_name,
         "title": llm2_result["report_title_es"], "prototype_label": "Prototipo de desarrollo",
-        "summary": llm2_result["summary_es"], "findings": findings, "modules": modules,
-        "coverage_statement": llm2_result["coverage_statement_es"],
-        "limitations": llm2_result["limitations_es"], "disclaimer": llm2_result["disclaimer_es"],
+        "summary": client_summary, "findings": findings, "primary_findings": primary,
+        "secondary_findings": secondary, "modules": modules,
+        "coverage_statement": coverage_statement,
+        "limitations": [
+            "La entrada es un VCF de variantes observadas; la capacidad de llamada no está disponible. La ausencia de una variante no demuestra homocigosis de referencia ni falta de capacidad de llamada.",
+            "La mayoría de las tarjetas sólo permite contexto biológico. Una guía inicial acotada no equivale a diagnóstico, predicción ni recomendación de conducta.",
+            "La información GWAS es poblacional y contextual; no demuestra causalidad ni riesgo individual.",
+            "Las clasificaciones benignas o probablemente benignas se mantienen limitadas a la variante, condición y evidencia informadas.",
+            "No se proporcionó contexto clínico, bioquímico, sintomático, de exposición ni de medicación del paciente.",
+            "Los grupos fuera del snapshot científico firmado no se interpretaron ni se completaron con el registry productivo.",
+        ], "disclaimer": llm2_result["disclaimer_es"],
+        "cannot_infer": [
+            "El VCF no permite diagnosticar enfermedades ni estimar penetrancia individual.",
+            "Las asociaciones poblacionales GWAS no predicen por sí solas el riesgo de esta persona.",
+            "No deben iniciarse, suspenderse ni modificarse medicamentos o suplementos a partir de este prototipo.",
+            "La ausencia de una variante en un VCF sparse no demuestra homocigosis de referencia ni capacidad de llamada.",
+        ],
         "coverage": {
             "canonical": coverage["canonical_group_count"], "covered": coverage["covered_count"],
             "not_covered": coverage["not_covered_count"],
-            "covered_no_observed_variant": sum(row.get("status") == "covered_no_observed_variant" for row in cards),
+            "covered_no_observed_variant": no_observed_count,
             "quarantined": sum(row.get("status") == "quarantined" for row in cards),
-            "valid_cards": sum(row.get("status") == "valid" for row in cards),
+            "valid_cards": valid_count,
         },
         "readiness": {"prototype_readiness": "prototype_demo_ready_automatic" if ready else "prototype_demo_incomplete", "formal_validation_readiness": "pending_new_unseen_holdout"},
     }
@@ -618,15 +786,26 @@ def report_view_model(llm2_result: dict, cards: list[dict], coverage: dict, sour
 
 def write_docx(view: dict, path: Path) -> None:
     sections = [
-        {"section_id": "resumen", "title": "Resumen", "blocks": [{"type": "paragraph", "text": view["summary"]}]},
-        {"section_id": "hallazgos", "title": "Hallazgos por grupo", "blocks": [
-            {"title": row["group_id"], "modo": row["inference_mode"], "confianza": row["confidence"],
+        {"section_id": "resumen", "title": "Resumen general", "blocks": [{"type": "paragraph", "text": view["summary"]}]},
+        {"section_id": "cobertura", "title": "Cobertura del análisis", "blocks": [{"type": "paragraph", "text": view["coverage_statement"]}]},
+        {"section_id": "modulos", "title": "Resumen de los seis módulos", "blocks": [
+            {"title": row["title"], "resumen": row["summary"]} for row in view["modules"]
+        ]},
+        {"section_id": "hallazgos", "title": "Hallazgos principales", "blocks": [
+            {"title": row["group_id"], "modo": row["client_interpretation_type"], "confianza": row["scientific_relationship_confidence"],
+             "aplicabilidad": row["individual_applicability"],
              "resumen": row["headline_es"], "detalle": row["explanation_es"],
              "variantes": row["variant_refs"], "evidencia": row["evidence_ids"]}
-            for row in view["findings"]
+            for row in view["primary_findings"]
         ]},
-        {"section_id": "cobertura", "title": "Cobertura y límites", "blocks": [
-            {"type": "paragraph", "text": view["coverage_statement"]},
+        {"section_id": "contexto", "title": "Hallazgos contextuales relevantes", "blocks": [
+            {"title": row["group_id"], "resumen": row["headline_es"], "aplicabilidad": "Limitada"}
+            for row in view["secondary_findings"]
+        ]},
+        {"section_id": "no_inferir", "title": "Qué no puede inferirse", "blocks": [
+            *({"type": "paragraph", "text": value} for value in view["cannot_infer"]),
+        ]},
+        {"section_id": "limites", "title": "Limitaciones del VCF", "blocks": [
             *({"type": "paragraph", "text": value} for value in view["limitations"]),
         ]},
         {"section_id": "estado", "title": "Estado de validación", "blocks": [
@@ -641,7 +820,7 @@ def write_docx(view: dict, path: Path) -> None:
                      "unique_gene_count": len({row["group_id"].split(":")[0] for row in view["findings"]}),
                      "unique_rsid_count": len({value for row in view["findings"] for value in row["variant_refs"]})},
         "global_report": {"report_title": view["title"]},
-        "structured_report": {"version": "report_view_model_v1", "sections": sections},
+        "structured_report": {"version": "report_view_model_v2", "sections": sections},
     }
     final_report.write_docx(path, legacy, {"fileName": view["source_file_name"], "languageMode": "es", "audienceMode": "family"})
 
@@ -655,26 +834,24 @@ def write_pdf(view: dict, path: Path) -> None:
     story += [Spacer(1, 5 * mm), Paragraph("Cobertura científica", styles["HealH1"]), Paragraph(view["coverage_statement"], styles["BodyText"])]
     table = Table([["Grupos cubiertos", "Tarjetas válidas", "No cubiertos"], [view["coverage"]["covered"], view["coverage"]["valid_cards"], view["coverage"]["not_covered"]]], colWidths=[50 * mm] * 3)
     table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#275D38")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#A0A0A0")), ("ALIGN", (0, 0), (-1, -1), "CENTER"), ("PADDING", (0, 0), (-1, -1), 6)]))
-    story += [Spacer(1, 3 * mm), table, PageBreak(), Paragraph("Hallazgos por módulo", styles["HealH1"])]
+    story += [Spacer(1, 3 * mm), table, Spacer(1, 5 * mm), Paragraph("Resumen de los seis módulos", styles["HealH1"])]
     for module in view["modules"]:
-        findings = list(module["findings"])
-        if not findings:
-            continue
-        first, *remaining = findings
+        story.append(KeepTogether([Paragraph(module["title"], styles["Heading2"]), Paragraph(module["summary"], styles["BodyText"]), Spacer(1, 2 * mm)]))
+    story += [PageBreak(), Paragraph("Hallazgos principales", styles["HealH1"])]
+    for row in view["primary_findings"]:
         story.append(KeepTogether([
-            Paragraph(f"Módulo {module['module_id']}", styles["HealH1"]),
-            Paragraph(f"{first['group_id']} - {first['headline_es']}", styles["Heading2"]),
-            Paragraph(first["explanation_es"], styles["BodyText"]),
-            Paragraph(f"Modo: {first['inference_mode']} | Confianza: {first['confidence']}", styles["BodyText"]),
+            Paragraph(f"{row['group_id']} - {row['headline_es']}", styles["Heading2"]),
+            Paragraph(row["explanation_es"], styles["BodyText"]),
+            Paragraph(f"{row['client_interpretation_type']} | Aplicabilidad individual: {row['individual_applicability']} | Relación científica: {row['scientific_relationship_confidence']}", styles["BodyText"]),
             Spacer(1, 3 * mm),
         ]))
-        for row in remaining:
-            story.append(KeepTogether([
-                Paragraph(f"{row['group_id']} - {row['headline_es']}", styles["Heading2"]),
-                Paragraph(row["explanation_es"], styles["BodyText"]),
-                Paragraph(f"Modo: {row['inference_mode']} | Confianza: {row['confidence']}", styles["BodyText"]),
-                Spacer(1, 3 * mm),
-            ]))
+    if view["secondary_findings"]:
+        story += [Paragraph("Hallazgos contextuales relevantes", styles["HealH1"])]
+        for row in view["secondary_findings"]:
+            story.append(Paragraph(f"{row['group_id']}: {row['headline_es']}", styles["BodyText"], bulletText="•"))
+    story += [Spacer(1, 5 * mm), Paragraph("Qué no puede inferirse", styles["HealH1"])]
+    for value in view["cannot_infer"]:
+        story.extend([Paragraph(value, styles["BodyText"], bulletText="•"), Spacer(1, 1.5 * mm)])
     story += [PageBreak(), Paragraph("Límites y estado de validación", styles["HealH1"])]
     for value in view["limitations"]:
         story.extend([Paragraph(value, styles["BodyText"], bulletText="•"), Spacer(1, 1.5 * mm)])
@@ -775,6 +952,7 @@ def process(request: dict) -> dict:
         update_progress(progress_path, substage="llm1", processed=sum(item in completed_groups for item in planned_envelopes), total=len(planned_envelopes),
                         message=f"Interpretando {group_id}", metrics={"valid": sum(row.get("status") == "valid" for row in cards), "quarantined": len(quarantines)})
         call_started = time.perf_counter()
+        errors: list[str] = []
         try:
             if dry_run:
                 item = llm1.dry_run_interpretation(base)
@@ -792,8 +970,10 @@ def process(request: dict) -> dict:
                     payload=envelope, api_key=api_key, model=MODEL, prompt=llm1_prompt,
                     schema=llm1_schema, timeout_seconds=timeout_seconds,
                 )
-            errors = validate_llm1_output(item, envelope)
+            normalized_item, normalization_errors, normalization_audit = normalize_evidence_used(item)
+            errors = sorted(set(normalization_errors + validate_llm1_output(normalized_item, envelope)))
             raw_rows.append({"stage": "llm1", "group_id": group_id, "response": metadata.get("raw_response"), "output": item,
+                             "normalized_output": normalized_item, "normalization_audit": normalization_audit,
                              "errors": errors, "attempt_count": metadata.get("attempt_count", 1),
                              "prior_attempt_errors": metadata.get("prior_attempt_errors") or []})
             telemetry.append(usage_row(metadata, stage="llm1", group_id=group_id, role="group_interpreter", elapsed=time.perf_counter() - call_started))
@@ -801,7 +981,7 @@ def process(request: dict) -> dict:
             write_csv(output_dir / "telemetry_costs.csv", telemetry)
             if errors:
                 raise ValueError(";".join(errors))
-            cards.append(llm1_card(item, envelope))
+            cards.append(llm1_card(normalized_item, envelope))
         except Exception as error:  # noqa: BLE001
             fatal_code = global_technical_blocker_code(error)
             if fatal_code:
@@ -810,10 +990,14 @@ def process(request: dict) -> dict:
                 update_progress(progress_path, substage="llm1", processed=len(completed_groups), total=len(planned_envelopes),
                                 message="Campaña detenida por un bloqueo técnico global", metrics={"error_code": fatal_code})
                 raise RuntimeError(fatal_code) from error
-            quarantine = {"group_id": group_id, "status": "quarantined", "error": str(error), "created_at": now_iso(),
+            role_errors = errors
+            quarantine = {"group_id": group_id, "status": "quarantined", "error": str(error),
+                          "error_codes": role_errors, "quarantine_class": quarantine_class_for(role_errors, error), "created_at": now_iso(),
                           "timeout": "timed out" in str(error).lower(), "retry_exhausted": " | " in str(error)}
             quarantines.append(quarantine)
             card = deterministic_coverage_card(group_id, "quarantined", scientific=science, payload=base)
+            card["quarantine_class"] = quarantine["quarantine_class"]
+            card["error_codes"] = role_errors
             card["interpretation_one_sentence_es"] = "Resultado no disponible: la tarjeta quedó aislada por un error de validación."
             cards.append(card)
         completed_groups.add(group_id)
@@ -858,7 +1042,7 @@ def process(request: dict) -> dict:
 
     source_name = str(request.get("fileName") or payload_path.stem)
     view = report_view_model(llm2_result, cards, coverage, source_name)
-    report_json = output_dir / "report_view_model_v1.json"
+    report_json = output_dir / "report_view_model_v2.json"
     docx_path = output_dir / "HEAL_prototipo_desarrollo.docx"
     pdf_path = output_dir / "HEAL_prototipo_desarrollo.pdf"
     update_progress(progress_path, substage="reporting", processed=0, total=1, message="Generando DOCX y PDF desde un único view model")
@@ -875,7 +1059,8 @@ def process(request: dict) -> dict:
     registry_after = sha256_file(ACTIVE_REGISTRY)
     if registry_after != registry_before:
         raise RuntimeError("Active registry changed during prototype execution")
-    status = "prototype_demo_ready_automatic" if not quarantines and valid_cards else "prototype_demo_incomplete"
+    structural_quarantines = sum(row.get("quarantine_class") == "structural_contract" for row in quarantines)
+    status = "prototype_demo_ready_automatic" if valid_cards and not structural_quarantines else "prototype_demo_incomplete"
     initial_guides = sum(row.get("status") == "valid" and row.get("inference_mode") == "initial_guide" for row in cards)
     context_only = sum(row.get("status") == "valid" and row.get("inference_mode") == "context_only" for row in cards)
     summary = {
@@ -887,6 +1072,9 @@ def process(request: dict) -> dict:
                    "focus_variants": sum(len(row.get("focus_variant_refs") or []) for row in cards if row.get("coverage_status") == "covered_by_prototype_snapshot"),
                    "valid_llm1_cards": len(valid_cards), "initial_guide_findings": initial_guides,
                    "context_only_findings": context_only, "quarantined": len(quarantines),
+                   "quarantined_content_safety": sum(row.get("quarantine_class") == "content_safety" for row in quarantines),
+                   "quarantined_technical_isolated": sum(row.get("quarantine_class") == "technical_isolated" for row in quarantines),
+                   "quarantined_structural_contract": structural_quarantines,
                    "not_covered": coverage["not_covered_count"]},
         "models": {"llm1": MODEL, "llm2": LLM2_MODEL, "reasoning_effort": "low"},
         "pricing": {"source": PROTOTYPE_PRICE_SOURCE, "input_per_million": LUNA_INPUT_PER_MILLION, "cached_input_per_million": LUNA_CACHED_INPUT_PER_MILLION, "output_per_million": LUNA_OUTPUT_PER_MILLION},

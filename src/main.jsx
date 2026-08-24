@@ -22,6 +22,7 @@ import "./styles.css";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8787";
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || "";
 const JOB_ACCESS_TOKENS_KEY = "heal.jobAccessTokens.v1";
+const ACTIVE_MATCH_JOB_KEY = "heal.activeGroupedPrototypeJob.v1";
 const POLL_RETRY_LIMIT = 8;
 const POLL_RETRY_DELAY_MS = 1500;
 const VALIDATION_POLL_DELAY_MS = 800;
@@ -95,6 +96,20 @@ function getJobAccessToken(jobId) {
   return readJobAccessTokens()[jobId] || "";
 }
 
+function storeActiveMatchJob(jobId, accessToken, fileName = "") {
+  if (!jobId) return;
+  if (accessToken) storeJobAccessToken(jobId, accessToken);
+  window.localStorage.setItem(ACTIVE_MATCH_JOB_KEY, JSON.stringify({ jobId, fileName, updatedAt: new Date().toISOString() }));
+}
+
+function readActiveMatchJob() {
+  try {
+    return JSON.parse(window.localStorage.getItem(ACTIVE_MATCH_JOB_KEY) || "null");
+  } catch {
+    return null;
+  }
+}
+
 function accessHeaders(accessToken) {
   return accessToken ? { "X-HEAL-Access-Token": accessToken } : {};
 }
@@ -133,8 +148,8 @@ const COPY = {
     initialMessage: "Selecciona un archivo VCF para empezar.",
     fileReady: "Archivo listo para enviar.",
     modeLabel: "Tipo de analisis",
-    quickMode: "Analisis superficial",
-    quickModeDetail: "Enriquece VEP y rsIDs exactos; omite rescate costoso por coordenadas.",
+    quickMode: "Análisis superficial — Prototipo agrupado Tier 1",
+    quickModeDetail: "Procesa el triage completo: validación, normalización, VEP y fuentes externas, matching, LLM1, validación, LLM2 y reporte familiar con cobertura científica 105/180.",
     completeMode: "Analisis completo",
     completeModeDetail: "Agrega metricas streaming de todo el VCF.",
     qaMode: "Control de Calidad",
@@ -567,8 +582,8 @@ const COPY = {
     initialMessage: "Select a VCF file to begin.",
     fileReady: "File ready to submit.",
     modeLabel: "Analysis type",
-    quickMode: "Quick analysis",
-    quickModeDetail: "Enriches VEP and exact rsIDs; skips costly coordinate rescue.",
+    quickMode: "Quick analysis - Tier 1 grouped prototype",
+    quickModeDetail: "Processes the full triage, uses Luna for LLM1 and LLM2, and creates the family report with 105/180 scientific coverage.",
     completeMode: "Full analysis",
     completeModeDetail: "Adds streaming metrics across the full VCF.",
     qaMode: "Quality Control",
@@ -3370,10 +3385,11 @@ function App() {
   const [duplicateCandidate, setDuplicateCandidate] = useState(null);
   const [canonOpen, setCanonOpen] = useState(false);
   const activeAccessTokenRef = useRef("");
+  const restoredJobRef = useRef(false);
 
   const t = COPY[language];
   const locale = language === "es" ? "es-AR" : "en-US";
-  const isGeneModuleV2 = matchResult?.schemaVersion === "gene_module_v2";
+  const isGeneModuleV2 = matchResult?.schemaVersion === "gene_module_v2" || (!matchResult && analysisMode === "quick");
   const v2DownstreamBlocked = isGeneModuleV2 && matchResult?.metadata?.downstream_supported === false;
   const legacyLabel = (label) => label + " (legacy)";
   const canSend = useMemo(
@@ -3960,7 +3976,9 @@ function App() {
     for (;;) {
       let response;
       try {
-        response = await fetch(`${API_BASE}/api/vcf-canon-matches/${jobId}`);
+        response = await fetch(`${API_BASE}/api/vcf-canon-matches/${jobId}`, {
+          headers: accessHeaders(activeAccessTokenRef.current || getJobAccessToken(jobId)),
+        });
       } catch (caught) {
         transientFailures += 1;
         if (transientFailures > POLL_RETRY_LIMIT) throw caught;
@@ -4442,6 +4460,7 @@ function App() {
     });
     const matchJob = await readJsonResponse(matchStart);
     if (!matchStart.ok) throw new Error(matchJob.error || t.matchFailed);
+    storeActiveMatchJob(matchJob.id, upload.accessToken, upload.fileName);
     const nextMatchResult = await pollMatch(matchJob.id);
     setMatchResult(nextMatchResult);
     setPhase("done");
@@ -4928,6 +4947,16 @@ function App() {
         return;
       }
       const nextMatchResult = await runMatch(upload);
+      if (analysisMode === "quick") {
+        if (nextMatchResult?.groupedPrototype || nextMatchResult?.artifactsReady?.groupedPrototype) {
+          setTurnstileToken("");
+          setTurnstileResetKey((current) => current + 1);
+          return;
+        }
+        if (nextMatchResult?.metadata?.downstream_supported !== false) {
+          throw new Error("El prototipo agrupado no produjo un resultado. No se ejecutó el flujo legacy.");
+        }
+      }
       if (nextMatchResult?.metadata?.downstream_supported === false) {
         setTurnstileToken("");
         setTurnstileResetKey((current) => current + 1);
@@ -4961,6 +4990,31 @@ function App() {
       setTurnstileResetKey((current) => current + 1);
     }
   }
+
+  useEffect(() => {
+    if (restoredJobRef.current) return;
+    restoredJobRef.current = true;
+    const saved = readActiveMatchJob();
+    if (!saved?.jobId) return;
+    const accessToken = getJobAccessToken(saved.jobId);
+    if (!accessToken) return;
+    activeAccessTokenRef.current = accessToken;
+    setActiveMatchJobId(saved.jobId);
+    setAnalysisMode("quick");
+    setPhase("matching");
+    setCustomMessage("Retomando el ultimo job del prototipo agrupado...");
+    pollMatch(saved.jobId)
+      .then((restored) => {
+        setMatchResult(restored);
+        setPhase("done");
+        setCustomMessage("Job restaurado. Los resultados y descargas permanecen disponibles.");
+      })
+      .catch((caught) => {
+        setPhase("error");
+        setError(caught.message || String(caught));
+        setCustomMessage("");
+      });
+  }, []);
 
   return (
     <main className="app-shell">
