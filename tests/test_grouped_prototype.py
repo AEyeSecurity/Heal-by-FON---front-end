@@ -210,6 +210,14 @@ class GroupedPrototypeTests(unittest.TestCase):
         self.assertIn("llm2_inference_mode_changed", errors)
         self.assertIn("llm2_confidence_changed", errors)
 
+    def test_durable_recovery_requeue_satisfies_origin_guard(self):
+        source = (ROOT / "server" / "dev-api.js").read_text(encoding="utf-8")
+        recovery_start = source.index("async function recoverPersistedVcfCanonJob")
+        recovery_end = source.index("function requeuePersistedVcfCanonJobs", recovery_start)
+        recovery_source = source[recovery_start:recovery_end]
+        self.assertIn('"Origin": ALLOWED_ORIGINS[0]', recovery_source)
+        self.assertIn('"X-HEAL-Access-Token": upload.accessToken', recovery_source)
+
     def test_dry_run_produces_both_reports_and_preserves_registry(self):
         payload_path = Path(
             r"F:\Heal by FON\data\runs\1304f27f-3b62-4cfb-be66-2d9246125cc3\llm1-preflight-v7-20260805-final\llm1_group_payloads_v7.jsonl"

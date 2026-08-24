@@ -3767,7 +3767,11 @@ async function recoverPersistedVcfCanonJob(parent) {
     if (!upload?.accessToken) throw new Error("The upload access binding is unavailable for recovery.");
     const response = await fetch(`http://127.0.0.1:${PORT}/api/vcf-canon-matches`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-HEAL-Access-Token": upload.accessToken },
+      headers: {
+        "Content-Type": "application/json",
+        "Origin": ALLOWED_ORIGINS[0],
+        "X-HEAL-Access-Token": upload.accessToken,
+      },
       body: JSON.stringify({
         uploadId: parent.uploadId,
         vcfParser: parent.vcfParser || "streaming",
