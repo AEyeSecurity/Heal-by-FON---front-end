@@ -40,6 +40,7 @@ const BUSY_PHASES = [
   "evidence_refinement_quality_gate",
   "grouping_preparation",
   "grouped_individual_interpretation",
+  "grouped_prototype",
   "individual_interpretation",
   "interpretation_normalization",
   "global_interpretation",
@@ -54,6 +55,7 @@ function isLongPollingStage(stage) {
   return [
     "evidence_refinement",
     "grouped_individual_interpretation",
+    "grouped_prototype",
     "individual_interpretation",
     "interpretation_normalization",
     "global_interpretation",
@@ -333,10 +335,16 @@ const COPY = {
     groupedInterpretationTitle: "Interpretacion individual agrupada",
     llm1CardsTitle: "Tarjetas LLM1 v7",
     groupedPrototypeTitle: "Prototipo agrupado HEAL",
-    groupedPrototypeNotice: "Prototipo de desarrollo: cobertura científica limitada a 12 grupos. La validación formal con un nuevo holdout permanece pendiente.",
+    groupedPrototypeNotice: "Prototipo de desarrollo: cobertura científica firmada de {covered} sobre {canonical} grupos canónicos. La validación formal con un nuevo holdout permanece pendiente.",
     groupedPrototypeCovered: "Grupos cubiertos",
+    groupedPrototypeObserved: "Cubiertos con variante observada",
+    groupedPrototypeNoObserved: "Cubiertos sin variante observada",
     groupedPrototypeValid: "Tarjetas válidas",
+    groupedPrototypeQuarantined: "Tarjetas en cuarentena",
     groupedPrototypeNotCovered: "Grupos no cubiertos",
+    groupedPrototypeCost: "Costo interno estimado",
+    groupedPrototypeStatus: "Estado del prototipo",
+    groupedPrototypeProgress: "Prototipo agrupado end-to-end",
     groupedPrototypeDocx: "Descargar reporte DOCX",
     groupedPrototypePdf: "Descargar reporte PDF",
     groupedPrototypeCardsDownload: "Descargar tarjetas CSV",
@@ -761,10 +769,16 @@ const COPY = {
     groupedInterpretationTitle: "Grouped individual interpretation",
     llm1CardsTitle: "LLM1 v7 cards",
     groupedPrototypeTitle: "HEAL grouped prototype",
-    groupedPrototypeNotice: "Development prototype: scientific coverage is limited to 12 groups. Formal validation with a new holdout remains pending.",
+    groupedPrototypeNotice: "Development prototype: signed scientific coverage includes {covered} of {canonical} canonical groups. Formal validation with a new holdout remains pending.",
     groupedPrototypeCovered: "Covered groups",
+    groupedPrototypeObserved: "Covered with observed variant",
+    groupedPrototypeNoObserved: "Covered without observed variant",
     groupedPrototypeValid: "Valid cards",
+    groupedPrototypeQuarantined: "Quarantined cards",
     groupedPrototypeNotCovered: "Uncovered groups",
+    groupedPrototypeCost: "Estimated internal cost",
+    groupedPrototypeStatus: "Prototype status",
+    groupedPrototypeProgress: "End-to-end grouped prototype",
     groupedPrototypeDocx: "Download DOCX report",
     groupedPrototypePdf: "Download PDF report",
     groupedPrototypeCardsDownload: "Download cards CSV",
@@ -2158,9 +2172,14 @@ function MatchResultPanel({ result, locale, t }) {
     : [];
   const groupedPrototypeCards = groupedPrototype.status
     ? [
+        [t.groupedPrototypeStatus, groupedPrototype.status],
         [t.groupedPrototypeCovered, formatNumber(groupedPrototype.counts?.scientifically_covered, locale)],
+        [t.groupedPrototypeObserved, formatNumber(groupedPrototype.counts?.covered_with_observed_variant, locale)],
+        [t.groupedPrototypeNoObserved, formatNumber(groupedPrototype.counts?.covered_no_observed_variant, locale)],
         [t.groupedPrototypeValid, formatNumber(groupedPrototype.counts?.valid_llm1_cards, locale)],
+        [t.groupedPrototypeQuarantined, formatNumber(groupedPrototype.counts?.quarantined, locale)],
         [t.groupedPrototypeNotCovered, formatNumber(groupedPrototype.counts?.not_covered, locale)],
+        [t.groupedPrototypeCost, `$${Number(groupedPrototype.telemetry?.estimated_cost_usd || 0).toFixed(4)} USD`],
       ]
     : [];
 
@@ -2687,7 +2706,11 @@ function MatchResultPanel({ result, locale, t }) {
       {groupedPrototypeCards.length > 0 && (
         <>
           <h3 className="result-subtitle">{t.groupedPrototypeTitle}</h3>
-          <p className="llm1-card-notice">{t.groupedPrototypeNotice}</p>
+          <p className="llm1-card-notice">
+            {t.groupedPrototypeNotice
+              .replace("{covered}", formatNumber(groupedPrototype.counts?.scientifically_covered || 0, locale))
+              .replace("{canonical}", formatNumber(groupedPrototype.counts?.canonical_groups || 180, locale))}
+          </p>
           <div className="metrics-grid">
             {groupedPrototypeCards.map(([label, value]) => (
               <MetricCard label={label} value={value} key={label} />
@@ -3238,6 +3261,7 @@ function App() {
   const [evidenceRefinementProgress, setEvidenceRefinementProgress] = useState(0);
   const [groupingPreparationProgress, setGroupingPreparationProgress] = useState(0);
   const [groupedInterpretationProgress, setGroupedInterpretationProgress] = useState(0);
+  const [groupedPrototypeProgress, setGroupedPrototypeProgress] = useState(0);
   const [individualInterpretationProgress, setIndividualInterpretationProgress] = useState(0);
   const [interpretationNormalizationProgress, setInterpretationNormalizationProgress] = useState(0);
   const [globalInterpretationProgress, setGlobalInterpretationProgress] = useState(0);
@@ -3386,6 +3410,7 @@ function App() {
     setEvidenceRefinementProgress(0);
     setGroupingPreparationProgress(0);
     setGroupedInterpretationProgress(0);
+    setGroupedPrototypeProgress(0);
     setIndividualInterpretationProgress(0);
     setInterpretationNormalizationProgress(0);
     setGlobalInterpretationProgress(0);
@@ -4083,6 +4108,19 @@ function App() {
         setGroupedInterpretationProgress(job.stageProgress ?? job.progress ?? 0);
         setGroupedInterpretationDetail(groupedInterpretationDetailFromMessage(job.message, t));
         setCustomMessage(job.message || t.groupedInterpreting);
+      } else if (job.stage === "grouped_prototype") {
+        setPhase("grouped_prototype");
+        setMatchProgress(100);
+        setNormalizationProgress(100);
+        setPreparationProgress(100);
+        setAiTriageProgress(100);
+        setEnrichmentProgress(100);
+        setEnrichmentQualityProgress(100);
+        setEvidenceRefinementProgress(100);
+        setGroupingPreparationProgress(100);
+        setGroupedInterpretationProgress(100);
+        setGroupedPrototypeProgress(job.stageProgress ?? job.progress ?? 0);
+        setCustomMessage(job.message || t.groupedPrototypeProgress);
       } else if (job.stage === "individual_interpretation") {
         setPhase("individual_interpretation");
         setMatchProgress(100);
@@ -4175,6 +4213,9 @@ function App() {
         if (job.artifactsReady?.groupedInterpretation || job.result?.groupedIndividualInterpretation) {
           setGroupedInterpretationProgress(100);
         }
+        if (job.artifactsReady?.groupedPrototype || job.result?.groupedPrototype) {
+          setGroupedPrototypeProgress(100);
+        }
         if (job.artifactsReady?.individualInterpretation || job.result?.individualInterpretation) {
           setIndividualInterpretationProgress(100);
         }
@@ -4257,6 +4298,7 @@ function App() {
           setEvidenceRefinementProgress(0);
           setGroupingPreparationProgress(0);
           setGroupedInterpretationProgress(0);
+          setGroupedPrototypeProgress(0);
           setIndividualInterpretationProgress(0);
           setInterpretationNormalizationProgress(0);
           setGlobalInterpretationProgress(0);
@@ -4387,6 +4429,7 @@ function App() {
     setEvidenceRefinementProgress(0);
     setGroupingPreparationProgress(0);
     setGroupedInterpretationProgress(0);
+    setGroupedPrototypeProgress(0);
     setIndividualInterpretationProgress(0);
     setInterpretationNormalizationProgress(0);
     setGlobalInterpretationProgress(0);
@@ -4446,6 +4489,9 @@ function App() {
     }
     if (nextMatchResult?.artifactsReady?.groupedInterpretation || nextMatchResult?.groupedIndividualInterpretation) {
       setGroupedInterpretationProgress(100);
+    }
+    if (nextMatchResult?.artifactsReady?.groupedPrototype || nextMatchResult?.groupedPrototype) {
+      setGroupedPrototypeProgress(100);
     }
     return nextMatchResult;
   }
@@ -4861,6 +4907,7 @@ function App() {
     setEvidenceRefinementProgress(0);
     setGroupingPreparationProgress(0);
     setGroupedInterpretationProgress(0);
+    setGroupedPrototypeProgress(0);
     setIndividualInterpretationProgress(0);
     setInterpretationNormalizationProgress(0);
     setGlobalInterpretationProgress(0);
@@ -5228,6 +5275,15 @@ function App() {
               downloadLabel={t.groupedInterpretationDownload}
               onDownload={matchResult?.jobId ? () => downloadMatchArtifact("groupedInterpretation") : null}
               downloadReady={matchArtifactsReady.groupedInterpretation}
+            />
+            <ProgressBar
+              label={t.groupedPrototypeProgress}
+              value={groupedPrototypeProgress}
+              detail={stageProgressDetails.grouped_prototype || ""}
+              tone="green"
+              downloadLabel={t.groupedPrototypePdf}
+              onDownload={matchResult?.jobId ? () => downloadGroupedPrototypeArtifact("pdf", "HEAL_prototipo_desarrollo.pdf") : null}
+              downloadReady={matchArtifactsReady.groupedPrototypePdf}
             />
           </>
         )}

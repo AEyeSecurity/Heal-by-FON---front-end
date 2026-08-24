@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HEAL Human-Signed Tier 1 Prototype Snapshot V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "snapshot_id", "created_at", "evidence_cutoff", "prototype_readiness", "formal_validation_readiness", "human_signature", "counts", "groups", "snapshot_sha256"],
+  "properties": {
+    "schema_version": {"const": "tier1_prototype_snapshot_v1_human_signed"},
+    "snapshot_id": {"type": "string"},
+    "created_at": {"type": "string"},
+    "evidence_cutoff": {"const": "2026-07-28"},
+    "prototype_readiness": {"const": "approved_for_sandbox_smoke_test"},
+    "formal_validation_readiness": {"const": "pending_new_unseen_holdout"},
+    "human_signature": {"type": "object"},
+    "counts": {"type": "object"},
+    "groups": {
+      "type": "array",
+      "minItems": 105,
+      "maxItems": 105,
+      "items": {
+        "type": "object",
+        "required": ["group_id", "gene", "module_id", "module", "core_status", "context_usable", "prototype_inference_ceiling", "dominant_direction", "material_conflict", "valid_evidence_ids", "invalid_evidence_ids", "evidence_records", "limitations", "human_review", "provenance"]
+      }
+    },
+    "snapshot_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

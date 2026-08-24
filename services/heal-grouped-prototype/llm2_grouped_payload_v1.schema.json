@@ -6,7 +6,7 @@
   "required": ["schema_version", "prototype_readiness", "formal_validation_readiness", "input_completeness", "coverage_summary", "valid_llm1_cards", "excluded_groups", "allowlists"],
   "properties": {
     "schema_version": {"const": "llm2_grouped_payload_v1"},
-    "prototype_readiness": {"enum": ["prototype_candidate", "prototype_demo_ready_automatic"]},
+    "prototype_readiness": {"enum": ["prototype_candidate", "approved_for_sandbox_smoke_test", "prototype_demo_ready_automatic"]},
     "formal_validation_readiness": {"const": "pending_new_unseen_holdout"},
     "input_completeness": {"type": "object"},
     "coverage_summary": {"type": "object"},

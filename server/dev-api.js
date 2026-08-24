@@ -98,16 +98,18 @@ const HEAL_V2_LLM1_ENABLED = process.env.HEAL_V2_LLM1_ENABLED === "true";
 const HEAL_GROUPED_PROTOTYPE_ENABLED = process.env.HEAL_GROUPED_PROTOTYPE_ENABLED === "true";
 const HEAL_PROTOTYPE_SNAPSHOT_PATH =
   process.env.HEAL_PROTOTYPE_SNAPSHOT_PATH ||
-  path.join(DATA_ROOT, "prototype", "tier1-12-snapshot-prototype-v2", "prototype_curation_snapshot_v1.json");
+  path.join(DATA_ROOT, "prototype", "tier1-105-human-signed-20260823", "tier1_prototype_snapshot_v1_human_signed.json");
 const HEAL_PROTOTYPE_CANDIDATE_MANIFEST_PATH =
   process.env.HEAL_PROTOTYPE_CANDIDATE_MANIFEST_PATH ||
-  path.join(DATA_ROOT, "prototype", "tier1-12-snapshot-prototype-v2", "prototype_candidate_manifest.json");
+  path.join(DATA_ROOT, "prototype", "tier1-105-human-signed-20260823", "prototype_candidate_manifest.json");
 const HEAL_PROTOTYPE_COVERAGE_MANIFEST_PATH =
   process.env.HEAL_PROTOTYPE_COVERAGE_MANIFEST_PATH ||
-  path.join(DATA_ROOT, "prototype", "tier1-12-snapshot-prototype-v2", "prototype_coverage_manifest_v1.json");
+  path.join(DATA_ROOT, "prototype", "tier1-105-human-signed-20260823", "prototype_coverage_manifest_v1.json");
 const HEAL_PROTOTYPE_LLM1_MODEL = process.env.HEAL_PROTOTYPE_LLM1_MODEL || "gpt-5.6-luna";
 const HEAL_PROTOTYPE_LLM2_MODEL = process.env.HEAL_PROTOTYPE_LLM2_MODEL || "gpt-5.6-luna";
 const HEAL_PROTOTYPE_EXECUTION_MODE = process.env.HEAL_PROTOTYPE_EXECUTION_MODE || "disabled";
+const HEAL_PROTOTYPE_MAX_ESTIMATED_COST_USD = Number.parseFloat(process.env.HEAL_PROTOTYPE_MAX_ESTIMATED_COST_USD || "5") || 5;
+const HEAL_PROTOTYPE_HARD_CAP_USD = Number.parseFloat(process.env.HEAL_PROTOTYPE_HARD_CAP_USD || "10") || 10;
 const HEAL_V2_LLM1_PILOT_ENABLED = process.env.HEAL_V2_LLM1_PILOT_ENABLED === "true";
 const HEAL_LLM1_EXECUTION_MODE = process.env.HEAL_LLM1_EXECUTION_MODE || "disabled";
 const HEAL_LLM1_ACTIVE_TIERS = process.env.HEAL_LLM1_ACTIVE_TIERS || "T1";
@@ -1513,8 +1515,8 @@ async function processFinalReport(payload) {
   return await runBase64JsonScript(SERVICE_SCRIPTS.finalReport, payload);
 }
 
-async function processGroupedPrototype(payload) {
-  return await runBase64JsonScript(SERVICE_SCRIPTS.groupedPrototype, payload);
+async function processGroupedPrototype(payload, progressOptions = null) {
+  return await runBase64JsonScript(SERVICE_SCRIPTS.groupedPrototype, payload, progressOptions);
 }
 
 async function processVariantEnrichmentWithRetry(payload, job, attempts = 3) {
@@ -3494,7 +3496,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
             ...(job.result?.metadata || {}),
             downstream_supported: job.result.groupedPrototype?.status === "prototype_demo_ready_automatic",
             downstream_input: job.result.groupedPrototype?.status === "prototype_demo_ready_automatic"
-              ? "grouped_prototype_snapshot_12"
+              ? "grouped_prototype_snapshot_105_human_signed"
               : "llm1_group_payload_v6_dry_run",
             downstream_message: job.result.groupedPrototype?.status === "prototype_demo_ready_automatic"
               ? "Prototype-only grouped LLM1, grouped LLM2, and Spanish report completed; formal validation remains pending."
@@ -3935,6 +3937,7 @@ async function runGroupedPrototypeForJob(job, { dryRun = false } = {}) {
   }
   const outputDir = jobStageDirectory(job.id, "grouped-prototype");
   await mkdir(outputDir, { recursive: true });
+  const progressPath = path.join(outputDir, "grouped_prototype_progress.json");
   job.stage = "grouped_prototype";
   job.stageProgress = 5;
   job.message = "Running isolated grouped prototype with Luna";
@@ -3948,10 +3951,13 @@ async function runGroupedPrototypeForJob(job, { dryRun = false } = {}) {
     snapshotPath: HEAL_PROTOTYPE_SNAPSHOT_PATH,
     candidateManifestPath: HEAL_PROTOTYPE_CANDIDATE_MANIFEST_PATH,
     coverageManifestPath: HEAL_PROTOTYPE_COVERAGE_MANIFEST_PATH,
+    progressPath,
+    maxEstimatedCostUsd: HEAL_PROTOTYPE_MAX_ESTIMATED_COST_USD,
+    hardCapUsd: HEAL_PROTOTYPE_HARD_CAP_USD,
     fileName: job.fileName || `${job.id}.vcf`,
     dryRun,
     requestedAt: new Date().toISOString(),
-  });
+  }, { job, progressPath, stage: "grouped_prototype" });
   Object.assign(job.artifacts, {
     groupedPrototypeSummaryJson: path.join(outputDir, "grouped_prototype_run_summary.json"),
     groupedPrototypeDocx: path.join(outputDir, "HEAL_prototipo_desarrollo.docx"),

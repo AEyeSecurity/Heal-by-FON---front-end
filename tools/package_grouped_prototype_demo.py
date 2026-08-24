@@ -57,8 +57,8 @@ def main() -> int:
     human.mkdir(parents=True, exist_ok=True)
     technical.mkdir(parents=True, exist_ok=True)
     summary = read_json(smoke / "grouped_prototype_run_summary.json")
-    if summary.get("status") != "prototype_demo_ready_automatic":
-        raise ValueError("Only a passing grouped prototype smoke may be packaged")
+    if summary.get("status") not in {"prototype_demo_ready_automatic", "prototype_demo_incomplete"}:
+        raise ValueError("The source is not a completed grouped prototype run")
     if summary.get("active_registry_sha256_after") != EXPECTED_REGISTRY:
         raise ValueError("Active registry hash is not the protected baseline")
 
@@ -72,7 +72,13 @@ def main() -> int:
     for name, source in human_files.items():
         copy(source, human / name)
 
-    guide = """# Guía breve de lectura — prototipo HEAL
+    covered = summary["counts"]["scientifically_covered"]
+    canonical = summary["counts"]["canonical_groups"]
+    not_covered = summary["counts"]["not_covered"]
+    valid = summary["counts"]["valid_llm1_cards"]
+    quarantined = summary["counts"]["quarantined"]
+    calls = summary["telemetry"]["calls"]
+    guide = f"""# Guía breve de lectura — prototipo HEAL
 
 ## Qué demuestra
 
@@ -82,21 +88,22 @@ Este paquete demuestra el recorrido agrupado LLM1 → LLM2 → reporte sobre un 
 
 1. Abra `Reporte_HEAL_Prototipo.pdf` para ver la experiencia de una familia.
 2. Abra `HEAL_Prototipo_Auditoria.xlsx` y lea primero `RESUMEN`.
-3. En `TARJETAS`, filtre `status=valid` para revisar las siete tarjetas generadas por Luna.
-4. En `COBERTURA`, compare los 12 grupos cubiertos con los 168 no cubiertos.
-5. En `TELEMETRIA`, revise tokens, latencia y costo de las ocho llamadas.
+3. En `TARJETAS`, filtre `status=valid` para revisar las {valid} tarjetas generadas por Luna.
+4. En `COBERTURA`, compare los {covered} grupos cubiertos con los {not_covered} no cubiertos, sobre {canonical} grupos canónicos.
+5. En `TELEMETRIA`, revise tokens, latencia y costo de las {calls} llamadas registradas.
 
 ## Qué buscar
 
-- Ningún grupo fuera del snapshot de 12 debe contener una interpretación.
+- Ningún grupo fuera del snapshot firmado de {covered} debe contener una interpretación.
 - Una ausencia en el VCF debe figurar como callability desconocida, nunca como homocigosis de referencia.
 - No debe haber diagnóstico, indicación terapéutica, suplementación ni farmacogenómica accionable.
 - LLM2 sólo puede resumir grupos, variantes y evidencia ya validados por LLM1.
 
 ## Estado
 
-- `prototype_readiness`: `prototype_demo_ready_automatic`.
+- `prototype_readiness`: `{summary['status']}`.
 - `formal_validation_readiness`: `pending_new_unseen_holdout`.
+- Tarjetas en cuarentena: `{quarantined}`.
 - Registro productivo: preservado e intacto.
 """
     (human / "GUIA_DE_LECTURA.md").write_text(guide, encoding="utf-8")
@@ -108,7 +115,7 @@ Este paquete demuestra el recorrido agrupado LLM1 → LLM2 → reporte sobre un 
         "group_id", "coverage_status", "status", "inference_mode",
         "final_confidence_level", "review_priority", "focus_variant_refs",
         "interpretation_one_sentence_es", "evidence_limitations",
-        "eligible_for_llm2", "prototype_inference_ceiling",
+        "eligible_for_llm2", "scientific_inference_ceiling", "effective_runtime_ceiling",
     )
     compact_cards = [
         {column: row.get(column, "") for column in card_columns}
@@ -116,13 +123,16 @@ Este paquete demuestra el recorrido agrupado LLM1 → LLM2 → reporte sobre un 
     ]
     workbook_data = {
         "RESUMEN": [
-            {"indicador": "Estado del prototipo", "valor": summary["status"], "detalle": "Smoke automático aprobado"},
+            {"indicador": "Estado del prototipo", "valor": summary["status"], "detalle": "Resultado automático del smoke"},
             {"indicador": "Validación formal", "valor": summary["formal_validation_readiness"], "detalle": "Requiere nuevo holdout unseen"},
             {"indicador": "Grupos canónicos", "valor": summary["counts"]["canonical_groups"], "detalle": "Manifest cerrado"},
-            {"indicador": "Cobertura científica", "valor": summary["counts"]["scientifically_covered"], "detalle": "Snapshot sandbox firmado"},
-            {"indicador": "Tarjetas Luna válidas", "valor": summary["counts"]["valid_llm1_cards"], "detalle": "Cero cuarentenas"},
+            {"indicador": "Cobertura científica", "valor": covered, "detalle": f"Snapshot sandbox firmado ({covered}/{canonical})"},
+            {"indicador": "Con variante observada", "valor": summary["counts"]["covered_with_observed_variant"], "detalle": "Grupos cubiertos que habilitaron evaluación LLM1"},
+            {"indicador": "Sin variante observada", "valor": summary["counts"]["covered_no_observed_variant"], "detalle": "Tarjeta determinística, sin llamada LLM"},
+            {"indicador": "Tarjetas Luna válidas", "valor": valid, "detalle": "Disponibles para LLM2"},
+            {"indicador": "Tarjetas en cuarentena", "valor": quarantined, "detalle": "No alimentan LLM2"},
             {"indicador": "Grupos no cubiertos", "valor": summary["counts"]["not_covered"], "detalle": "Sin fallback al registry activo"},
-            {"indicador": "Costo estimado", "valor": summary["telemetry"]["estimated_cost_usd"], "detalle": "USD, ocho llamadas Luna"},
+            {"indicador": "Costo estimado", "valor": summary["telemetry"]["estimated_cost_usd"], "detalle": f"USD, {calls} llamadas registradas"},
             {"indicador": "Registry SHA-256", "valor": summary["active_registry_sha256_after"], "detalle": "Intacto antes y después"},
         ],
         "TARJETAS": compact_cards,
@@ -140,11 +150,19 @@ Este paquete demuestra el recorrido agrupado LLM1 → LLM2 → reporte sobre un 
         "llm1_prototype_envelopes.json", "llm1_cards.json", "llm2_grouped_payload_v1.json",
         "grouped_global_interpretation_v1.json", "raw_responses_audit.json", "quarantine.json",
         "report_view_model_v1.json", "telemetry_costs.csv", "cards.csv", "coverage.csv",
+        "grouped_prototype_execution_state.json", "grouped_prototype_progress.json",
     ]
     for name in technical_names:
-        copy(smoke / name, technical / name)
-    for name in ("prototype_curation_snapshot_v1.json", "prototype_candidate_manifest.json", "prototype_coverage_manifest_v1.json"):
-        copy(snapshot / name, technical / name)
+        source = smoke / name
+        if source.exists():
+            copy(source, technical / name)
+    for name in (
+        "tier1_prototype_snapshot_v1_human_signed.json", "prototype_candidate_manifest.json",
+        "prototype_coverage_manifest_v1.json", "snapshot_manifest.json", "registry_protection.json",
+    ):
+        source = snapshot / name
+        if source.exists():
+            copy(source, technical / name)
     sanitized = dict(summary)
     sanitized["outputs"] = {key: Path(value).name for key, value in summary.get("outputs", {}).items()}
     (technical / "grouped_prototype_run_summary.json").write_text(

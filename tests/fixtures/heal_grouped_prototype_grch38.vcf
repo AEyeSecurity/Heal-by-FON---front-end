@@ -1,0 +1,14 @@
+##fileformat=VCFv4.2
+##reference=GRCh38
+##contig=<ID=chr1,length=248956422>
+##contig=<ID=chr7,length=159345973>
+##contig=<ID=chr8,length=145138636>
+##contig=<ID=chr22,length=50818468>
+##INFO=<ID=TEST_CASE,Number=1,Type=String,Description="Controlled HEAL grouped-prototype scenario">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	PROTOTYPE
+chr1	11796321	rs1801133	G	A	60	PASS	TEST_CASE=initial_guide_runtime_gate	GT	0/1
+chr7	22727026	rs1800795	G	C	60	PASS	TEST_CASE=gwas_population_context	GT	0/1
+chr7	87504050	rs3842	T	C	60	PASS	TEST_CASE=pgx_non_actionable	GT	0/1
+chr8	120216440	rs4870723	A	C	60	PASS	TEST_CASE=context_only	GT	1/1
+chr22	19963748	rs4680	G	A	60	PASS	TEST_CASE=not_covered_by_prototype_snapshot	GT	0/1
