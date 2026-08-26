@@ -14,6 +14,7 @@ import {
   RUNTIME_PATHS,
   SERVICE_SCRIPTS,
 } from "./heal-runtime.js";
+import { cloneAndOmit, requestAccessToken, sanitizePublicResult, tokenMatches } from "./public-contracts.js";
 
 const app = express();
 const PORT = Number(process.env.HEAL_API_PORT || 8787);
@@ -355,17 +356,6 @@ function clientFingerprint(req) {
   return crypto.createHash("sha256").update(source).digest("hex");
 }
 
-function requestAccessToken(req) {
-  return String(req.headers["x-heal-access-token"] || req.body?.accessToken || req.query?.accessToken || "");
-}
-
-function tokenMatches(expected, actual) {
-  if (!expected || !actual) return false;
-  const expectedBuffer = Buffer.from(String(expected));
-  const actualBuffer = Buffer.from(String(actual));
-  return expectedBuffer.length === actualBuffer.length && crypto.timingSafeEqual(expectedBuffer, actualBuffer);
-}
-
 function canAccessUpload(req, upload) {
   if (!upload) return false;
   if (tokenMatches(upload.accessToken, requestAccessToken(req))) return true;
@@ -583,10 +573,7 @@ function sanitizeValidationResult(result, upload) {
 }
 
 function sanitizeVcfCanonMatchResult(result, upload) {
-  const publicResult = JSON.parse(JSON.stringify(result || {}));
-  delete publicResult.inputPaths;
-  delete publicResult.outputDir;
-  delete publicResult.outputs;
+  const publicResult = cloneAndOmit(result, ["inputPaths", "outputDir", "outputs"]);
   publicResult.metadata = publicResult.metadata || {};
   publicResult.metadata.file_name = upload.fileName;
   publicResult.metadata.upload_id = upload.uploadId;
@@ -594,96 +581,52 @@ function sanitizeVcfCanonMatchResult(result, upload) {
 }
 
 function sanitizeVcfNormalizationResult(result) {
-  const publicResult = JSON.parse(JSON.stringify(result || {}));
-  delete publicResult.inputPath;
-  delete publicResult.normalizedVcfPath;
-  delete publicResult.normalizedVariantsCsv;
-  delete publicResult.normalizationExcludedAuditCsv;
-  delete publicResult.normalizationSummaryJson;
+  const publicResult = cloneAndOmit(result, [
+    "inputPath", "normalizedVcfPath", "normalizedVariantsCsv",
+    "normalizationExcludedAuditCsv", "normalizationSummaryJson",
+  ]);
   if (publicResult.bcftools) delete publicResult.bcftools.command;
   return publicResult;
 }
 
 function sanitizeMatchPreparationResult(result) {
-  const publicResult = JSON.parse(JSON.stringify(result || {}));
-  delete publicResult.inputPath;
-  delete publicResult.outputDir;
-  delete publicResult.outputs;
-  return publicResult;
+  return cloneAndOmit(result, ["inputPath", "outputDir", "outputs"]);
 }
 
 function sanitizeVariantEnrichmentResult(result) {
-  const publicResult = JSON.parse(JSON.stringify(result || {}));
-  delete publicResult.inputPath;
-  delete publicResult.outputDir;
-  delete publicResult.cacheDir;
-  delete publicResult.outputs;
-  return publicResult;
+  return cloneAndOmit(result, ["inputPath", "outputDir", "cacheDir", "outputs"]);
 }
 
 function sanitizeEvidenceRefinementResult(result) {
-  const publicResult = JSON.parse(JSON.stringify(result || {}));
-  delete publicResult.inputPaths;
-  delete publicResult.outputDir;
-  delete publicResult.cachePath;
-  delete publicResult.outputs;
-  return publicResult;
+  return cloneAndOmit(result, ["inputPaths", "outputDir", "cachePath", "outputs"]);
 }
 
 function sanitizeAiTriageResult(result) {
-  const publicResult = JSON.parse(JSON.stringify(result || {}));
-  delete publicResult.inputPath;
-  delete publicResult.outputDir;
-  delete publicResult.outputs;
-  return publicResult;
+  return cloneAndOmit(result, ["inputPath", "outputDir", "outputs"]);
 }
 
 function sanitizeGroupedInterpretationPrepResult(result) {
-  const publicResult = JSON.parse(JSON.stringify(result || {}));
-  delete publicResult.inputPath;
-  delete publicResult.outputDir;
-  delete publicResult.outputs;
-  return publicResult;
+  return cloneAndOmit(result, ["inputPath", "outputDir", "outputs"]);
 }
 
 function sanitizeGroupedIndividualInterpretationResult(result) {
-  const publicResult = JSON.parse(JSON.stringify(result || {}));
-  delete publicResult.inputPath;
-  delete publicResult.outputDir;
-  delete publicResult.outputs;
-  return publicResult;
+  return cloneAndOmit(result, ["inputPath", "outputDir", "outputs"]);
 }
 
 function sanitizeIndividualInterpretationResult(result) {
-  const publicResult = JSON.parse(JSON.stringify(result || {}));
-  delete publicResult.inputPath;
-  delete publicResult.outputDir;
-  delete publicResult.outputs;
-  return publicResult;
+  return cloneAndOmit(result, ["inputPath", "outputDir", "outputs"]);
 }
 
 function sanitizeInterpretationNormalizationResult(result) {
-  const publicResult = JSON.parse(JSON.stringify(result || {}));
-  delete publicResult.inputPath;
-  delete publicResult.outputDir;
-  delete publicResult.outputs;
-  return publicResult;
+  return cloneAndOmit(result, ["inputPath", "outputDir", "outputs"]);
 }
 
 function sanitizeGlobalInterpretationResult(result) {
-  const publicResult = JSON.parse(JSON.stringify(result || {}));
-  delete publicResult.inputPath;
-  delete publicResult.outputDir;
-  delete publicResult.outputs;
-  return publicResult;
+  return cloneAndOmit(result, ["inputPath", "outputDir", "outputs"]);
 }
 
 function sanitizeFinalReportResult(result) {
-  const publicResult = JSON.parse(JSON.stringify(result || {}));
-  delete publicResult.inputPath;
-  delete publicResult.outputDir;
-  delete publicResult.outputs;
-  return publicResult;
+  return cloneAndOmit(result, ["inputPath", "outputDir", "outputs"]);
 }
 
 function publicArtifactsReady(job) {
@@ -1835,21 +1778,6 @@ async function verifyTurnstile(token, remoteIp) {
     return { ok: false, error: "Turnstile hostname is not allowed." };
   }
   return { ok: true };
-}
-
-function sanitizePublicResult(value, key = "") {
-  if (Array.isArray(value)) return value.map((item) => sanitizePublicResult(item, key)).filter((item) => item !== undefined);
-  if (value && typeof value === "object") {
-    const output = {};
-    for (const [childKey, childValue] of Object.entries(value)) {
-      if (/path$|paths$|raw_response|authorization|headers|stack|api_key|sha256|hash|stderr|stdout|response_body|provider_body/i.test(childKey)) continue;
-      const sanitized = sanitizePublicResult(childValue, childKey);
-      if (sanitized !== undefined) output[childKey] = sanitized;
-    }
-    return output;
-  }
-  if (typeof value === "string" && (/^[A-Za-z]:\\/.test(value) || value.includes("HEAL_OPENAI_API_KEY"))) return undefined;
-  return value;
 }
 
 function publicErrorMessage(job) {
