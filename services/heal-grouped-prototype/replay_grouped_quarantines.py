@@ -22,6 +22,14 @@ def load_runner():
     return module
 
 
+def load_contracts():
+    spec = importlib.util.spec_from_file_location("heal_grouped_prototype_contracts", HERE / "grouped_contracts.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 def read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -50,6 +58,7 @@ def classify_fix(old_errors: set[str], new_errors: set[str], audit: list[dict]) 
 
 def replay(run_dir: Path, output_dir: Path) -> dict:
     runner = load_runner()
+    contracts = load_contracts()
     raw_rows = read_json(run_dir / "raw_responses_audit.json")
     envelopes = {row["scientific_decision"]["group_id"]: row for row in read_json(run_dir / "llm1_prototype_envelopes.json")}
     quarantines = {row["group_id"]: row for row in read_json(run_dir / "quarantine.json")}
@@ -59,7 +68,7 @@ def replay(run_dir: Path, output_dir: Path) -> dict:
         group_id = raw.get("group_id")
         if raw.get("stage") != "llm1" or group_id not in quarantines or not isinstance(raw.get("output"), dict):
             continue
-        normalized, normalization_errors, audit = runner.normalize_evidence_used(raw["output"])
+        normalized, normalization_errors, audit = contracts.normalize_evidence_used(raw["output"])
         new_errors = sorted(set(normalization_errors + runner.validate_llm1_output(normalized, envelopes[group_id])))
         old_errors = sorted(set(raw.get("errors") or str(quarantines[group_id].get("error") or "").split(";")))
         fixes = classify_fix(set(old_errors), set(new_errors), audit)
