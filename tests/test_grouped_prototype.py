@@ -50,6 +50,53 @@ class GroupedPrototypeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "open prototype envelope"):
             MODULE.validate_envelope(envelope)
 
+    def test_historical_v1_and_v2_envelopes_remain_readable(self):
+        payload = {
+            "payload_schema_version": "llm1_group_payload_v7",
+            "group_id": "GENE:T1.1",
+            "input_completeness": {"absence_semantics": "not_observed_callability_unknown"},
+        }
+        v1 = {
+            "schema_version": "llm1_prototype_envelope_v1", "payload_v7": payload,
+            "scientific_decision": {"group_id": "GENE:T1.1"},
+            "coverage_status": "covered_by_prototype_snapshot", "readiness": {},
+            "allowlists": {}, "prototype_hashes": {},
+        }
+        MODULE.validate_envelope(v1)
+        v2 = {
+            **v1,
+            "schema_version": "llm1_prototype_envelope_v2",
+            "runtime_variant_gate": {"eligible": False},
+            "technical_gates": {
+                "identity": True, "input_completeness": True, "evidence_allowlist": True,
+                "variant_allowlist": True, "payload_schema": True,
+            },
+            "provenance": {},
+        }
+        MODULE.validate_envelope(v2)
+
+    def test_v3_envelope_rejects_legacy_state(self):
+        envelope = {
+            "schema_version": "llm1_prototype_envelope_v3",
+            "payload_v7": {
+                "payload_schema_version": "llm1_group_payload_v7", "group_id": "GENE:T1.1",
+                "input_completeness": {"absence_semantics": "not_observed_callability_unknown"},
+            },
+            "scientific_decision": {"group_id": "GENE:T1.1"},
+            "runtime_variant_gate": {"eligible": False},
+            "technical_gates": {
+                "identity": True, "input_completeness": True, "evidence_allowlist": True,
+                "variant_allowlist": True, "payload_schema": True,
+            },
+            "coverage_status": "covered_by_prototype_snapshot", "readiness": {},
+            "provenance": {}, "source_payload_audit": {},
+            "allowlists": {"evidence_ids": []}, "prototype_hashes": {},
+        }
+        MODULE.validate_envelope(envelope)
+        envelope["payload_v7"]["curated_mechanism"] = {"status": "draft"}
+        with self.assertRaisesRegex(ValueError, "Legacy scientific state leaked"):
+            MODULE.validate_envelope(envelope)
+
     def test_context_ceiling_rejects_initial_guide(self):
         envelope = {
             "scientific_decision": {"prototype_inference_ceiling": "context_only"},
@@ -74,6 +121,18 @@ class GroupedPrototypeTests(unittest.TestCase):
         self.assertTrue(MODULE.has_prohibited_language("Se recomienda iniciar medicación."))
         self.assertTrue(MODULE.has_prohibited_language("Esta variante diagnostica una enfermedad."))
 
+    def test_clause_polarity_keeps_negated_and_affirmative_clauses_separate(self):
+        self.assertTrue(MODULE.has_prohibited_language(
+            "Este resultado no establece un diagnóstico; sin embargo, la variante diagnostica la enfermedad."
+        ))
+        english = {
+            "interpretation_long_en": "This result does not establish a diagnosis, but the variant diagnosed the disease."
+        }
+        self.assertIn("diagnosis_claim", MODULE.prototype_critical_semantic_errors(english, {}))
+        self.assertFalse(MODULE.has_prohibited_language(
+            "No establece un diagnóstico; tampoco permite iniciar o suspender medicación."
+        ))
+
     def test_invalid_key_is_a_campaign_wide_blocker_without_provider_body(self):
         error = RuntimeError('OpenAI API http_401: {"error":{"code":"invalid_api_key","message":"masked"}}')
         self.assertEqual(MODULE.global_technical_blocker_code(error), "openai_authentication_failed")
@@ -86,6 +145,51 @@ class GroupedPrototypeTests(unittest.TestCase):
             },
         }
         self.assertEqual(MODULE.runtime_evidence_ids(payload), {"evv_1", "evk_1", "gwc_1"})
+
+    def test_build_envelope_combines_closed_allowlists_without_registry_fallback(self):
+        payload = {
+            "payload_schema_version": "llm1_group_payload_v7", "group_id": "GENE:T1.1",
+            "gene": "GENE", "module_id": "T1.1", "focus_variant_evidence": [],
+            "traceability_allowlist": {"allowed_evidence_ids": ["evv_1", "evm_registry"]},
+            "input_completeness": {"absence_semantics": "not_observed_callability_unknown"},
+            "curated_mechanism": {"evidence_id": "evm_registry"},
+        }
+        scientific = {
+            "group_id": "GENE:T1.1", "gene": "GENE", "valid_evidence_ids": ["PMID:1"],
+            "prototype_inference_ceiling": "context_only", "core_status": "approved",
+            "dominant_direction": "supportive", "material_conflict": False,
+            "limitations": [], "evidence_records": [], "provenance": {},
+        }
+        envelope = MODULE.build_envelope(
+            payload, scientific, {"manifest_sha256": "a" * 64},
+            {"snapshot_sha256": "b" * 64, "prototype_readiness": "approved_for_sandbox_smoke_test"},
+        )
+        self.assertEqual(envelope["allowlists"]["scientific_evidence_ids"], ["PMID:1"])
+        self.assertEqual(envelope["allowlists"]["runtime_evidence_ids"], ["evv_1"])
+        self.assertNotIn("evm_registry", envelope["allowlists"]["evidence_ids"])
+        self.assertFalse(envelope["source_payload_audit"]["legacy_context_citable"])
+
+    def test_runtime_variant_gate_requires_exact_human_and_functional_support(self):
+        payload = {
+            "focus_variant_evidence": [{
+                "variant_ref": "rs1", "evidence_id": "evv_1",
+                "identity_match_class": "exact_coordinate_allele",
+                "target_gene_annotation": {"status": "confirmed"},
+                "functional_evidence": {"most_severe_consequence": "missense_variant"},
+            }],
+            "clinical_evidence_summary": {"assertion_groups": [{
+                "variant_ref": "rs1", "evidence_id": "evc_1", "identity_match": True,
+                "classification": "pathogenic_or_likely_pathogenic",
+            }]},
+            "professional_curation": {},
+        }
+        gate = MODULE.variant_specific_inference_gate(payload, "initial_guide_candidate")
+        self.assertTrue(gate["eligible"])
+        self.assertEqual(gate["variant_refs"], ["rs1"])
+        payload["clinical_evidence_summary"]["assertion_groups"][0]["classification"] = "benign"
+        blocked = MODULE.variant_specific_inference_gate(payload, "initial_guide_candidate")
+        self.assertFalse(blocked["eligible"])
+        self.assertIn("no_directly_applicable_human_variant_evidence", blocked["reason_codes"])
 
     def test_v2_envelope_uses_effective_runtime_ceiling(self):
         payload = {
@@ -147,6 +251,18 @@ class GroupedPrototypeTests(unittest.TestCase):
         self.assertNotIn("gwas_causality_or_individual_risk", MODULE.prototype_critical_semantic_errors(item_en, payload))
         unsafe = {"interpretation_long_en": "This GWAS proves that the individual has increased risk."}
         self.assertIn("individual_gwas_risk", MODULE.prototype_critical_semantic_errors(unsafe, payload))
+
+    def test_mixed_gwas_clauses_still_flag_affirmative_personal_risk(self):
+        payload = {"gwas_evidence_summary": {"prioritized_clusters": [{"cluster_ref": "gwc_1"}]}}
+        safe = {"interpretation_long_es": "El GWAS no demuestra riesgo individual; describe una asociación poblacional."}
+        self.assertNotIn("gwas_causality_or_individual_risk", MODULE.prototype_critical_semantic_errors(safe, payload))
+        unsafe = {
+            "interpretation_long_es": "El GWAS no demuestra causalidad; sin embargo, predice riesgo individual para esta persona."
+        }
+        self.assertIn(
+            "gwas_causality_or_individual_risk",
+            MODULE.prototype_critical_semantic_errors(unsafe, payload),
+        )
 
     def test_referential_evidence_duplicates_are_coalesced(self):
         item = {"evidence_used": [
@@ -224,6 +340,15 @@ class GroupedPrototypeTests(unittest.TestCase):
         self.assertIn("recoveringVcfCanonInputs.has(inputKey)", source)
         self.assertIn('job.status = "recovery_duplicate_superseded"', source)
         self.assertIn("claimedInputs.has(inputKey)", source)
+
+    def test_grouped_failure_has_no_legacy_fallback(self):
+        source = (ROOT / "server" / "dev-api.js").read_text(encoding="utf-8")
+        start = source.index("async function runGroupedPrototypeForJob")
+        end = source.index("async function regenerateGroupedPayloadV6", start)
+        grouped_source = source[start:end]
+        self.assertIn("processGroupedPrototype", grouped_source)
+        self.assertNotIn("processGroupedIndividualInterpretation", grouped_source)
+        self.assertNotIn("HEAL_MECHANISM_REGISTRY_PATH", grouped_source)
 
     def test_dry_run_produces_both_reports_and_preserves_registry(self):
         payload_path = Path(
