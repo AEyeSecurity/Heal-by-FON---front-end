@@ -160,6 +160,23 @@ def add_structured_block(parts: list[str], block: Any) -> None:
     if block_type == "paragraph":
         parts.append(para(block.get("text")))
         return
+    if block_type == "client_summary":
+        if text(block.get("title")):
+            parts.append(para(block.get("title"), "Heading2"))
+        if text(block.get("text")):
+            parts.append(para(block.get("text")))
+        return
+    if block_type == "client_finding":
+        if text(block.get("title")):
+            parts.append(para(block.get("title"), "Heading2"))
+        for label, key in (
+            ("Modo", "mode"), ("Confianza científica", "confidence"),
+            ("Aplicabilidad individual", "applicability"), ("Resumen", "summary"),
+            ("Interpretación", "detail"),
+        ):
+            if text(block.get(key)):
+                parts.append(para(f"{label}: {text(block.get(key))}"))
+        return
     if block_type == "axis":
         title = text(block.get("title"))
         confidence = text(block.get("confidence"))
@@ -208,6 +225,8 @@ def add_structured_report(parts: list[str], structured_report: dict[str, Any]) -
     for section in sections:
         if not isinstance(section, dict):
             continue
+        if section.get("page_break_before"):
+            parts.append(page_break())
         title = text(section.get("title") or section.get("section_id"))
         if title:
             parts.append(para(title, "Heading1"))
@@ -253,25 +272,29 @@ def document_xml(report: dict[str, Any], metadata: dict[str, Any], payload: dict
         metadata_heading = "Metadatos del reporte"
 
     confidence = metadata.get("confidence_distribution") or {}
+    client_mode = text(metadata.get("presentation_mode")) == "client"
     parts = [
         para(title, "Title"),
         para("HEAL by FON", "Subtitle"),
         para(disclaimer, "IntenseQuote"),
-        para(metadata_heading, "Heading1"),
-        key_value_rows(
-            [
-                ("Generated at", generated_at),
-                ("Source file", source_file),
-                ("Language mode", language_mode),
-                ("Audience mode", audience_mode),
-                ("Observed variants", metadata.get("variant_count_observed")),
-                ("Unique rsIDs", metadata.get("unique_rsid_count")),
-                ("Unique genes", metadata.get("unique_gene_count")),
-                ("Confidence distribution", ", ".join(f"{key}: {value}" for key, value in confidence.items())),
-            ]
-        ),
-        page_break(),
     ]
+    if not client_mode:
+        parts.extend([
+            para(metadata_heading, "Heading1"),
+            key_value_rows(
+                [
+                    ("Generated at", generated_at),
+                    ("Source file", source_file),
+                    ("Language mode", language_mode),
+                    ("Audience mode", audience_mode),
+                    ("Observed variants", metadata.get("variant_count_observed")),
+                    ("Unique rsIDs", metadata.get("unique_rsid_count")),
+                    ("Unique genes", metadata.get("unique_gene_count")),
+                    ("Confidence distribution", ", ".join(f"{key}: {value}" for key, value in confidence.items())),
+                ]
+            ),
+            page_break(),
+        ])
 
     if not add_structured_report(parts, report.get("structured_report") or {}):
         add_section(parts, "Executive Summary", global_report.get("executive_summary"))

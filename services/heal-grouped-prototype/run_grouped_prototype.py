@@ -61,6 +61,7 @@ def import_module(name: str, path: Path):
 llm1 = import_module("heal_grouped_llm1", LLM1_DIR / "interpret_gene_module_groups.py")
 final_report = import_module("heal_final_report", REPORT_PATH)
 contracts = import_module("heal_grouped_prototype_contracts", SCRIPT_DIR / "grouped_contracts.py")
+client_readiness = import_module("heal_grouped_client_readiness", SCRIPT_DIR / "client_readiness.py")
 
 has_affirmative_pattern = contracts.has_affirmative_pattern
 has_prohibited_language = contracts.has_prohibited_language
@@ -429,6 +430,26 @@ def build_llm2_payload(valid_cards: list[dict], coverage_cards: list[dict], comp
     }
 
 
+def build_client_ready_artifacts(
+    llm2_result: dict,
+    cards: list[dict],
+    coverage: dict,
+    source_name: str,
+    *,
+    input_completeness: dict | None = None,
+    external_evidence_partial: bool = False,
+) -> tuple[dict, dict, dict]:
+    downstream = client_readiness.build_downstream_result(
+        cards, coverage, llm2_result,
+        input_completeness=input_completeness,
+        external_evidence_partial=external_evidence_partial,
+    )
+    client = client_readiness.build_client_result(downstream)
+    client_readiness.assert_client_clean(client)
+    view = client_readiness.build_report_view_model(client, llm2_result, source_name)
+    return downstream, client, view
+
+
 def deterministic_llm2(payload: dict) -> dict:
     findings = []
     for card in payload["valid_llm1_cards"]:
@@ -558,19 +579,15 @@ def write_docx(view: dict, path: Path) -> None:
     sections = [
         {"section_id": "resumen", "title": "Resumen general", "blocks": [{"type": "paragraph", "text": view["summary"]}]},
         {"section_id": "cobertura", "title": "Cobertura del análisis", "blocks": [{"type": "paragraph", "text": view["coverage_statement"]}]},
-        {"section_id": "modulos", "title": "Resumen de los seis módulos", "blocks": [
-            {"title": row["title"], "resumen": row["summary"]} for row in view["modules"]
+        {"section_id": "modulos", "title": "Resumen de los seis módulos", "page_break_before": True, "blocks": [
+            {"type": "client_summary", "title": row["title"], "text": row["summary"]} for row in view["modules"]
         ]},
-        {"section_id": "hallazgos", "title": "Hallazgos principales", "blocks": [
-            {"title": row["group_id"], "modo": row["client_interpretation_type"], "confianza": row["scientific_relationship_confidence"],
-             "aplicabilidad": row["individual_applicability"],
-             "resumen": row["headline_es"], "detalle": row["explanation_es"],
-             "variantes": row["variant_refs"], "evidencia": row["evidence_ids"]}
+        {"section_id": "hallazgos", "title": "Hallazgos priorizados en este resumen", "page_break_before": True, "blocks": [
+            {"type": "client_finding", "title": f"{row['gene']} — {row['module_name']}",
+             "mode": row["client_interpretation_type"], "confidence": row["scientific_relationship_confidence"],
+             "applicability": row["individual_applicability"],
+             "summary": row["headline_es"], "detail": row["explanation_es"]}
             for row in view["primary_findings"]
-        ]},
-        {"section_id": "contexto", "title": "Hallazgos contextuales relevantes", "blocks": [
-            {"title": row["group_id"], "resumen": row["headline_es"], "aplicabilidad": "Limitada"}
-            for row in view["secondary_findings"]
         ]},
         {"section_id": "no_inferir", "title": "Qué no puede inferirse", "blocks": [
             *({"type": "paragraph", "text": value} for value in view["cannot_infer"]),
@@ -579,18 +596,26 @@ def write_docx(view: dict, path: Path) -> None:
             *({"type": "paragraph", "text": value} for value in view["limitations"]),
         ]},
         {"section_id": "estado", "title": "Estado de validación", "blocks": [
-             {"type": "paragraph", "text": f"Readiness del prototipo: {view['readiness']['prototype_readiness']}."},
-            {"type": "paragraph", "text": "Validación formal: pending_new_unseen_holdout."},
+            {"type": "paragraph", "text": view["processing_status"]["label_es"] + "."},
+            {"type": "paragraph", "text": view["external_evidence_availability"]["label_es"] + "."},
+            {"type": "paragraph", "text": "Validación formal pendiente de un nuevo holdout independiente."},
             {"type": "paragraph", "text": view["disclaimer"]},
         ]},
     ]
+    if view["secondary_findings"]:
+        sections.insert(4, {
+            "section_id": "contexto",
+            "title": "Hallazgos contextuales relevantes",
+            "blocks": [
+                {"title": row["group_id"], "resumen": row["headline_es"], "aplicabilidad": "Limitada"}
+                for row in view["secondary_findings"]
+            ],
+        })
     legacy = {
         "metadata": {"language_mode": "es", "audience_mode": "family", "disclaimer_required": True,
-                     "variant_count_observed": sum(len(row["variant_refs"]) for row in view["findings"]),
-                     "unique_gene_count": len({row["group_id"].split(":")[0] for row in view["findings"]}),
-                     "unique_rsid_count": len({value for row in view["findings"] for value in row["variant_refs"]})},
+                     "presentation_mode": "client"},
         "global_report": {"report_title": view["title"]},
-        "structured_report": {"version": "report_view_model_v2", "sections": sections},
+        "structured_report": {"version": "report_view_model_v3", "sections": sections},
     }
     final_report.write_docx(path, legacy, {"fileName": view["source_file_name"], "languageMode": "es", "audienceMode": "family"})
 
@@ -600,17 +625,37 @@ def write_pdf(view: dict, path: Path) -> None:
     styles.add(ParagraphStyle(name="HealTitle", parent=styles["Title"], textColor=colors.HexColor("#143A2B"), alignment=TA_CENTER, fontSize=20, leading=24))
     styles.add(ParagraphStyle(name="HealH1", parent=styles["Heading1"], textColor=colors.HexColor("#275D38"), spaceBefore=10, spaceAfter=6))
     styles.add(ParagraphStyle(name="HealNote", parent=styles["BodyText"], backColor=colors.HexColor("#EEF5EE"), borderColor=colors.HexColor("#8BAA8B"), borderWidth=0.5, borderPadding=8, leading=14))
-    story = [Paragraph(view["title"], styles["HealTitle"]), Spacer(1, 5 * mm), Paragraph(view["prototype_label"], styles["HealNote"]), Spacer(1, 5 * mm), Paragraph(view["summary"], styles["BodyText"])]
+    status_line = (
+        f"{view['processing_status']['label_es']} · "
+        f"{view['external_evidence_availability']['label_es']}"
+    )
+    story = [
+        Paragraph(view["title"], styles["HealTitle"]), Spacer(1, 5 * mm),
+        Paragraph(view["prototype_label"], styles["HealNote"]), Spacer(1, 3 * mm),
+        Paragraph(status_line, styles["BodyText"]), Spacer(1, 4 * mm),
+        Paragraph(view["summary"], styles["BodyText"]),
+    ]
     story += [Spacer(1, 5 * mm), Paragraph("Cobertura científica", styles["HealH1"]), Paragraph(view["coverage_statement"], styles["BodyText"])]
-    table = Table([["Grupos cubiertos", "Tarjetas válidas", "No cubiertos"], [view["coverage"]["covered"], view["coverage"]["valid_cards"], view["coverage"]["not_covered"]]], colWidths=[50 * mm] * 3)
-    table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#275D38")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#A0A0A0")), ("ALIGN", (0, 0), (-1, -1), "CENTER"), ("PADDING", (0, 0), (-1, -1), 6)]))
-    story += [Spacer(1, 3 * mm), table, Spacer(1, 5 * mm), Paragraph("Resumen de los seis módulos", styles["HealH1"])]
+    detail_table = Table([
+        ["Grupos totales", "Cubiertos", "Interpretaciones válidas"],
+        [view["coverage"]["canonical_group_count"], view["coverage"]["scientifically_covered_count"], view["coverage"]["valid_interpretation_count"]],
+        ["Cubiertos sin variante foco", "Fuera del snapshot", "Hallazgos priorizados"],
+        [view["coverage"]["covered_no_observed_variant_count"], view["coverage"]["not_covered_count"], view["coverage"]["prioritized_finding_count"]],
+    ], colWidths=[50 * mm] * 3)
+    detail_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#275D38")),
+        ("BACKGROUND", (0, 2), (-1, 2), colors.HexColor("#275D38")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("TEXTCOLOR", (0, 2), (-1, 2), colors.white),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#A0A0A0")),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"), ("PADDING", (0, 0), (-1, -1), 6),
+    ]))
+    story += [Spacer(1, 3 * mm), detail_table, PageBreak(), Paragraph("Resumen de los seis módulos", styles["HealH1"])]
     for module in view["modules"]:
         story.append(KeepTogether([Paragraph(module["title"], styles["Heading2"]), Paragraph(module["summary"], styles["BodyText"]), Spacer(1, 2 * mm)]))
-    story += [PageBreak(), Paragraph("Hallazgos principales", styles["HealH1"])]
+    story += [PageBreak(), Paragraph("Hallazgos priorizados en este resumen", styles["HealH1"])]
     for row in view["primary_findings"]:
         story.append(KeepTogether([
-            Paragraph(f"{row['group_id']} - {row['headline_es']}", styles["Heading2"]),
+            Paragraph(f"{row['gene']} — {row['module_name']}: {row['headline_es']}", styles["Heading2"]),
             Paragraph(row["explanation_es"], styles["BodyText"]),
             Paragraph(f"{row['client_interpretation_type']} | Aplicabilidad individual: {row['individual_applicability']} | Relación científica: {row['scientific_relationship_confidence']}", styles["BodyText"]),
             Spacer(1, 3 * mm),
@@ -622,7 +667,7 @@ def write_pdf(view: dict, path: Path) -> None:
     story += [Spacer(1, 5 * mm), Paragraph("Qué no puede inferirse", styles["HealH1"])]
     for value in view["cannot_infer"]:
         story.extend([Paragraph(value, styles["BodyText"], bulletText="•"), Spacer(1, 1.5 * mm)])
-    story += [PageBreak(), Paragraph("Límites y estado de validación", styles["HealH1"])]
+    story += [Spacer(1, 5 * mm), Paragraph("Límites y estado de validación", styles["HealH1"])]
     for value in view["limitations"]:
         story.extend([Paragraph(value, styles["BodyText"], bulletText="•"), Spacer(1, 1.5 * mm)])
     story += [Spacer(1, 4 * mm), Paragraph(view["disclaimer"], styles["HealNote"]), Spacer(1, 3 * mm), Paragraph("Validación formal pendiente: se requiere un nuevo holdout unseen.", styles["BodyText"])]
@@ -773,11 +818,12 @@ def process(request: dict) -> dict:
         completed_groups.add(group_id)
         persist_state()
 
-    valid_cards = [row for row in cards if row.get("status") == "valid"]
+    normalized_cards_for_llm2 = [client_readiness.normalize_card(row) for row in cards]
+    valid_cards = [row for row in normalized_cards_for_llm2 if row.get("status") == "valid"]
     update_progress(progress_path, substage="normalization", processed=len(valid_cards), total=max(1, len(planned_envelopes)),
                     message="Normalización determinística completa", metrics={"valid": len(valid_cards), "quarantined": len(quarantines)})
     completeness = next((row.get("input_completeness") for row in payloads.values() if row.get("input_completeness")), {"mode": "observed_variants_only", "absence_semantics": "not_observed_callability_unknown"})
-    llm2_payload = build_llm2_payload(valid_cards, cards, completeness, coverage)
+    llm2_payload = build_llm2_payload(valid_cards, normalized_cards_for_llm2, completeness, coverage)
     llm2_schema = responses_compatible_schema(read_json(SCRIPT_DIR / "grouped_global_interpretation_v1.schema.json"))
     llm2_prompt = (SCRIPT_DIR / "prompt_grouped_llm2_v1.md").read_text(encoding="utf-8")
     llm2_started = time.perf_counter()
@@ -811,8 +857,15 @@ def process(request: dict) -> dict:
     update_progress(progress_path, substage="llm2", processed=1, total=1, message="Síntesis agrupada validada")
 
     source_name = str(request.get("fileName") or payload_path.stem)
-    view = report_view_model(llm2_result, cards, coverage, source_name)
-    report_json = output_dir / "report_view_model_v2.json"
+    external_partial = bool(request.get("externalEvidencePartial")) or any(
+        any((row.get("limitation_flags") or {}).values()) for row in normalized_cards_for_llm2
+    )
+    downstream_result, client_result, view = build_client_ready_artifacts(
+        llm2_result, cards, coverage, source_name,
+        input_completeness=completeness,
+        external_evidence_partial=external_partial,
+    )
+    report_json = output_dir / "report_view_model_v3.json"
     docx_path = output_dir / "HEAL_prototipo_desarrollo.docx"
     pdf_path = output_dir / "HEAL_prototipo_desarrollo.pdf"
     update_progress(progress_path, substage="reporting", processed=0, total=1, message="Generando DOCX y PDF desde un único view model")
@@ -821,9 +874,12 @@ def process(request: dict) -> dict:
     write_json(output_dir / "llm1_cards.json", cards)
     write_json(output_dir / "llm2_grouped_payload_v1.json", llm2_payload)
     write_json(output_dir / "grouped_global_interpretation_v1.json", llm2_result)
+    write_json(output_dir / "grouped_downstream_result_v1.json", downstream_result)
+    write_json(output_dir / "grouped_client_result_v1.json", client_result)
     write_json(output_dir / "raw_responses_audit.json", raw_rows)
     write_json(output_dir / "quarantine.json", quarantines)
-    write_csv(output_dir / "cards.csv", cards)
+    write_csv(output_dir / "cards.csv", client_result["cards"])
+    write_csv(output_dir / "coverage_client.csv", client_readiness.build_client_coverage_rows(client_result))
     write_csv(output_dir / "coverage.csv", coverage["groups"])
     write_csv(output_dir / "telemetry_costs.csv", telemetry)
     registry_after = sha256_file(ACTIVE_REGISTRY)
@@ -840,7 +896,10 @@ def process(request: dict) -> dict:
                    "covered_with_observed_variant": len(planned_envelopes),
                    "covered_no_observed_variant": sum(row.get("status") == "covered_no_observed_variant" for row in cards),
                    "focus_variants": sum(len(row.get("focus_variant_refs") or []) for row in cards if row.get("coverage_status") == "covered_by_prototype_snapshot"),
-                   "valid_llm1_cards": len(valid_cards), "initial_guide_findings": initial_guides,
+                   "valid_llm1_cards": len(valid_cards),
+                   "valid_interpretation_count": len(valid_cards),
+                   "prioritized_finding_count": len(llm2_result.get("key_findings") or []),
+                   "initial_guide_findings": initial_guides,
                    "context_only_findings": context_only, "quarantined": len(quarantines),
                    "quarantined_content_safety": sum(row.get("quarantine_class") == "content_safety" for row in quarantines),
                    "quarantined_technical_isolated": sum(row.get("quarantine_class") == "technical_isolated" for row in quarantines),
@@ -852,7 +911,13 @@ def process(request: dict) -> dict:
         "budget": {"projected_cost_usd": projected_cost, "start_guardrail_usd": estimate_cap, "hard_cap_usd": hard_cap},
         "snapshot_sha256": snapshot["snapshot_sha256"], "snapshot_id": snapshot.get("snapshot_id"),
         "active_registry_sha256_before": registry_before, "active_registry_sha256_after": registry_after,
-        "outputs": {"docx": str(docx_path), "pdf": str(pdf_path), "cards_csv": str(output_dir / "cards.csv"), "coverage_csv": str(output_dir / "coverage.csv"), "technical_audit": str(output_dir / "raw_responses_audit.json")},
+        "outputs": {"docx": str(docx_path), "pdf": str(pdf_path), "cards_csv": str(output_dir / "cards.csv"),
+                    "coverage_csv": str(output_dir / "coverage_client.csv"),
+                    "coverage_audit_csv": str(output_dir / "coverage.csv"),
+                    "technical_audit": str(output_dir / "raw_responses_audit.json"),
+                    "downstream_result": str(output_dir / "grouped_downstream_result_v1.json"),
+                    "client_result": str(output_dir / "grouped_client_result_v1.json"),
+                    "report_view_model": str(report_json)},
         "started_at": started, "completed_at": now_iso(),
     }
     write_json(output_dir / "grouped_prototype_run_summary.json", summary)
