@@ -15,6 +15,7 @@ import {
   SERVICE_SCRIPTS,
 } from "./heal-runtime.js";
 import { cloneAndOmit, requestAccessToken, sanitizePublicResult, tokenMatches } from "./public-contracts.js";
+import { groupedClientSummary, projectLegacyCardsForClient } from "./grouped-client-contracts.js";
 
 const app = express();
 const PORT = Number(process.env.HEAL_API_PORT || 8787);
@@ -1788,6 +1789,15 @@ function publicErrorMessage(job) {
 }
 
 function publicJob(job) {
+  const groupedComplete = Boolean(job.result?.groupedPrototype);
+  const publicResult = groupedComplete ? {
+    schemaVersion: job.result?.schemaVersion || "gene_module_v2",
+    metadata: {
+      file_name: job.fileName || job.result?.metadata?.file_name || "",
+      sample_name: job.result?.metadata?.sample_name || "",
+    },
+    groupedPrototype: groupedClientSummary(job.result.groupedPrototype),
+  } : sanitizePublicResult(job.result);
   return {
     id: job.id,
     status: job.status,
@@ -1797,7 +1807,7 @@ function publicJob(job) {
     analysisMode: job.analysisMode,
     fileName: job.fileName,
     sizeBytes: job.sizeBytes,
-    result: sanitizePublicResult(job.result),
+    result: publicResult,
     artifactsReady: publicArtifactsReady(job),
     stage: job.stage || null,
     stageProgress: job.stageProgress ?? null,
@@ -4013,6 +4023,9 @@ async function runGroupedPrototypeForJob(job, { dryRun = false } = {}) {
   job.message = "Running isolated grouped prototype with Luna";
   job.updatedAt = new Date().toISOString();
   await persistVcfCanonJob(job);
+  const sourceErrorCounts = job.result?.variantEnrichment?.metadata?.source_error_counts || {};
+  const externalEvidencePartial = Object.values(sourceErrorCounts).some((value) => Number(value || 0) > 0) ||
+    job.result?.variantEnrichment?.metadata?.qualityGate?.evidenceReadinessGate?.status === "fail";
   const summary = await processGroupedPrototype({
     event: "heal.grouped_prototype.requested",
     runId: `grouped-prototype-${job.id}`,
@@ -4025,6 +4038,7 @@ async function runGroupedPrototypeForJob(job, { dryRun = false } = {}) {
     maxEstimatedCostUsd: HEAL_PROTOTYPE_MAX_ESTIMATED_COST_USD,
     hardCapUsd: HEAL_PROTOTYPE_HARD_CAP_USD,
     fileName: job.fileName || `${job.id}.vcf`,
+    externalEvidencePartial,
     dryRun,
     requestedAt: new Date().toISOString(),
   }, { job, progressPath, stage: "grouped_prototype" });
@@ -4033,12 +4047,16 @@ async function runGroupedPrototypeForJob(job, { dryRun = false } = {}) {
     groupedPrototypeDocx: path.join(outputDir, "HEAL_prototipo_desarrollo.docx"),
     groupedPrototypePdf: path.join(outputDir, "HEAL_prototipo_desarrollo.pdf"),
     groupedPrototypeCardsCsv: path.join(outputDir, "cards.csv"),
-    groupedPrototypeCoverageCsv: path.join(outputDir, "coverage.csv"),
+    groupedPrototypeCoverageCsv: path.join(outputDir, "coverage_client.csv"),
+    groupedPrototypeCoverageAuditCsv: path.join(outputDir, "coverage.csv"),
     groupedPrototypeTelemetryCsv: path.join(outputDir, "telemetry_costs.csv"),
     groupedPrototypeTechnicalAuditJson: path.join(outputDir, "raw_responses_audit.json"),
     groupedPrototypeCardsJson: path.join(outputDir, "llm1_cards.json"),
+    groupedPrototypeDownstreamJson: path.join(outputDir, "grouped_downstream_result_v1.json"),
+    groupedPrototypeClientJson: path.join(outputDir, "grouped_client_result_v1.json"),
+    groupedPrototypeReportViewJson: path.join(outputDir, "report_view_model_v3.json"),
   });
-  job.result = { ...job.result, groupedPrototype: summary };
+  job.result = { ...job.result, groupedPrototype: { ...summary, external_evidence_partial: externalEvidencePartial } };
   job.stageProgress = 100;
   return summary;
 }
@@ -4126,6 +4144,13 @@ app.post("/api/vcf-canon-matches/:jobId/grouped-prototype", async (req, res) => 
   res.status(202).json(publicJob(job));
 });
 
+function groupedClientReplayArtifact(job, fileName) {
+  const legacy = path.resolve(job.artifacts?.groupedPrototypeCardsJson || job.artifacts?.groupedPrototypeSummaryJson || "");
+  if (!legacy || !isPathInside(GROUPED_PROTOTYPE_ROOT, legacy)) return "";
+  const candidate = path.join(path.dirname(legacy), "client-readiness-v1", fileName);
+  return isPathInside(GROUPED_PROTOTYPE_ROOT, candidate) && existsSync(candidate) ? candidate : "";
+}
+
 app.get("/api/vcf-canon-matches/:jobId/grouped-prototype/download/:artifact", async (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job) {
@@ -4149,7 +4174,15 @@ app.get("/api/vcf-canon-matches/:jobId/grouped-prototype/download/:artifact", as
     res.status(404).json({ error: "Unknown grouped prototype artifact." });
     return;
   }
-  const artifactPath = path.resolve(job.artifacts?.[definition[0]] || "");
+  if (String(req.params.artifact || "").toLowerCase() === "telemetry" && !requireCurationAccess(req, res)) return;
+  const replayNames = {
+    docx: "HEAL_prototipo_cliente.docx", pdf: "HEAL_prototipo_cliente.pdf",
+    cards: "cards_client.csv", coverage: "coverage_client.csv",
+  };
+  const replayPath = replayNames[String(req.params.artifact || "").toLowerCase()]
+    ? groupedClientReplayArtifact(job, replayNames[String(req.params.artifact || "").toLowerCase()])
+    : "";
+  const artifactPath = path.resolve(replayPath || job.artifacts?.[definition[0]] || "");
   if (!isPathInside(GROUPED_PROTOTYPE_ROOT, artifactPath) || !existsSync(artifactPath)) {
     res.status(404).json({ error: "Grouped prototype artifact is not ready." });
     return;
@@ -4168,23 +4201,45 @@ app.get("/api/vcf-canon-matches/:jobId/grouped-prototype/cards", async (req, res
     res.status(403).json({ error: "Match belongs to a different client." });
     return;
   }
+  const replayPath = groupedClientReplayArtifact(job, "grouped_client_result_v1.json");
+  const clientPath = path.resolve(replayPath || job.artifacts?.groupedPrototypeClientJson || "");
+  if (clientPath && isPathInside(GROUPED_PROTOTYPE_ROOT, clientPath) && existsSync(clientPath)) {
+    const client = JSON.parse(await readFile(clientPath, "utf8"));
+    res.json(client.cards || []);
+    return;
+  }
   const cardsPath = path.resolve(job.artifacts?.groupedPrototypeCardsJson || "");
   if (!isPathInside(GROUPED_PROTOTYPE_ROOT, cardsPath) || !existsSync(cardsPath)) {
     res.status(404).json({ error: "Grouped prototype cards are not ready." });
     return;
   }
   const cards = JSON.parse(await readFile(cardsPath, "utf8"));
-  res.json(cards.map((card) => ({
-    ...card,
-    tier: String(card.module_id || "").startsWith("T1.") ? "T1" : "inactive",
-    client_visible: card.status === "valid",
-    experimental_canary: false,
-    interpretation: card.status === "valid" ? card : null,
-    input_completeness: { mode: card.input_completeness_mode || "observed_variants_only" },
-    focus_variant_count: (card.focus_variant_refs || []).length,
-    focus_variants: card.focus_variant_refs || [],
-    decision_reason: card.interpretation_one_sentence_es || "",
-  })));
+  res.json(projectLegacyCardsForClient(cards));
+});
+
+app.get("/api/vcf-canon-matches/:jobId/grouped-prototype/audit-summary", async (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "VCF-canon match job not found." });
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (!hasUploadAccessToken(req, upload)) return res.status(403).json({ error: "Match belongs to a different client." });
+  if (!requireCurationAccess(req, res)) return;
+  const cardsPath = path.resolve(job.artifacts?.groupedPrototypeCardsJson || "");
+  const cards = isPathInside(GROUPED_PROTOTYPE_ROOT, cardsPath) && existsSync(cardsPath)
+    ? JSON.parse(await readFile(cardsPath, "utf8")) : [];
+  res.json({
+    result: {
+      ...sanitizePublicResult(job.result || {}),
+      audit: sanitizePublicResult({
+        raw_card_count: cards.length,
+        legacy_audit_preserved: true,
+        telemetry_available: Boolean(
+          job.artifacts?.groupedPrototypeTelemetryCsv && existsSync(job.artifacts.groupedPrototypeTelemetryCsv)
+        ),
+        retry_queue_count: Number(job.result?.evidenceRefinement?.counts?.retryQueueRows || 0),
+        source_failures: job.result?.variantEnrichment?.qualityGate?.source_failures || [],
+      }),
+    },
+  });
 });
 
 app.post("/api/vcf-canon-matches/:jobId/curation/:kind", async (req, res) => {

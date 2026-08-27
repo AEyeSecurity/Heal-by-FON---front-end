@@ -1822,35 +1822,41 @@ function parseJsonArray(value) {
 }
 
 function Llm1GroupCard({ card, language, t }) {
+  const clientShape = Boolean(card.interpretation_es);
   const interpretation = card.interpretation || null;
   const suffix = language === "es" ? "es" : "en";
-  const oneSentence = interpretation?.[`interpretation_one_sentence_${suffix}`] || "";
-  const longText = interpretation?.[`interpretation_long_${suffix}`] || "";
+  const oneSentence = clientShape ? card.interpretation_es?.summary || "" : interpretation?.[`interpretation_one_sentence_${suffix}`] || "";
+  const longText = clientShape ? card.interpretation_es?.detail || "" : interpretation?.[`interpretation_long_${suffix}`] || "";
   const technical = interpretation?.[`technical_interpretation_${suffix}`] || "";
   const rationale = interpretation?.[`confidence_rationale_${suffix}`] || "";
   const familyNotes = interpretation?.[`family_notes_${suffix}`] || "";
   const nextStep = interpretation?.[`recommended_next_review_step_${suffix}`] || "";
-  const evidenceUsed = parseJsonArray(interpretation?.evidence_used);
-  const limitations = parseJsonArray(interpretation?.evidence_limitations);
-  const focusVariants = card.focus_variants || [];
+  const evidenceUsed = clientShape ? (card.evidence_summary?.sources || []) : parseJsonArray(interpretation?.evidence_used);
+  const limitations = clientShape ? (card.limitations_es || []) : parseJsonArray(interpretation?.evidence_limitations);
+  const focusVariants = clientShape ? (card.observed_variant_refs || []) : (card.focus_variants || []);
   const isUnavailable = ["quarantined", "technical_failure"].includes(card.status);
-  const isCoverageOnly = !interpretation;
+  const isCoverageOnly = clientShape ? card.status !== "valid" : !interpretation;
+  const statusLabel = clientShape
+    ? card.status === "valid" ? "Interpretación válida"
+      : card.status === "covered_no_observed_variant" ? "Cubierto sin variante foco observada"
+      : card.status === "not_covered_by_prototype_snapshot" ? "Fuera del snapshot" : "Resultado no disponible"
+    : card.status || card.coverage_status;
   return (
     <article className={`llm1-card llm1-card-${card.status || "unknown"}`}>
       <div className="llm1-card-heading">
         <div>
           <strong>{card.gene || card.group_id}</strong>
-          <span>{card.module_id} · {card.module_name || "-"}</span>
+          <span>{clientShape ? (card.module_name || "Módulo científico") : `${card.module_id} · ${card.module_name || "-"}`}</span>
         </div>
-        <span className="llm1-status-badge">{card.status || card.coverage_status}</span>
+        <span className="llm1-status-badge">{statusLabel}</span>
       </div>
       {card.experimental_canary && <p className="llm1-card-notice">{t.llm1CardsExperimentalNotice}</p>}
       {isUnavailable ? (
         <p className="error">{language === "es" ? "Resultado no disponible; el grupo fue aislado." : "Result unavailable; the group was isolated."}</p>
       ) : isCoverageOnly ? (
         <>
-          <p>{card.decision_reason}</p>
-          {card.input_completeness?.mode === "observed_variants_only" && card.focus_variant_count === 0 && (
+          <p>{clientShape ? card.interpretation_es?.summary : card.decision_reason}</p>
+          {(clientShape ? card.status === "covered_no_observed_variant" : card.input_completeness?.mode === "observed_variants_only" && card.focus_variant_count === 0) && (
             <p className="llm1-card-notice">{t.llm1CardsNotObserved}</p>
           )}
         </>
@@ -1858,10 +1864,10 @@ function Llm1GroupCard({ card, language, t }) {
         <>
           <p className="llm1-card-summary">{oneSentence}</p>
           <div className="llm1-card-metadata">
-            <span><b>{t.llm1CardsInference}:</b> {interpretation.inference_mode}</span>
-            <span><b>{t.llm1CardsConfidence}:</b> {interpretation.final_confidence_level}</span>
-            <span><b>{t.llm1CardsPriority}:</b> {interpretation.review_priority}</span>
-            <span><b>{t.llm1CardsCompleteness}:</b> {card.input_completeness?.mode || interpretation.input_completeness_mode}</span>
+            <span><b>{t.llm1CardsInference}:</b> {clientShape ? card.inference_mode_label_es : interpretation.inference_mode}</span>
+            <span><b>{t.llm1CardsConfidence}:</b> {clientShape ? card.scientific_confidence_label_es : interpretation.final_confidence_level}</span>
+            {clientShape && card.prioritization?.prioritized && <span><b>Resumen:</b> Hallazgo priorizado #{card.prioritization.rank}</span>}
+            <span><b>{t.llm1CardsCompleteness}:</b> {clientShape ? card.input_completeness_label_es : card.input_completeness?.mode || interpretation.input_completeness_mode}</span>
           </div>
           {longText && <p>{longText}</p>}
           <p className="llm1-card-disclaimer">{t.llm1CardsDisclaimer}</p>
@@ -1873,8 +1879,9 @@ function Llm1GroupCard({ card, language, t }) {
           <div>
             <h5>{t.llm1CardsEvidence}</h5>
             <p>{technical || card.deterministic_summary?.statement || "-"}</p>
-            {evidenceUsed.length > 0 && <pre>{JSON.stringify(evidenceUsed, null, 2)}</pre>}
-            {focusVariants.length > 0 && <pre>{JSON.stringify(focusVariants, null, 2)}</pre>}
+            {clientShape && evidenceUsed.length > 0 && <p>{evidenceUsed.join(", ")} ({card.evidence_summary?.record_count || 0} registros utilizados)</p>}
+            {!clientShape && evidenceUsed.length > 0 && <pre>{JSON.stringify(evidenceUsed, null, 2)}</pre>}
+            {focusVariants.length > 0 && <p><b>Variantes observadas:</b> {focusVariants.join(", ")}</p>}
           </div>
           <div>
             <h5>{t.llm1CardsLimitations}</h5>
@@ -1885,7 +1892,7 @@ function Llm1GroupCard({ card, language, t }) {
             {card.blocker_codes?.length > 0 && <p><b>Blockers:</b> {card.blocker_codes.join(", ")}</p>}
           </div>
         </div>
-        <pre>{JSON.stringify({
+        {!clientShape && <pre>{JSON.stringify({
           mechanism: card.curated_mechanism,
           conflicts: card.clinical_conflicts,
           gwas: card.gwas_context,
@@ -1893,7 +1900,7 @@ function Llm1GroupCard({ card, language, t }) {
           provenance: card.provenance,
           allowed_evidence_ids: card.allowed_evidence_ids,
           allowed_variant_refs: card.allowed_variant_refs,
-        }, null, 2)}</pre>
+        }, null, 2)}</pre>}
       </details>
     </article>
   );
@@ -1903,34 +1910,45 @@ function Llm1CardsPanel({ cards, loading, error, language, onLanguageChange, t }
   if (loading) return <p>{t.llm1CardsLoading}</p>;
   if (error) return <p className="error">{error}</p>;
   if (!cards?.length) return <p>{t.llm1CardsUnavailable}</p>;
-  const active = cards.filter((card) => card.client_visible === true || (card.interpretation && !card.experimental_canary));
+  const clientShape = cards.some((card) => card.interpretation_es);
+  const active = clientShape
+    ? cards.filter((card) => card.status === "valid")
+    : cards.filter((card) => card.client_visible === true || (card.interpretation && !card.experimental_canary));
   const experimental = cards.filter((card) => card.experimental_canary === true);
   const excluded = cards.filter((card) => !active.includes(card) && !experimental.includes(card));
-  const tier1 = cards.filter((card) => card.tier === "T1");
+  const noObserved = cards.filter((card) => card.status === "covered_no_observed_variant");
+  const uncovered = cards.filter((card) => card.status === "not_covered_by_prototype_snapshot");
+  const tier1 = clientShape ? cards : cards.filter((card) => card.tier === "T1");
   return (
     <div className="llm1-cards-panel">
       <div className="llm1-cards-toolbar">
         <div>
           <strong>{t.llm1CardsCoverage}</strong>
-          <span>{tier1.length} total · {active.length} active · {excluded.length} coverage-only</span>
+          <span>{clientShape
+            ? `${tier1.length} grupos · ${active.length} interpretaciones válidas · ${noObserved.length} cubiertos sin variante foco · ${uncovered.length} fuera del snapshot`
+            : `${tier1.length} total · ${active.length} active · ${excluded.length} coverage-only`}</span>
         </div>
-        <div className="llm1-language-switch" role="group" aria-label="LLM1 card language">
+        {!clientShape && <div className="llm1-language-switch" role="group" aria-label="LLM1 card language">
           <button type="button" className={language === "es" ? "active" : ""} onClick={() => onLanguageChange("es")}>ES</button>
           <button type="button" className={language === "en" ? "active" : ""} onClick={() => onLanguageChange("en")}>EN</button>
-        </div>
+        </div>}
       </div>
       {active.length > 0 && <><h4>{t.llm1CardsActive}</h4><div className="llm1-cards-grid">{active.map((card) => <Llm1GroupCard key={card.group_id} card={card} language={language} t={t} />)}</div></>}
       {experimental.length > 0 && <><h4>{t.llm1CardsExperimental}</h4><div className="llm1-cards-grid">{experimental.map((card) => <Llm1GroupCard key={card.group_id} card={card} language={language} t={t} />)}</div></>}
       <details className="llm1-coverage-details">
-        <summary>{t.llm1CardsExcluded} ({excluded.length})</summary>
+        <summary>{clientShape ? `Cobertura sin interpretación individual (${excluded.length})` : `${t.llm1CardsExcluded} (${excluded.length})`}</summary>
         <div className="llm1-cards-grid compact">{excluded.map((card) => <Llm1GroupCard key={card.group_id} card={card} language={language} t={t} />)}</div>
       </details>
     </div>
   );
 }
 
-function MatchResultPanel({ result, locale, t }) {
+function MatchResultPanel({ result: sourceResult, locale, t }) {
   const [downloadError, setDownloadError] = useState(null);
+  const [auditMode, setAuditMode] = useState(false);
+  const [auditResult, setAuditResult] = useState(null);
+  const [auditError, setAuditError] = useState(null);
+  const result = auditMode && auditResult ? auditResult : sourceResult;
   const [llm1Cards, setLlm1Cards] = useState([]);
   const [llm1CardsLoading, setLlm1CardsLoading] = useState(false);
   const [llm1CardsError, setLlm1CardsError] = useState(null);
@@ -2185,18 +2203,37 @@ function MatchResultPanel({ result, locale, t }) {
         [t.globalInterpretationLanguage, finalReport.language_mode || "-"],
       ]
     : [];
-  const groupedPrototypeCards = groupedPrototype.status
+  const clientCoverage = groupedPrototype.coverage || {};
+  const groupedPrototypeCards = (groupedPrototype.status || clientCoverage.canonical_group_count)
     ? [
-        [t.groupedPrototypeStatus, groupedPrototype.status],
-        [t.groupedPrototypeCovered, formatNumber(groupedPrototype.counts?.scientifically_covered, locale)],
-        [t.groupedPrototypeObserved, formatNumber(groupedPrototype.counts?.covered_with_observed_variant, locale)],
-        [t.groupedPrototypeNoObserved, formatNumber(groupedPrototype.counts?.covered_no_observed_variant, locale)],
-        [t.groupedPrototypeValid, formatNumber(groupedPrototype.counts?.valid_llm1_cards, locale)],
-        [t.groupedPrototypeQuarantined, formatNumber(groupedPrototype.counts?.quarantined, locale)],
-        [t.groupedPrototypeNotCovered, formatNumber(groupedPrototype.counts?.not_covered, locale)],
-        [t.groupedPrototypeCost, `$${Number(groupedPrototype.telemetry?.estimated_cost_usd || 0).toFixed(4)} USD`],
+        [locale?.startsWith("es") ? "Grupos totales" : "Total groups", formatNumber(clientCoverage.canonical_group_count ?? groupedPrototype.counts?.canonical_groups, locale)],
+        [t.groupedPrototypeCovered, formatNumber(clientCoverage.scientifically_covered_count ?? groupedPrototype.counts?.scientifically_covered, locale)],
+        [t.groupedPrototypeValid, formatNumber(clientCoverage.valid_interpretation_count ?? groupedPrototype.counts?.valid_llm1_cards, locale)],
+        [t.groupedPrototypeNoObserved, formatNumber(clientCoverage.covered_no_observed_variant_count ?? groupedPrototype.counts?.covered_no_observed_variant, locale)],
+        [t.groupedPrototypeNotCovered, formatNumber(clientCoverage.not_covered_count ?? groupedPrototype.counts?.not_covered, locale)],
+        [locale?.startsWith("es") ? "Hallazgos priorizados" : "Prioritized findings", formatNumber(clientCoverage.prioritized_finding_count ?? groupedPrototype.counts?.prioritized_finding_count, locale)],
       ]
     : [];
+
+  async function enableAuditMode() {
+    const token = window.prompt("Internal scientific curation token");
+    if (!token) return;
+    setAuditError(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/vcf-canon-matches/${sourceResult.jobId}/grouped-prototype/audit-summary`, {
+        headers: { "X-HEAL-Curation-Token": token, ...accessHeaders(sourceResult.accessToken || getJobAccessToken(sourceResult.jobId)) },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "No se pudo abrir la auditoría técnica.");
+      setAuditResult({
+        ...(payload.result || {}), jobId: sourceResult.jobId, accessToken: sourceResult.accessToken,
+        artifactsReady: sourceResult.artifactsReady, updatedAt: sourceResult.updatedAt,
+      });
+      setAuditMode(true);
+    } catch (error) {
+      setAuditError(error.message || String(error));
+    }
+  }
 
   async function downloadCsv(endpoint, fallbackName) {
     if (!result.jobId) return;
@@ -2637,6 +2674,51 @@ function MatchResultPanel({ result, locale, t }) {
     await downloadCsv(`/api/vcf-canon-matches/${result.jobId}/debug/${artifact}`, fallbackName);
   }
 
+  if (groupedPrototypeCards.length > 0 && !auditMode) {
+    return (
+      <section className="result-panel grouped-client-view">
+        <div className="result-heading">
+          <CheckCircle2 size={22} />
+          <div>
+            <h2>{locale?.startsWith("es") ? "Resultados del prototipo HEAL" : "HEAL prototype results"}</h2>
+            {fileLabel && <p>{fileLabel}</p>}
+          </div>
+          <button className="secondary-button" type="button" onClick={enableAuditMode}>
+            {locale?.startsWith("es") ? "Auditoría técnica" : "Technical audit"}
+          </button>
+        </div>
+        {auditError && <p className="error">{auditError}</p>}
+        <p className="llm1-card-notice">
+          <b>{groupedPrototype.processing?.label_es || "Procesamiento completado"}.</b>{" "}
+          {groupedPrototype.externalEvidence?.label_es || "La disponibilidad de fuentes externas quedó registrada para esta ejecución"}.
+        </p>
+        <p className="llm1-card-notice">
+          {locale?.startsWith("es")
+            ? "Prototipo de desarrollo. La validación formal permanece pendiente de un nuevo holdout independiente."
+            : "Development prototype. Formal validation remains pending a new independent holdout."}
+        </p>
+        <div className="metrics-grid">
+          {groupedPrototypeCards.map(([label, value]) => <MetricCard label={label} value={value} key={label} />)}
+        </div>
+        <h3 className="result-subtitle">{t.llm1CardsTitle}</h3>
+        <Llm1CardsPanel
+          cards={llm1Cards}
+          loading={llm1CardsLoading}
+          error={llm1CardsError}
+          language={llm1CardLanguage}
+          onLanguageChange={setLlm1CardLanguage}
+          t={t}
+        />
+        <div className="match-download-actions">
+          {artifactReady.groupedPrototypePdf && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("pdf", "HEAL_prototipo_cliente.pdf")}><Download size={17} />{t.groupedPrototypePdf}</button>}
+          {artifactReady.groupedPrototypeDocx && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("docx", "HEAL_prototipo_cliente.docx")}><Download size={17} />{t.groupedPrototypeDocx}</button>}
+          {artifactReady.groupedPrototypeCards && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("cards", "HEAL_prototipo_tarjetas.csv")}><Download size={17} />{t.groupedPrototypeCardsDownload}</button>}
+          {artifactReady.groupedPrototype && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("coverage", "HEAL_prototipo_cobertura.csv")}><Download size={17} />{t.groupedPrototypeCoverageDownload}</button>}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="result-panel">
       <div className="result-heading">
@@ -2645,6 +2727,9 @@ function MatchResultPanel({ result, locale, t }) {
           <h2>{t.matchTitle}</h2>
           {fileLabel && <p>{fileLabel}</p>}
         </div>
+        {auditMode && <button className="secondary-button" type="button" onClick={() => setAuditMode(false)}>
+          {locale?.startsWith("es") ? "Volver a vista cliente" : "Back to client view"}
+        </button>}
       </div>
       <div className="metrics-grid">
         {cards.map(([label, value]) => (
@@ -2732,6 +2817,28 @@ function MatchResultPanel({ result, locale, t }) {
             ))}
           </div>
         </>
+      )}
+      {auditMode && result.audit && (
+        <section className="audit-summary-panel" aria-label="Resumen de auditoría técnica">
+          <h3 className="result-subtitle">Auditoría técnica sanitizada</h3>
+          <p className="llm1-card-notice">
+            Esta vista requiere ambos tokens. Expone métricas operativas sanitizadas; no incluye secretos,
+            rutas internas, headers, cuerpos de proveedores ni respuestas OpenAI crudas.
+          </p>
+          <div className="metrics-grid">
+            <MetricCard label="Tarjetas crudas preservadas" value={formatNumber(result.audit.raw_card_count || 0, locale)} />
+            <MetricCard label="Telemetría disponible" value={result.audit.telemetry_available ? "Sí" : "No"} />
+            <MetricCard label="Pendientes de retry" value={formatNumber(result.audit.retry_queue_count || 0, locale)} />
+            <MetricCard label="Llamadas registradas" value={formatNumber(groupedPrototype.telemetry?.calls || 0, locale)} />
+            <MetricCard label="Costo estimado" value={`USD ${Number(groupedPrototype.telemetry?.estimated_cost_usd || 0).toFixed(4)}`} />
+          </div>
+          {(result.audit.source_failures || []).length > 0 && (
+            <div className="llm1-card-notice">
+              <strong>Disponibilidad de fuentes</strong>
+              {(result.audit.source_failures || []).map((item) => <p key={item}>{item}</p>)}
+            </div>
+          )}
+        </section>
       )}
       {llm1CanaryGroups.length > 0 && (
         <>
