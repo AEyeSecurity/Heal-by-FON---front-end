@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "grouped_client_result_v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "processing", "external_evidence_availability", "coverage", "cards", "prototype_label", "formal_validation_label_es", "formal_validation_readiness"],
+  "properties": {
+    "schema_version": {"const": "grouped_client_result_v1"},
+    "processing": {"type": "object"},
+    "external_evidence_availability": {"type": "object"},
+    "coverage": {"type": "object"},
+    "cards": {"type": "array", "items": {"type": "object"}},
+    "prototype_label": {"type": "string", "minLength": 1},
+    "formal_validation_label_es": {"type": "string", "minLength": 1},
+    "formal_validation_readiness": {"const": "pending_new_unseen_holdout"}
+  }
+}

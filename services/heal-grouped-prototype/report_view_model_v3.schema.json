@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "report_view_model_v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "title", "prototype_label", "processing_status", "external_evidence_availability", "summary", "coverage_statement", "coverage", "modules", "primary_findings", "secondary_findings", "valid_interpretation_count", "prioritized_finding_count", "limitations", "cannot_infer", "disclaimer", "readiness"],
+  "properties": {
+    "schema_version": {"const": "report_view_model_v3"},
+    "source_file_name": {"type": "string"},
+    "title": {"type": "string", "minLength": 1},
+    "prototype_label": {"type": "string", "minLength": 1},
+    "processing_status": {"type": "object"},
+    "external_evidence_availability": {"type": "object"},
+    "summary": {"type": "string", "minLength": 1},
+    "coverage_statement": {"type": "string", "minLength": 1},
+    "coverage": {"type": "object"},
+    "modules": {"type": "array", "minItems": 6, "maxItems": 6, "items": {"type": "object"}},
+    "primary_findings": {"type": "array", "items": {"type": "object"}},
+    "secondary_findings": {"type": "array", "items": {"type": "object"}},
+    "valid_interpretation_count": {"type": "integer", "minimum": 0},
+    "prioritized_finding_count": {"type": "integer", "minimum": 0},
+    "limitations": {"type": "array", "items": {"type": "string"}},
+    "cannot_infer": {"type": "array", "items": {"type": "string"}},
+    "disclaimer": {"type": "string", "minLength": 1},
+    "readiness": {"type": "object"}
+  }
+}

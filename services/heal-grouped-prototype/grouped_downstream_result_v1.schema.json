@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "grouped_downstream_result_v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "processing", "external_evidence_availability", "coverage", "input_completeness", "cards", "formal_validation_readiness"],
+  "properties": {
+    "schema_version": {"const": "grouped_downstream_result_v1"},
+    "processing": {"type": "object"},
+    "external_evidence_availability": {"type": "object"},
+    "coverage": {"type": "object"},
+    "input_completeness": {"type": "object"},
+    "cards": {"type": "array", "items": {"type": "object"}},
+    "formal_validation_readiness": {"const": "pending_new_unseen_holdout"}
+  }
+}
