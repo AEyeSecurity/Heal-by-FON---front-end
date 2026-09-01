@@ -19,6 +19,16 @@ LEGACY_AUTHORITY = re.compile(
     r"mechanism\s+not\s+usable)\b",
     re.I,
 )
+# Historical registry wording can appear in otherwise useful sentences.  It is
+# not scientific evidence and must never be carried into the normalized
+# downstream contract.  We replace these clauses with the signed decision's
+# effective ceiling instead of dropping the surrounding evidence statement.
+LEGACY_WORDING = re.compile(
+    r"\b(?:draft|withheld|borrador|retenido|legacy|histórico|historical)\b|"
+    r"\b(?:mechanism|mecanismo|registry|registro|payload)\s+(?:status|estado|registry|registro|mechanism|mecanismo|payload|is|es|está|esta)\b|"
+    r"\b(?:status|estado)\s+(?:of\s+the\s+)?(?:mechanism|mecanismo|registry|registro)\b",
+    re.I,
+)
 SOURCE_FAILURE = re.compile(
     r"\b(?:source[_\s-]?error|provider\s+error|returned\s+(?:a\s+)?(?:provider\s+)?error|"
     r"fall(?:o|ó|os)\s+(?:de\s+)?(?:la\s+)?fuente|errores?\s+de\s+fuente|pharmgkb\s+(?:queries?\s+)?(?:had|returned|tuvo|tuvieron|fall(?:o|ó)))\b",
@@ -57,9 +67,52 @@ def _sentences(value: str) -> list[str]:
     return [item.strip() for item in SENTENCE_SPLIT.split(str(value or "").strip()) if item.strip()]
 
 
-def clean_authoritative_text(value: str) -> str:
+def clean_authoritative_text(
+    value: str,
+    *,
+    effective_ceiling: str | None = None,
+) -> str:
     """Remove sentences whose authority is solely a historical registry state."""
-    cleaned = " ".join(sentence for sentence in _sentences(value) if not LEGACY_AUTHORITY.search(sentence)).strip()
+    ceiling = effective_ceiling or "context_only"
+    replacement_es = (
+        "La decisión científica firmada limita la interpretación a contexto_only"
+        if ceiling == "context_only" else
+        "La decisión científica firmada permite una guía inicial acotada"
+        if ceiling == "initial_guide_candidate" else
+        "La decisión científica firmada no permite inferencia individual"
+    )
+    replacement_en = (
+        "The signed scientific decision limits the interpretation to context_only"
+        if ceiling == "context_only" else
+        "The signed scientific decision permits a limited initial guide"
+        if ceiling == "initial_guide_candidate" else
+        "The signed scientific decision does not permit individual inference"
+    )
+    sentences: list[str] = []
+    for sentence in _sentences(value):
+        if LEGACY_WORDING.search(sentence):
+            # Remove only the authority-bearing clause.  This keeps useful
+            # evidence from mixed sentences while avoiding malformed remnants
+            # such as "The." when the clause starts the sentence.
+            is_english = bool(re.search(r"\b(?:the|mechanism|legacy|payload|withheld|draft)\b", sentence, re.I))
+            clause = re.compile(
+                r"(?:,?\s*(?:and\s+)?(?:the\s+)?(?:mechanism|registry|payload)\s+(?:registry\s+)?(?:status|state|is|was|not\s+usable)[^.]*?(?:draft|withheld|legacy)[^.]*)|"
+                r"(?:,?\s*(?:the\s+)?(?:mechanism|registry)\s+(?:status|state|registry)?[^.]*?(?:draft|withheld|legacy)[^.]*)|"
+                r"(?:,?\s*(?:el\s+)?(?:estado\s+del\s+registro\s+)?(?:mecanismo|registro\s+mecanístico|registro)\s+(?:es|está|esta|en)?[^.]*?(?:draft|withheld|borrador|retenido)[^.]*)|"
+                r"(?:,?\s*(?:legacy\s+payload|legacy\s+mechanism|mecanismo\s+legacy)[^.]*)",
+                re.I,
+            )
+            remainder = clause.sub("", sentence).strip(" ,;:")
+            remainder = re.sub(r"\s{2,}", " ", remainder)
+            if remainder and remainder.lower() not in {"the", "el", "la", "status", "estado"} and not LEGACY_WORDING.search(remainder):
+                sentences.append(remainder)
+            else:
+                sentences.append(replacement_en if is_english else replacement_es)
+            continue
+        if LEGACY_AUTHORITY.search(sentence):
+            continue
+        sentences.append(sentence)
+    cleaned = " ".join(sentences).strip()
     replacements = (
         (r"\bnot_reported\b", "sin clasificación reportada"),
         (r"\bbenigna_o_probablemente_benigna\b", "benigna o probablemente benigna"),
@@ -103,6 +156,7 @@ def _clean_evidence(rows: list[dict]) -> list[dict]:
 
 def normalize_card(card: dict, prioritized: dict[str, int] | None = None) -> dict:
     priorities = prioritized or {}
+    effective_ceiling = card.get("effective_runtime_ceiling") or card.get("scientific_inference_ceiling") or "context_only"
     limitations, limitation_flags = _clean_limitations(card.get("evidence_limitations") or [])
     rank = priorities.get(str(card.get("group_id") or ""))
     return {
@@ -125,16 +179,16 @@ def normalize_card(card: dict, prioritized: dict[str, int] | None = None) -> dic
         "evidence_used": _clean_evidence(card.get("evidence_used") or []),
         "evidence_limitations": limitations,
         "limitation_flags": limitation_flags,
-        "interpretation_one_sentence_es": clean_authoritative_text(card.get("interpretation_one_sentence_es") or ""),
-        "interpretation_one_sentence_en": clean_authoritative_text(card.get("interpretation_one_sentence_en") or ""),
-        "interpretation_long_es": clean_authoritative_text(card.get("interpretation_long_es") or ""),
-        "interpretation_long_en": clean_authoritative_text(card.get("interpretation_long_en") or ""),
-        "technical_interpretation_es": clean_authoritative_text(card.get("technical_interpretation_es") or ""),
-        "technical_interpretation_en": clean_authoritative_text(card.get("technical_interpretation_en") or ""),
-        "confidence_rationale_es": clean_authoritative_text(card.get("confidence_rationale_es") or ""),
-        "confidence_rationale_en": clean_authoritative_text(card.get("confidence_rationale_en") or ""),
-        "family_notes_es": clean_authoritative_text(card.get("family_notes_es") or ""),
-        "family_notes_en": clean_authoritative_text(card.get("family_notes_en") or ""),
+        "interpretation_one_sentence_es": clean_authoritative_text(card.get("interpretation_one_sentence_es") or "", effective_ceiling=effective_ceiling),
+        "interpretation_one_sentence_en": clean_authoritative_text(card.get("interpretation_one_sentence_en") or "", effective_ceiling=effective_ceiling),
+        "interpretation_long_es": clean_authoritative_text(card.get("interpretation_long_es") or "", effective_ceiling=effective_ceiling),
+        "interpretation_long_en": clean_authoritative_text(card.get("interpretation_long_en") or "", effective_ceiling=effective_ceiling),
+        "technical_interpretation_es": clean_authoritative_text(card.get("technical_interpretation_es") or "", effective_ceiling=effective_ceiling),
+        "technical_interpretation_en": clean_authoritative_text(card.get("technical_interpretation_en") or "", effective_ceiling=effective_ceiling),
+        "confidence_rationale_es": clean_authoritative_text(card.get("confidence_rationale_es") or "", effective_ceiling=effective_ceiling),
+        "confidence_rationale_en": clean_authoritative_text(card.get("confidence_rationale_en") or "", effective_ceiling=effective_ceiling),
+        "family_notes_es": clean_authoritative_text(card.get("family_notes_es") or "", effective_ceiling=effective_ceiling),
+        "family_notes_en": clean_authoritative_text(card.get("family_notes_en") or "", effective_ceiling=effective_ceiling),
         "prioritization": {"prioritized": rank is not None, "rank": rank},
     }
 

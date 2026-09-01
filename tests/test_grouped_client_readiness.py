@@ -93,6 +93,13 @@ class GroupedClientReadinessTests(unittest.TestCase):
         self.assertRegex(original.lower(), r"draft|legacy")
         self.assertNotRegex(clean.lower(), r"mechanism registry status is draft|legacy mechanism|legacy payload|registro del mecanismo está en borrador")
 
+    def test_every_normalized_downstream_card_is_free_of_legacy_authority(self):
+        downstream = CLIENT.build_downstream_result(self.cards, self.coverage, self.llm2, external_evidence_partial=True)
+        serialized = json.dumps(downstream, ensure_ascii=False).lower()
+        for forbidden in ("draft", "withheld", "legacy", "mechanism registry", "legacy payload"):
+            self.assertNotIn(forbidden, serialized)
+        self.assertEqual(len(downstream["cards"]), 180)
+
     def test_source_failure_and_unresolved_identity_become_safe_limitations(self):
         downstream = CLIENT.build_downstream_result(self.cards, self.coverage, self.llm2, external_evidence_partial=True)
         client = CLIENT.build_client_result(downstream)
