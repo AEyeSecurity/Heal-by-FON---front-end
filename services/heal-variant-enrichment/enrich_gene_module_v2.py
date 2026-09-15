@@ -33,13 +33,17 @@ import enrich_observed_variants as legacy
 
 PIPELINE_VERSION = "gene-module-v2-enrichment-2"
 RESUME_CONTRACT_VERSION = "enrichment-resume-manifest-v1"
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
+QUERY_CONTRACT_VERSION = "public-query-contract-v1"
 DEFAULT_MIN_VEP_COVERAGE = 0.90
 VEP_URL = "https://rest.ensembl.org/vep/human/region"
 VEP_INFO_URL = "https://rest.ensembl.org/info/data"
 VEP_BATCH_SIZE = 200
 DEFAULT_TIMEOUT_SECONDS = 30
-DEFAULT_CACHE_TTL_DAYS = 14
+# Successful public annotations are reusable until their query contract changes.
+# Negative and failed attempts are retained only as audit events and are never
+# cache hits, so a later provider response can improve a prior result.
+DEFAULT_CACHE_TTL_DAYS = 0
 DEFAULT_SECONDARY_WORKERS = 4
 SOURCE_WORKERS = {
     "ensembl_variation": 4,
@@ -230,9 +234,29 @@ class EnrichmentCache:
                     http_status INTEGER,
                     retry_after TEXT NOT NULL DEFAULT '',
                     fetched_at TEXT NOT NULL,
-                    expires_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL DEFAULT '',
                     pipeline_version TEXT NOT NULL,
-                    PRIMARY KEY (assembly, variant_key, source, query_mode)
+                    query_contract_version TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (assembly, variant_key, source, query_mode, request_fingerprint)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS enrichment_cache_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    assembly TEXT NOT NULL,
+                    variant_key TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    query_mode TEXT NOT NULL,
+                    request_fingerprint TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    status_reason TEXT NOT NULL DEFAULT '',
+                    http_status INTEGER,
+                    retry_after TEXT NOT NULL DEFAULT '',
+                    attempted_at TEXT NOT NULL,
+                    pipeline_version TEXT NOT NULL,
+                    query_contract_version TEXT NOT NULL
                 )
                 """
             )
@@ -262,6 +286,22 @@ class EnrichmentCache:
             if legacy_connection is not None:
                 legacy_connection.close()
                 self._legacy_connections.connection = None
+
+    def metrics(self) -> dict:
+        """Internal operational metrics; no user or patient fields are stored."""
+        connection = self.thread_connection()
+        with self._lock:
+            successes = connection.execute("SELECT COUNT(*) FROM enrichment_cache WHERE status = 'success'").fetchone()[0]
+            attempts = connection.execute("SELECT COUNT(*) FROM enrichment_cache_attempts").fetchone()[0]
+        size_bytes = self.path.stat().st_size if self.path.exists() else 0
+        return {
+            "cache_schema_version": CACHE_SCHEMA_VERSION,
+            "query_contract_version": QUERY_CONTRACT_VERSION,
+            "success_entries": successes,
+            "nonreusable_attempt_entries": attempts,
+            "size_bytes": size_bytes,
+            "success_ttl": "none",
+        }
 
     def legacy_connection(self) -> sqlite3.Connection | None:
         if not self.legacy_path or not self.legacy_path.exists():
@@ -295,12 +335,9 @@ class EnrichmentCache:
             ).fetchone()
         except sqlite3.Error:
             return None
-        if not row or row["status"] == "source_error" or row["request_fingerprint"] not in fingerprints:
+        if not row or row["status"] != "success" or row["request_fingerprint"] not in fingerprints:
             return None
         try:
-            expires_at = dt.datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
-            if expires_at <= dt.datetime.now(dt.UTC):
-                return None
             payload = json.loads(row["response_json"])
         except (ValueError, json.JSONDecodeError, TypeError):
             return None
@@ -326,45 +363,42 @@ class EnrichmentCache:
         legacy_fingerprint: str | None = None,
     ) -> dict | None:
         connection = connection or self.thread_connection()
-        reused_legacy_fingerprint = False
         with self._lock:
             row = connection.execute(
                 """SELECT response_json, status, status_reason, http_status, retry_after, fetched_at, expires_at,
                           query_mode, identity_fingerprint
                    FROM enrichment_cache
-                   WHERE assembly = ? AND variant_key = ? AND source = ? AND query_mode = ? AND request_fingerprint = ?""",
-                (assembly, variant_key, source, query_mode, fingerprint),
+                   WHERE assembly = ? AND variant_key = ? AND source = ? AND query_mode = ?
+                     AND request_fingerprint = ? AND query_contract_version = ?""",
+                (assembly, variant_key, source, query_mode, fingerprint, QUERY_CONTRACT_VERSION),
             ).fetchone()
-            if not row and legacy_fingerprint:
-                row = connection.execute(
-                    """SELECT response_json, status, status_reason, http_status, retry_after, fetched_at, expires_at,
-                              query_mode, identity_fingerprint
-                       FROM enrichment_cache
-                       WHERE assembly = ? AND variant_key = ? AND source = ? AND query_mode = ? AND request_fingerprint = ?""",
-                    (assembly, variant_key, source, query_mode, legacy_fingerprint),
-                ).fetchone()
-                reused_legacy_fingerprint = bool(row)
         if not row:
-            return self.legacy_get(
+            migrated = self.legacy_get(
                 assembly,
                 variant_key,
                 source,
                 [value for value in [legacy_fingerprint, fingerprint] if value],
                 query_mode,
             )
-        if row["status"] == "source_error":
+            if migrated:
+                self.put(
+                    assembly, variant_key, source, fingerprint, migrated["payload"], "success",
+                    migrated.get("http_status"), query_mode=query_mode,
+                    identity_fingerprint=migrated.get("identity_fingerprint") or "",
+                    status_reason="v2_success_migrated",
+                )
+                migrated["status_reason"] = "v2_success_migrated"
+            return migrated
+        if row["status"] != "success":
             return None
         try:
-            expires_at = dt.datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
-            if expires_at <= dt.datetime.now(dt.UTC):
-                return None
             payload = json.loads(row["response_json"])
         except (ValueError, json.JSONDecodeError):
             return None
         return {
             "payload": payload,
             "status": row["status"],
-            "status_reason": "legacy_fingerprint_cache_reused" if reused_legacy_fingerprint else row["status_reason"],
+            "status_reason": row["status_reason"],
             "http_status": row["http_status"],
             "retry_after": row["retry_after"],
             "fetched_at": row["fetched_at"],
@@ -389,7 +423,23 @@ class EnrichmentCache:
         retry_after: str = "",
     ) -> None:
         fetched_at = dt.datetime.now(dt.UTC)
-        ttl = dt.timedelta(hours=1) if status == "source_error" else self.ttl
+        if status != "success":
+            connection = connection or self.thread_connection()
+            with self._lock:
+                connection.execute(
+                    """INSERT INTO enrichment_cache_attempts
+                       (assembly, variant_key, source, query_mode, request_fingerprint, status,
+                        status_reason, http_status, retry_after, attempted_at, pipeline_version, query_contract_version)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        assembly, variant_key, source, query_mode, fingerprint, status, status_reason,
+                        http_status, retry_after,
+                        fetched_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                        PIPELINE_VERSION, QUERY_CONTRACT_VERSION,
+                    ),
+                )
+                connection.commit()
+            return
         values = (
             assembly,
             variant_key,
@@ -403,8 +453,9 @@ class EnrichmentCache:
             http_status,
             retry_after,
             fetched_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-            (fetched_at + ttl).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "",
             PIPELINE_VERSION,
+            QUERY_CONTRACT_VERSION,
         )
         connection = connection or self.thread_connection()
         for attempt in range(4):
@@ -413,10 +464,10 @@ class EnrichmentCache:
                     connection.execute(
                         """INSERT INTO enrichment_cache
                            (assembly, variant_key, source, query_mode, request_fingerprint, identity_fingerprint,
-                            response_json, status, status_reason, http_status, retry_after, fetched_at, expires_at, pipeline_version)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                           ON CONFLICT(assembly, variant_key, source, query_mode) DO UPDATE SET
-                             request_fingerprint=excluded.request_fingerprint,
+                            response_json, status, status_reason, http_status, retry_after, fetched_at, expires_at, pipeline_version,
+                            query_contract_version)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           ON CONFLICT(assembly, variant_key, source, query_mode, request_fingerprint) DO UPDATE SET
                              identity_fingerprint=excluded.identity_fingerprint,
                              response_json=excluded.response_json,
                              status=excluded.status,
@@ -425,7 +476,8 @@ class EnrichmentCache:
                              retry_after=excluded.retry_after,
                              fetched_at=excluded.fetched_at,
                              expires_at=excluded.expires_at,
-                             pipeline_version=excluded.pipeline_version""",
+                             pipeline_version=excluded.pipeline_version,
+                             query_contract_version=excluded.query_contract_version""",
                         values,
                     )
                     connection.commit()
@@ -515,7 +567,11 @@ def fetch_vep_batch(batch: list[dict], assembly: str, cache: EnrichmentCache, ti
     misses: list[dict] = []
     cache_hits = 0
     for variant in batch:
-        request_payload = {"variant": vep_region_line(variant), "params": VEP_PARAMS}
+        request_payload = {
+            "variant": vep_region_line(variant),
+            "params": VEP_PARAMS,
+            "query_contract": QUERY_CONTRACT_VERSION,
+        }
         cached = cache.get(
             assembly,
             variant["variant_key"],
@@ -560,7 +616,11 @@ def fetch_vep_batch(batch: list[dict], assembly: str, cache: EnrichmentCache, ti
             assembly,
             variant["variant_key"],
             "ensembl_vep_region",
-            fingerprint({"variant": vep_region_line(variant), "params": VEP_PARAMS}),
+            fingerprint({
+                "variant": vep_region_line(variant),
+                "params": VEP_PARAMS,
+                "query_contract": QUERY_CONTRACT_VERSION,
+            }),
             item,
             status,
             http_status,
@@ -1097,7 +1157,12 @@ def cached_secondary(
     *,
     query_mode: str = "exact_rsid",
 ) -> tuple[dict, str, bool, str, str, float]:
-    request = {"identifier": identifier, "source": source, "query_mode": query_mode, "pipeline": PIPELINE_VERSION}
+    request = {
+        "identifier": identifier,
+        "source": source,
+        "query_mode": query_mode,
+        "query_contract": QUERY_CONTRACT_VERSION,
+    }
     key = fingerprint(request)
     legacy_key = fingerprint({"rsid": identifier, "source": source, "pipeline": "gene-module-v2-enrichment-1"})
     started = time.perf_counter()
@@ -1302,7 +1367,7 @@ def resolve_coordinate_variants(
             "region": coordinate_region(variant),
             "ref": clean(variant.get("ref_vcf")),
             "alt": clean(variant.get("alt_vcf")),
-            "pipeline": PIPELINE_VERSION,
+            "query_contract": QUERY_CONTRACT_VERSION,
         }
         key = fingerprint(request)
         cached = cache.get(assembly, variant["variant_key"], "ensembl_variation", key, query_mode="coordinate")
@@ -1397,7 +1462,12 @@ def resolve_myvariant_coordinate_variants(
     started = time.perf_counter()
 
     def resolve_one(variant: dict) -> dict:
-        request = {"assembly": assembly, "variant_key": variant["variant_key"], "query": myvariant_coordinate_hgvs(variant), "pipeline": PIPELINE_VERSION}
+        request = {
+            "assembly": assembly,
+            "variant_key": variant["variant_key"],
+            "query": myvariant_coordinate_hgvs(variant),
+            "query_contract": QUERY_CONTRACT_VERSION,
+        }
         key = fingerprint(request)
         cached = cache.get(assembly, variant["variant_key"], "myvariant", key, query_mode="coordinate")
         if cached:
@@ -1479,7 +1549,12 @@ def fetch_clinvar_coordinate_variants(
     started = time.perf_counter()
 
     def fetch_one(variant: dict) -> dict:
-        request = {"assembly": assembly, "variant_key": variant["variant_key"], "query": f"{variant.get('chrom_vcf')}:{variant.get('pos_vcf')}:{variant.get('ref_vcf')}>{variant.get('alt_vcf')}", "pipeline": PIPELINE_VERSION}
+        request = {
+            "assembly": assembly,
+            "variant_key": variant["variant_key"],
+            "query": f"{variant.get('chrom_vcf')}:{variant.get('pos_vcf')}:{variant.get('ref_vcf')}>{variant.get('alt_vcf')}",
+            "query_contract": QUERY_CONTRACT_VERSION,
+        }
         key = fingerprint(request)
         cached = cache.get(assembly, variant["variant_key"], "clinvar", key, query_mode="coordinate")
         if cached:
@@ -2215,6 +2290,7 @@ def main_process(payload: dict) -> dict:
         "secondary": secondary_metrics,
         "secondaryWallSeconds": secondary_metrics.get("wall_seconds", 0),
         "resolutionCounts": resolution_counts,
+        "globalCache": cache.metrics(),
     }
     performance_path = output_dir / "enrichment_performance_summary.json"
     write_json(performance_path, performance)

@@ -68,6 +68,16 @@ class V2EvidenceRefinementTests(unittest.TestCase):
             self.assertTrue(result["cache_hit"])
             cache.close()
 
+    def test_not_found_refinement_response_is_not_reused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = refinement.RefinementCache(Path(temporary) / "cache-v2.sqlite")
+            url = "https://example.test/not-found"
+            cache.put("gwas", "fixture", url, "{}", "not_found", "no_record", 404)
+            self.assertIsNone(cache.get("gwas", "fixture", url))
+            attempts = cache.connection.execute("SELECT status FROM evidence_refinement_cache_attempts").fetchall()
+            cache.close()
+        self.assertEqual([row[0] for row in attempts], ["not_found"])
+
     def test_clinpgx_empty_responses_are_not_reported_as_success(self):
         class EmptyClient:
             @staticmethod

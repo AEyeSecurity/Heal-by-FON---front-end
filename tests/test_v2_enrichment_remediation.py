@@ -397,6 +397,24 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
             self.assertIsNone(cache.get("GRCh38", "v2_error", "clinvar", "fingerprint"))
             cache.close()
 
+    def test_not_found_is_audited_but_never_a_global_cache_hit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cache_path = Path(temporary) / "enrichment_cache_v3.sqlite"
+            cache = enrichment.EnrichmentCache(cache_path, ttl_days=1)
+            cache.put("GRCh38", "v2_missing", "clinvar", "same-query", {}, "not_found", 404)
+            self.assertIsNone(cache.get("GRCh38", "v2_missing", "clinvar", "same-query"))
+            attempts = cache.thread_connection().execute("SELECT status FROM enrichment_cache_attempts").fetchall()
+            cache.close()
+        self.assertEqual([row[0] for row in attempts], ["not_found"])
+
+    def test_success_is_reused_across_jobs_for_the_same_query_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = enrichment.EnrichmentCache(Path(temporary) / "enrichment_cache_v3.sqlite", ttl_days=1)
+            cache.put("GRCh38", "same-normalized-variant", "clinvar", "exact-query", {"value": 1}, "success", 200)
+            self.assertEqual(cache.get("GRCh38", "same-normalized-variant", "clinvar", "exact-query")["payload"], {"value": 1})
+            self.assertIsNone(cache.get("GRCh38", "same-normalized-variant", "clinvar", "changed-query"))
+            cache.close()
+
     def test_legacy_cache_is_read_only_fallback_for_exact_fingerprint(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -425,9 +443,9 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
             cache.close()
 
         self.assertEqual(cached["payload"], {"data": {"count": "1"}, "error": ""})
-        self.assertEqual(cached["status_reason"], "legacy_cache_reused")
+        self.assertEqual(cached["status_reason"], "v2_success_migrated")
 
-    def test_current_cache_reuses_explicit_legacy_fingerprint(self):
+    def test_current_cache_does_not_reuse_a_different_request_fingerprint(self):
         with tempfile.TemporaryDirectory() as temporary:
             cache = enrichment.EnrichmentCache(Path(temporary) / "enrichment_cache_v2.sqlite", ttl_days=1)
             legacy_key = enrichment.fingerprint({"rsid": "rs1", "source": "clinvar", "pipeline": "gene-module-v2-enrichment-1"})
@@ -443,8 +461,7 @@ class V2EnrichmentRemediationTests(unittest.TestCase):
             )
             cache.close()
 
-        self.assertEqual(cached["payload"], {"data": {"count": "1"}, "error": ""})
-        self.assertEqual(cached["status_reason"], "legacy_fingerprint_cache_reused")
+        self.assertIsNone(cached)
 
     def test_physical_matrix_row_has_one_variant_and_all_secondary_statuses(self):
         variant = {

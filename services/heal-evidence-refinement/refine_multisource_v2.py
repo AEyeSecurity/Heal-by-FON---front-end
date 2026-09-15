@@ -22,12 +22,13 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
 
 PIPELINE_VERSION = "gene-module-v2-evidence-refinement-2"
+QUERY_CONTRACT_VERSION = "public-evidence-refinement-contract-v1"
 VALID_SOURCE_STATUSES = {"success", "not_found", "source_error", "not_queried"}
 NON_BENIGN_CLINVAR_CLASSES = {
     "pathogenic_or_likely_pathogenic",
@@ -201,10 +202,10 @@ def recursive_values(value: object, key_names: set[str]) -> list[object]:
 class RefinementCache:
     """Public-source cache. Request fingerprints never include patient facts."""
 
-    def __init__(self, path: Path, ttl_days: int = 30):
+    def __init__(self, path: Path, ttl_days: int = 30, legacy_path: Path | None = None):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
-        self.ttl_days = ttl_days
+        self.legacy_path = legacy_path if legacy_path and legacy_path != path else None
         self.connection = sqlite3.connect(path, timeout=30)
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute(
@@ -219,9 +220,27 @@ class RefinementCache:
                 status_reason TEXT NOT NULL,
                 http_status INTEGER,
                 fetched_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL DEFAULT '',
                 pipeline_version TEXT NOT NULL,
+                query_contract_version TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (source, query_mode, request_fingerprint)
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS evidence_refinement_cache_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                query_mode TEXT NOT NULL,
+                request_fingerprint TEXT NOT NULL,
+                request_url TEXT NOT NULL,
+                status TEXT NOT NULL,
+                status_reason TEXT NOT NULL,
+                http_status INTEGER,
+                attempted_at TEXT NOT NULL,
+                pipeline_version TEXT NOT NULL,
+                query_contract_version TEXT NOT NULL
             )
             """
         )
@@ -235,16 +254,17 @@ class RefinementCache:
         fingerprint = self.fingerprint(url)
         row = self.connection.execute(
             """
-            SELECT response_text, status, status_reason, http_status, expires_at
+            SELECT response_text, status, status_reason, http_status
             FROM evidence_refinement_cache
             WHERE source = ? AND query_mode = ? AND request_fingerprint = ?
+              AND query_contract_version = ?
             """,
-            (source, query_mode, fingerprint),
+            (source, query_mode, fingerprint, QUERY_CONTRACT_VERSION),
         ).fetchone()
         if not row:
-            return None
-        response_text, status, status_reason, http_status, expires_at = row
-        if status == "source_error" or datetime.fromisoformat(expires_at) <= datetime.now(timezone.utc):
+            return self._migrate_legacy_success(source, query_mode, url)
+        response_text, status, status_reason, http_status = row
+        if status != "success":
             return None
         return {
             "text": response_text,
@@ -253,6 +273,26 @@ class RefinementCache:
             "http_status": http_status,
             "cache_hit": True,
         }
+
+    def _migrate_legacy_success(self, source: str, query_mode: str, url: str) -> dict | None:
+        """Copy only a byte-for-byte compatible success from the read-only v2 store."""
+        if not self.legacy_path or not self.legacy_path.exists():
+            return None
+        try:
+            legacy = sqlite3.connect(f"file:{self.legacy_path.as_posix()}?mode=ro", uri=True, timeout=3)
+            row = legacy.execute(
+                """SELECT response_text, status, status_reason, http_status, request_url
+                   FROM evidence_refinement_cache
+                   WHERE source = ? AND query_mode = ? AND request_fingerprint = ?""",
+                (source, query_mode, self.fingerprint(url)),
+            ).fetchone()
+            legacy.close()
+        except sqlite3.Error:
+            return None
+        if not row or row[1] != "success" or row[4] != url:
+            return None
+        self.put(source, query_mode, url, row[0], "success", "v2_success_migrated", row[3])
+        return {"text": row[0], "status": "success", "status_reason": "v2_success_migrated", "http_status": row[3], "cache_hit": True}
 
     def put(
         self,
@@ -265,13 +305,23 @@ class RefinementCache:
         http_status: int | None,
     ) -> None:
         now = datetime.now(timezone.utc)
-        ttl = timedelta(hours=1) if status == "source_error" else timedelta(days=self.ttl_days)
+        if status != "success":
+            self.connection.execute(
+                """INSERT INTO evidence_refinement_cache_attempts
+                   (source, query_mode, request_fingerprint, request_url, status, status_reason,
+                    http_status, attempted_at, pipeline_version, query_contract_version)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (source, query_mode, self.fingerprint(url), url, status, status_reason, http_status,
+                 now.isoformat(), PIPELINE_VERSION, QUERY_CONTRACT_VERSION),
+            )
+            self.connection.commit()
+            return
         self.connection.execute(
             """
             INSERT OR REPLACE INTO evidence_refinement_cache
             (source, query_mode, request_fingerprint, request_url, response_text, status,
-             status_reason, http_status, fetched_at, expires_at, pipeline_version)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             status_reason, http_status, fetched_at, expires_at, pipeline_version, query_contract_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 source,
@@ -283,14 +333,26 @@ class RefinementCache:
                 status_reason,
                 http_status,
                 now.isoformat(),
-                (now + ttl).isoformat(),
+                "",
                 PIPELINE_VERSION,
+                QUERY_CONTRACT_VERSION,
             ),
         )
         self.connection.commit()
 
     def close(self) -> None:
         self.connection.close()
+
+    def metrics(self) -> dict:
+        successes = self.connection.execute("SELECT COUNT(*) FROM evidence_refinement_cache WHERE status = 'success'").fetchone()[0]
+        attempts = self.connection.execute("SELECT COUNT(*) FROM evidence_refinement_cache_attempts").fetchone()[0]
+        return {
+            "query_contract_version": QUERY_CONTRACT_VERSION,
+            "success_entries": successes,
+            "nonreusable_attempt_entries": attempts,
+            "size_bytes": self.path.stat().st_size if self.path.exists() else 0,
+            "success_ttl": "none",
+        }
 
 
 class PublicHttpClient:
@@ -1365,7 +1427,12 @@ def process(payload: dict) -> dict:
             groups_by_variant[key].append(group)
     gwas_relevance = load_gwas_relevance(payload.get("gwasTraitModuleMapPath"))
 
-    cache = RefinementCache(cache_path, ttl_days=as_int(payload.get("cacheTtlDays"), 30))
+    legacy_cache_path = Path(clean(payload.get("legacyCachePath"))) if clean(payload.get("legacyCachePath")) else None
+    cache = RefinementCache(
+        cache_path,
+        ttl_days=as_int(payload.get("cacheTtlDays"), 30),
+        legacy_path=legacy_cache_path,
+    )
     client = PublicHttpClient(cache, timeout_seconds=timeout_seconds)
     raw_path = output_dir / "evidence_refinement_raw.jsonl.gz"
     retry_rows: list[dict] = []
@@ -2062,6 +2129,7 @@ def process(payload: dict) -> dict:
             "networkCalls": dict(client.network_calls),
             "retries": dict(client.retries),
             "openCircuits": sorted(client.open_circuits),
+            "globalCache": cache.metrics(),
         },
         "gates": {
             "conservationGate": conservation_gate,
