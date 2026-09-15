@@ -112,6 +112,7 @@ const HEAL_PROTOTYPE_LLM2_MODEL = process.env.HEAL_PROTOTYPE_LLM2_MODEL || "gpt-
 const HEAL_PROTOTYPE_EXECUTION_MODE = process.env.HEAL_PROTOTYPE_EXECUTION_MODE || "disabled";
 const HEAL_PROTOTYPE_MAX_ESTIMATED_COST_USD = Number.parseFloat(process.env.HEAL_PROTOTYPE_MAX_ESTIMATED_COST_USD || "5") || 5;
 const HEAL_PROTOTYPE_HARD_CAP_USD = Number.parseFloat(process.env.HEAL_PROTOTYPE_HARD_CAP_USD || "10") || 10;
+const HEAL_PROTOTYPE_TRANSLATION_ENABLED = process.env.HEAL_PROTOTYPE_TRANSLATION_ENABLED === "true";
 const HEAL_V2_LLM1_PILOT_ENABLED = process.env.HEAL_V2_LLM1_PILOT_ENABLED === "true";
 const HEAL_LLM1_EXECUTION_MODE = process.env.HEAL_LLM1_EXECUTION_MODE || "disabled";
 const HEAL_LLM1_ACTIVE_TIERS = process.env.HEAL_LLM1_ACTIVE_TIERS || "T1";
@@ -273,8 +274,9 @@ function variantEnrichmentPaths() {
     root,
     runs: root,
     cache,
-    cacheV2: path.join(cache, "enrichment_cache_v2.sqlite"),
-    legacyCache: path.join(cache, "enrichment_cache.sqlite"),
+    cacheV3: path.join(cache, "enrichment_cache_v3.sqlite"),
+    legacyCache: path.join(cache, "enrichment_cache_v2.sqlite"),
+    legacyAuditCache: path.join(cache, "enrichment_cache.sqlite"),
   };
 }
 
@@ -285,7 +287,8 @@ function evidenceRefinementPaths() {
     root,
     runs: root,
     cache,
-    cachePath: path.join(cache, "evidence_refinement_cache.sqlite"),
+    cachePath: path.join(cache, "evidence_refinement_cache_v2.sqlite"),
+    legacyCachePath: path.join(cache, "evidence_refinement_cache.sqlite"),
   };
 }
 
@@ -724,6 +727,8 @@ function publicArtifactsReady(job) {
     groupedPrototype: artifactExists(artifacts.groupedPrototypeSummaryJson),
     groupedPrototypeDocx: artifactExists(artifacts.groupedPrototypeDocx),
     groupedPrototypePdf: artifactExists(artifacts.groupedPrototypePdf),
+    groupedPrototypeDocxEn: artifactExists(artifacts.groupedPrototypeDocxEn),
+    groupedPrototypePdfEn: artifactExists(artifacts.groupedPrototypePdfEn),
     groupedPrototypeCards: artifactExists(artifacts.groupedPrototypeCardsCsv),
     groupedPrototypeAudit: artifactExists(artifacts.groupedPrototypeTechnicalAuditJson),
   };
@@ -1467,6 +1472,10 @@ async function processGroupedPrototype(payload, progressOptions = null) {
   return await runBase64JsonScript(SERVICE_SCRIPTS.groupedPrototype, payload, progressOptions);
 }
 
+async function processGroupedPresentationTranslation(payload) {
+  return await runBase64JsonScript(SERVICE_SCRIPTS.groupedPresentationTranslation, payload);
+}
+
 async function processVariantEnrichmentWithRetry(payload, job, attempts = 3) {
   const errors = [];
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -1574,6 +1583,7 @@ async function runEvidenceRefinementForJob({
       gwasTraitModuleMapPath: existsSync(HEAL_GWAS_TRAIT_MODULE_MAP_PATH) ? HEAL_GWAS_TRAIT_MODULE_MAP_PATH : "",
       outputDir,
       cachePath: refinementPaths.cachePath,
+      legacyCachePath: refinementPaths.legacyCachePath,
       requestedAt: new Date().toISOString(),
     },
     job,
@@ -2821,7 +2831,16 @@ app.get("/api/validations/:jobId", (req, res) => {
 });
 
 app.post("/api/vcf-canon-matches", async (req, res) => {
-  const { uploadId, vcfParser = "streaming", analysisMode = "quick", vcfAssembly } = req.body || {};
+  const { uploadId, vcfParser = "streaming", analysisMode = "quick", vcfAssembly, presentationLanguage = "es" } = req.body || {};
+  const requestedPresentationLanguage = String(presentationLanguage).toLowerCase();
+  if (!["es", "en"].includes(requestedPresentationLanguage)) {
+    res.status(400).json({ error: "presentationLanguage must be es or en." });
+    return;
+  }
+  if (requestedPresentationLanguage === "en" && !HEAL_PROTOTYPE_TRANSLATION_ENABLED) {
+    res.status(409).json({ error: "English presentation generation is disabled." });
+    return;
+  }
   if (!uploadId) {
     res.status(400).json({ error: "uploadId is required." });
     return;
@@ -2964,6 +2983,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
     fileName: upload.fileName,
     sizeBytes: upload.sizeBytes,
     analysisMode: normalizeAnalysisMode(analysisMode),
+    presentation_language: requestedPresentationLanguage,
     vcfAssembly: resolvedVcfAssembly || null,
     vcfAssemblySource: vcfAssemblySource || null,
     status: "running",
@@ -3210,7 +3230,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
           inputPath: aiTriageCsvPath,
         outputDir: enrichmentOutputDir,
         cacheDir: enrichmentPaths.cache,
-        cachePath: enrichmentPaths.cacheV2,
+        cachePath: enrichmentPaths.cacheV3,
         legacyCachePath: enrichmentPaths.legacyCache,
         normalizationSummaryPath: job.artifacts.normalizationSummaryJson,
           requestedAt: new Date().toISOString(),
@@ -3441,7 +3461,7 @@ app.post("/api/vcf-canon-matches", async (req, res) => {
         };
 
         job.result.llm1InternalAuto = await runInternalAutoLlm1(job, groupedV7Summary);
-        job.result.groupedPrototype = await runGroupedPrototypeForJob(job, { dryRun: false });
+        job.result.groupedPrototype = await runGroupedPrototypeForJob(job, { dryRun: false, languageMode: job.presentation_language || "es" });
 
         job.status = "complete";
         job.progress = 100;
@@ -3991,7 +4011,7 @@ async function runInternalAutoLlm1(job, v7Summary) {
   };
 }
 
-async function runGroupedPrototypeForJob(job, { dryRun = false } = {}) {
+async function runGroupedPrototypeForJob(job, { dryRun = false, languageMode = "es" } = {}) {
   if (!HEAL_GROUPED_PROTOTYPE_ENABLED || HEAL_PROTOTYPE_EXECUTION_MODE !== "internal_quick") {
     return { status: "disabled", reason: "grouped_prototype_not_enabled" };
   }
@@ -4039,6 +4059,7 @@ async function runGroupedPrototypeForJob(job, { dryRun = false } = {}) {
     hardCapUsd: HEAL_PROTOTYPE_HARD_CAP_USD,
     fileName: job.fileName || `${job.id}.vcf`,
     externalEvidencePartial,
+    presentationLanguage: languageMode,
     dryRun,
     requestedAt: new Date().toISOString(),
   }, { job, progressPath, stage: "grouped_prototype" });
@@ -4055,7 +4076,17 @@ async function runGroupedPrototypeForJob(job, { dryRun = false } = {}) {
     groupedPrototypeDownstreamJson: path.join(outputDir, "grouped_downstream_result_v1.json"),
     groupedPrototypeClientJson: path.join(outputDir, "grouped_client_result_v1.json"),
     groupedPrototypeReportViewJson: path.join(outputDir, "report_view_model_v3.json"),
+    groupedPrototypePresentationStatusJson: path.join(outputDir, "presentation_status.json"),
   });
+  if (summary.outputs?.english?.status === "available") {
+    Object.assign(job.artifacts, {
+      groupedPrototypeClientEnJson: summary.outputs.english.client_result,
+      groupedPrototypeReportViewEnJson: summary.outputs.english.report_view_model,
+      groupedPrototypeDocxEn: summary.outputs.english.docx,
+      groupedPrototypePdfEn: summary.outputs.english.pdf,
+    });
+  }
+  job.presentation_language = languageMode;
   job.result = { ...job.result, groupedPrototype: { ...summary, external_evidence_partial: externalEvidencePartial } };
   job.stageProgress = 100;
   return summary;
@@ -4110,6 +4141,15 @@ app.post("/api/vcf-canon-matches/:jobId/grouped-prototype", async (req, res) => 
     return;
   }
   const dryRun = req.body?.dryRun === true;
+  const languageMode = String(req.body?.languageMode || "es").toLowerCase();
+  if (!["es", "en"].includes(languageMode)) {
+    res.status(400).json({ error: "languageMode must be es or en." });
+    return;
+  }
+  if (languageMode === "en" && !HEAL_PROTOTYPE_TRANSLATION_ENABLED) {
+    res.status(409).json({ error: "English presentation generation is disabled." });
+    return;
+  }
   if (dryRun && !ALLOW_LLM_DRY_RUN) {
     res.status(409).json({ error: "LLM dry-run mode is disabled." });
     return;
@@ -4121,7 +4161,7 @@ app.post("/api/vcf-canon-matches/:jobId/grouped-prototype", async (req, res) => 
   await persistVcfCanonJob(job);
   (async () => {
     try {
-      const summary = await runGroupedPrototypeForJob(job, { dryRun });
+      const summary = await runGroupedPrototypeForJob(job, { dryRun, languageMode });
       job.status = summary.status === "prototype_demo_ready_automatic" ? "complete" : "failed";
       job.progress = 100;
       job.stageProgress = 100;
@@ -4142,6 +4182,50 @@ app.post("/api/vcf-canon-matches/:jobId/grouped-prototype", async (req, res) => 
     }
   })();
   res.status(202).json(publicJob(job));
+});
+
+// Translation is intentionally explicit.  Reading cards or reports never
+// invokes OpenAI, and historical Spanish artifacts remain untouched.
+app.post("/api/vcf-canon-matches/:jobId/grouped-prototype/presentation", async (req, res) => {
+  if (!HEAL_PROTOTYPE_TRANSLATION_ENABLED) {
+    res.status(409).json({ error: "English presentation generation is disabled." });
+    return;
+  }
+  const job = jobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "VCF-canon match job not found." });
+  const upload = await loadUpload(job.uploadId).catch(() => null);
+  if (!hasUploadAccessToken(req, upload)) return res.status(403).json({ error: "Job access denied." });
+  if (!requireCurationAccess(req, res)) return;
+  if (String(req.body?.languageMode || "en").toLowerCase() !== "en") {
+    return res.status(400).json({ error: "Only explicit English presentation generation is supported." });
+  }
+  if (job.artifacts?.groupedPrototypeClientEnJson) return res.status(200).json({ status: "available", job: publicJob(job) });
+  const outputDir = jobStageDirectory(job.id, "grouped-prototype");
+  const reportViewPath = path.resolve(job.artifacts?.groupedPrototypeReportViewJson || "");
+  const downstreamPath = path.resolve(job.artifacts?.groupedPrototypeDownstreamJson || "");
+  if (![reportViewPath, downstreamPath].every((candidate) => isPathInside(GROUPED_PROTOTYPE_ROOT, candidate) && existsSync(candidate))) {
+    return res.status(409).json({ error: "Spanish grouped presentation is not ready." });
+  }
+  (async () => {
+    try {
+      const summary = await processGroupedPresentationTranslation({ outputDir, reportViewPath, downstreamPath });
+      Object.assign(job.artifacts, {
+        groupedPrototypePresentationStatusJson: path.join(outputDir, "presentation_status.json"),
+        groupedPrototypeClientEnJson: summary.client_result,
+        groupedPrototypeReportViewEnJson: summary.report_view_model,
+        groupedPrototypeDocxEn: summary.docx,
+        groupedPrototypePdfEn: summary.pdf,
+      });
+      job.presentation_language = "en";
+    } catch (error) {
+      job.presentation_language = "en_unavailable";
+      job.result = { ...job.result, groupedPrototype: { ...job.result?.groupedPrototype, presentation_en: "unavailable" } };
+    } finally {
+      job.updatedAt = new Date().toISOString();
+      await persistVcfCanonJob(job);
+    }
+  })();
+  res.status(202).json({ status: "pending", languageMode: "en" });
 });
 
 function groupedClientReplayArtifact(job, fileName) {
@@ -4168,6 +4252,8 @@ app.get("/api/vcf-canon-matches/:jobId/grouped-prototype/download/:artifact", as
     cards: ["groupedPrototypeCardsCsv", "HEAL_prototipo_tarjetas.csv"],
     coverage: ["groupedPrototypeCoverageCsv", "HEAL_prototipo_cobertura.csv"],
     telemetry: ["groupedPrototypeTelemetryCsv", "HEAL_prototipo_telemetria.csv"],
+    "docx-en": ["groupedPrototypeDocxEn", "HEAL_prototype_development_en.docx"],
+    "pdf-en": ["groupedPrototypePdfEn", "HEAL_prototype_development_en.pdf"],
   };
   const definition = definitions[String(req.params.artifact || "").toLowerCase()];
   if (!definition) {
@@ -4179,7 +4265,12 @@ app.get("/api/vcf-canon-matches/:jobId/grouped-prototype/download/:artifact", as
     docx: "HEAL_prototipo_cliente.docx", pdf: "HEAL_prototipo_cliente.pdf",
     cards: "cards_client.csv", coverage: "coverage_client.csv",
   };
-  const replayPath = replayNames[String(req.params.artifact || "").toLowerCase()]
+  const artifactName = String(req.params.artifact || "").toLowerCase();
+  if (["docx-en", "pdf-en"].includes(artifactName) && !job.artifacts?.[definition[0]]) {
+    res.status(409).json({ error: "English presentation is unavailable; generate it explicitly first." });
+    return;
+  }
+  const replayPath = replayNames[artifactName]
     ? groupedClientReplayArtifact(job, replayNames[String(req.params.artifact || "").toLowerCase()])
     : "";
   const artifactPath = path.resolve(replayPath || job.artifacts?.[definition[0]] || "");
@@ -4201,13 +4292,19 @@ app.get("/api/vcf-canon-matches/:jobId/grouped-prototype/cards", async (req, res
     res.status(403).json({ error: "Match belongs to a different client." });
     return;
   }
-  const replayPath = groupedClientReplayArtifact(job, "grouped_client_result_v1.json");
-  const clientPath = path.resolve(replayPath || job.artifacts?.groupedPrototypeClientJson || "");
+  const languageMode = String(req.query?.languageMode || req.query?.language || "es").toLowerCase();
+  if (!["es", "en"].includes(languageMode)) return res.status(400).json({ error: "languageMode must be es or en." });
+  if (languageMode === "en" && !job.artifacts?.groupedPrototypeClientEnJson) {
+    return res.status(409).json({ error: "English presentation is unavailable; generate it explicitly first." });
+  }
+  const replayPath = languageMode === "es" ? groupedClientReplayArtifact(job, "grouped_client_result_v1.json") : "";
+  const clientPath = path.resolve(replayPath || (languageMode === "en" ? job.artifacts?.groupedPrototypeClientEnJson : job.artifacts?.groupedPrototypeClientJson) || "");
   if (clientPath && isPathInside(GROUPED_PROTOTYPE_ROOT, clientPath) && existsSync(clientPath)) {
     const client = JSON.parse(await readFile(clientPath, "utf8"));
     res.json(client.cards || []);
     return;
   }
+  if (languageMode === "en") return res.status(409).json({ error: "English presentation is unavailable; generate it explicitly first." });
   const cardsPath = path.resolve(job.artifacts?.groupedPrototypeCardsJson || "");
   if (!isPathInside(GROUPED_PROTOTYPE_ROOT, cardsPath) || !existsSync(cardsPath)) {
     res.status(404).json({ error: "Grouped prototype cards are not ready." });
@@ -4707,7 +4804,7 @@ app.post("/api/vcf-canon-matches/:jobId/retry-enrichment", async (req, res) => {
         inputPath: enrichmentInputPath,
         outputDir: enrichmentOutputDir,
         cacheDir: enrichmentPaths.cache,
-        cachePath: enrichmentPaths.cacheV2,
+        cachePath: enrichmentPaths.cacheV3,
         legacyCachePath: enrichmentPaths.legacyCache,
         normalizationSummaryPath: isGeneModuleV2 ? job.artifacts.normalizationSummaryJson || "" : undefined,
         requestedAt: new Date().toISOString(),

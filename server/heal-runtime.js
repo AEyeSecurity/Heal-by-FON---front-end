@@ -69,6 +69,7 @@ export const SERVICE_SCRIPTS = {
   evidenceDigest: serviceScript("heal-evidence-digest", "digest_public_evidence.py"),
   groupedInterpretation: serviceScript("heal-grouped-individual-interpretation", "interpret_gene_module_groups.py"),
   groupedPrototype: serviceScript("heal-grouped-prototype", "run_grouped_prototype.py"),
+  groupedPresentationTranslation: serviceScript("heal-grouped-prototype", "translate_grouped_presentation.py"),
   individualInterpretation: serviceScript("heal-individual-interpretation", "interpret_observed_variants.py"),
   interpretationNormalization: serviceScript("heal-interpretation-normalization", "normalize_individual_interpretations.py"),
   globalInterpretation: serviceScript("heal-global-interpretation", "interpret_global_profile.py"),

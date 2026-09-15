@@ -61,6 +61,24 @@ MODULE_LABELS_ES = {
     "T1.5": "Tejido conectivo y resiliencia física",
     "T1.6": "Detoxificación y manejo del estrés oxidativo",
 }
+MODULE_LABELS_EN = {
+    "T1.1": "Core system resilience",
+    "T1.2": "Sleep and circadian rhythms",
+    "T1.3": "Essential nutrients and cofactors",
+    "T1.4": "Immunity and inflammation",
+    "T1.5": "Connective tissue and physical resilience",
+    "T1.6": "Detoxification and oxidative stress management",
+}
+PARTIAL_SOURCE_LIMITATION_EN = (
+    "Some external sources were not fully available. Partial availability is not interpreted as benignity, "
+    "absence of evidence, absence of association, or a negative result."
+)
+UNRESOLVED_IDENTITY_LIMITATION_EN = (
+    "Some records could not be resolved with sufficient identity and were not used for individual inferences."
+)
+SPARSE_VCF_LIMITATION_EN = (
+    "The input contains observed variants; absence does not demonstrate homozygous reference status or confirmed callability."
+)
 
 
 def _sentences(value: str) -> list[str]:
@@ -273,43 +291,81 @@ def _mode_label(value: str) -> str:
     }.get(str(value or ""), "Sin inferencia individual")
 
 
-def build_client_result(downstream: dict) -> dict:
+def _confidence_label_en(value: str) -> str:
+    return {
+        "High": "High", "Moderate": "Moderate", "Low": "Low",
+        "Conflicting": "Conflicting evidence", "Abstain": "No individual inference",
+    }.get(str(value or ""), "Not reported")
+
+
+def _mode_label_en(value: str) -> str:
+    return {
+        "initial_guide": "Limited initial guide",
+        "context_only": "Contextual interpretation",
+        "abstained_insufficient_evidence": "No individual inference",
+    }.get(str(value or ""), "No individual inference")
+
+
+def build_client_result(downstream: dict, *, language: str = "es") -> dict:
+    """Project client cards in the requested language without changing source cards.
+
+    English card prose is the existing LLM1 English field.  No translation call
+    occurs here, which makes cards safe to serve from persisted artifacts.
+    """
+    language = "en" if language == "en" else "es"
     cards = []
     for row in downstream["cards"]:
         source_labels = sorted({str(item.get("source") or "Evidencia científica") for item in row.get("evidence_used") or []})
         notices: list[str] = []
         if row.get("limitation_flags", {}).get("partial_external_sources"):
-            notices.append(PARTIAL_SOURCE_LIMITATION_ES)
+            notices.append(PARTIAL_SOURCE_LIMITATION_EN if language == "en" else PARTIAL_SOURCE_LIMITATION_ES)
         if row.get("limitation_flags", {}).get("unresolved_identity"):
-            notices.append(UNRESOLVED_IDENTITY_LIMITATION_ES)
+            notices.append(UNRESOLVED_IDENTITY_LIMITATION_EN if language == "en" else UNRESOLVED_IDENTITY_LIMITATION_ES)
         if row.get("status") == "covered_no_observed_variant":
-            notices.append(SPARSE_VCF_LIMITATION_ES)
+            notices.append(SPARSE_VCF_LIMITATION_EN if language == "en" else SPARSE_VCF_LIMITATION_ES)
+        summary_key = "interpretation_one_sentence_en" if language == "en" else "interpretation_one_sentence_es"
+        detail_key = "interpretation_long_en" if language == "en" else "interpretation_long_es"
+        interpretation_key = "interpretation_en" if language == "en" else "interpretation_es"
+        mode_label = _mode_label_en(row.get("inference_mode")) if language == "en" else _mode_label(row.get("inference_mode"))
+        confidence_label = _confidence_label_en(row.get("final_confidence_level")) if language == "en" else _confidence_label(row.get("final_confidence_level"))
+        module_name = (
+            MODULE_LABELS_EN.get(str(row.get("module_id") or ""), row.get("module_name") or "Scientific module")
+            if language == "en" else
+            MODULE_LABELS_ES.get(str(row.get("module_id") or ""), row.get("module_name") or "Módulo científico")
+        )
         cards.append({
             "group_id": row.get("group_id"), "gene": row.get("gene"),
             "module_id": row.get("module_id"),
-            "module_name": MODULE_LABELS_ES.get(str(row.get("module_id") or ""), row.get("module_name") or "Módulo científico"),
+            "module_name": module_name,
             "status": row.get("status"), "coverage_status": row.get("coverage_status"),
-            "inference_mode": row.get("inference_mode"), "inference_mode_label_es": _mode_label(row.get("inference_mode")),
+            "inference_mode": row.get("inference_mode"), f"inference_mode_label_{language}": mode_label,
             "scientific_confidence": row.get("final_confidence_level"),
-            "scientific_confidence_label_es": _confidence_label(row.get("final_confidence_level")),
-            "interpretation_es": {
-                "summary": row.get("interpretation_one_sentence_es") or "",
-                "detail": row.get("interpretation_long_es") or "",
+            f"scientific_confidence_label_{language}": confidence_label,
+            interpretation_key: {
+                "summary": row.get(summary_key) or (SPARSE_VCF_LIMITATION_EN if language == "en" and row.get("status") == "covered_no_observed_variant" else SPARSE_VCF_LIMITATION_ES if row.get("status") == "covered_no_observed_variant" else ""),
+                "detail": row.get(detail_key) or "",
             },
             "observed_variant_refs": list(row.get("focus_variant_refs") or []),
             "evidence_summary": {"record_count": len(row.get("evidence_used") or []), "sources": source_labels},
-            "limitations_es": list(dict.fromkeys(notices)),
+            f"limitations_{language}": list(dict.fromkeys(notices)),
             "prioritization": copy.deepcopy(row.get("prioritization") or {"prioritized": False, "rank": None}),
-            "input_completeness_label_es": "VCF de variantes observadas; capacidad de llamada no confirmada",
+            f"input_completeness_label_{language}": (
+                "Observed-variant VCF; callability is not confirmed" if language == "en"
+                else "VCF de variantes observadas; capacidad de llamada no confirmada"
+            ),
         })
     return {
-        "schema_version": "grouped_client_result_v1",
+        "schema_version": "grouped_client_result_v2" if language == "en" else "grouped_client_result_v1",
         "processing": copy.deepcopy(downstream["processing"]),
         "external_evidence_availability": copy.deepcopy(downstream["external_evidence_availability"]),
         "coverage": copy.deepcopy(downstream["coverage"]),
         "cards": cards,
-        "prototype_label": "Prototipo de desarrollo",
-        "formal_validation_label_es": "Validación formal pendiente de un nuevo holdout independiente",
+        "presentation_language": language,
+        "prototype_label": "Development prototype" if language == "en" else "Prototipo de desarrollo",
+        f"formal_validation_label_{language}": (
+            "Formal validation is pending a new independent holdout" if language == "en"
+            else "Validación formal pendiente de un nuevo holdout independiente"
+        ),
         "formal_validation_readiness": "pending_new_unseen_holdout",
     }
 

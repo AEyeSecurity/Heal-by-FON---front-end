@@ -1822,24 +1822,26 @@ function parseJsonArray(value) {
 }
 
 function Llm1GroupCard({ card, language, t }) {
-  const clientShape = Boolean(card.interpretation_es);
+  const clientShape = Boolean(card.interpretation_es || card.interpretation_en);
   const interpretation = card.interpretation || null;
   const suffix = language === "es" ? "es" : "en";
-  const oneSentence = clientShape ? card.interpretation_es?.summary || "" : interpretation?.[`interpretation_one_sentence_${suffix}`] || "";
-  const longText = clientShape ? card.interpretation_es?.detail || "" : interpretation?.[`interpretation_long_${suffix}`] || "";
+  const clientInterpretation = card[`interpretation_${suffix}`] || {};
+  const oneSentence = clientShape ? clientInterpretation.summary || "" : interpretation?.[`interpretation_one_sentence_${suffix}`] || "";
+  const longText = clientShape ? clientInterpretation.detail || "" : interpretation?.[`interpretation_long_${suffix}`] || "";
   const technical = interpretation?.[`technical_interpretation_${suffix}`] || "";
   const rationale = interpretation?.[`confidence_rationale_${suffix}`] || "";
   const familyNotes = interpretation?.[`family_notes_${suffix}`] || "";
   const nextStep = interpretation?.[`recommended_next_review_step_${suffix}`] || "";
   const evidenceUsed = clientShape ? (card.evidence_summary?.sources || []) : parseJsonArray(interpretation?.evidence_used);
-  const limitations = clientShape ? (card.limitations_es || []) : parseJsonArray(interpretation?.evidence_limitations);
+  const limitations = clientShape ? (card[`limitations_${suffix}`] || []) : parseJsonArray(interpretation?.evidence_limitations);
   const focusVariants = clientShape ? (card.observed_variant_refs || []) : (card.focus_variants || []);
   const isUnavailable = ["quarantined", "technical_failure"].includes(card.status);
   const isCoverageOnly = clientShape ? card.status !== "valid" : !interpretation;
   const statusLabel = clientShape
-    ? card.status === "valid" ? "Interpretación válida"
-      : card.status === "covered_no_observed_variant" ? "Cubierto sin variante foco observada"
-      : card.status === "not_covered_by_prototype_snapshot" ? "Fuera del snapshot" : "Resultado no disponible"
+    ? card.status === "valid" ? (language === "en" ? "Valid interpretation" : "Interpretación válida")
+      : card.status === "covered_no_observed_variant" ? (language === "en" ? "Covered without observed focus variant" : "Cubierto sin variante foco observada")
+      : card.status === "not_covered_by_prototype_snapshot" ? (language === "en" ? "Outside snapshot" : "Fuera del snapshot")
+      : (language === "en" ? "Result unavailable" : "Resultado no disponible")
     : card.status || card.coverage_status;
   return (
     <article className={`llm1-card llm1-card-${card.status || "unknown"}`}>
@@ -1855,7 +1857,7 @@ function Llm1GroupCard({ card, language, t }) {
         <p className="error">{language === "es" ? "Resultado no disponible; el grupo fue aislado." : "Result unavailable; the group was isolated."}</p>
       ) : isCoverageOnly ? (
         <>
-          <p>{clientShape ? card.interpretation_es?.summary : card.decision_reason}</p>
+          <p>{clientShape ? clientInterpretation.summary : card.decision_reason}</p>
           {(clientShape ? card.status === "covered_no_observed_variant" : card.input_completeness?.mode === "observed_variants_only" && card.focus_variant_count === 0) && (
             <p className="llm1-card-notice">{t.llm1CardsNotObserved}</p>
           )}
@@ -1864,10 +1866,10 @@ function Llm1GroupCard({ card, language, t }) {
         <>
           <p className="llm1-card-summary">{oneSentence}</p>
           <div className="llm1-card-metadata">
-            <span><b>{t.llm1CardsInference}:</b> {clientShape ? card.inference_mode_label_es : interpretation.inference_mode}</span>
-            <span><b>{t.llm1CardsConfidence}:</b> {clientShape ? card.scientific_confidence_label_es : interpretation.final_confidence_level}</span>
+            <span><b>{t.llm1CardsInference}:</b> {clientShape ? card[`inference_mode_label_${suffix}`] : interpretation.inference_mode}</span>
+            <span><b>{t.llm1CardsConfidence}:</b> {clientShape ? card[`scientific_confidence_label_${suffix}`] : interpretation.final_confidence_level}</span>
             {clientShape && card.prioritization?.prioritized && <span><b>Resumen:</b> Hallazgo priorizado #{card.prioritization.rank}</span>}
-            <span><b>{t.llm1CardsCompleteness}:</b> {clientShape ? card.input_completeness_label_es : card.input_completeness?.mode || interpretation.input_completeness_mode}</span>
+            <span><b>{t.llm1CardsCompleteness}:</b> {clientShape ? card[`input_completeness_label_${suffix}`] : card.input_completeness?.mode || interpretation.input_completeness_mode}</span>
           </div>
           {longText && <p>{longText}</p>}
           <p className="llm1-card-disclaimer">{t.llm1CardsDisclaimer}</p>
@@ -1910,7 +1912,7 @@ function Llm1CardsPanel({ cards, loading, error, language, onLanguageChange, t }
   if (loading) return <p>{t.llm1CardsLoading}</p>;
   if (error) return <p className="error">{error}</p>;
   if (!cards?.length) return <p>{t.llm1CardsUnavailable}</p>;
-  const clientShape = cards.some((card) => card.interpretation_es);
+  const clientShape = cards.some((card) => card.interpretation_es || card.interpretation_en);
   const active = clientShape
     ? cards.filter((card) => card.status === "valid")
     : cards.filter((card) => card.client_visible === true || (card.interpretation && !card.experimental_canary));
@@ -1928,10 +1930,10 @@ function Llm1CardsPanel({ cards, loading, error, language, onLanguageChange, t }
             ? `${tier1.length} grupos · ${active.length} interpretaciones válidas · ${noObserved.length} cubiertos sin variante foco · ${uncovered.length} fuera del snapshot`
             : `${tier1.length} total · ${active.length} active · ${excluded.length} coverage-only`}</span>
         </div>
-        {!clientShape && <div className="llm1-language-switch" role="group" aria-label="LLM1 card language">
+        <div className="llm1-language-switch" role="group" aria-label="LLM1 card language">
           <button type="button" className={language === "es" ? "active" : ""} onClick={() => onLanguageChange("es")}>ES</button>
           <button type="button" className={language === "en" ? "active" : ""} onClick={() => onLanguageChange("en")}>EN</button>
-        </div>}
+        </div>
       </div>
       {active.length > 0 && <><h4>{t.llm1CardsActive}</h4><div className="llm1-cards-grid">{active.map((card) => <Llm1GroupCard key={card.group_id} card={card} language={language} t={t} />)}</div></>}
       {experimental.length > 0 && <><h4>{t.llm1CardsExperimental}</h4><div className="llm1-cards-grid">{experimental.map((card) => <Llm1GroupCard key={card.group_id} card={card} language={language} t={t} />)}</div></>}
@@ -1964,7 +1966,7 @@ function MatchResultPanel({ result: sourceResult, locale, t }) {
     setLlm1CardsLoading(true);
     setLlm1CardsError(null);
     const cardsEndpoint = prototypeCardsReady
-      ? `/api/vcf-canon-matches/${result.jobId}/grouped-prototype/cards`
+      ? `/api/vcf-canon-matches/${result.jobId}/grouped-prototype/cards?languageMode=${llm1CardLanguage}`
       : `/api/vcf-canon-matches/${result.jobId}/llm1-group-cards`;
     fetch(`${API_BASE}${cardsEndpoint}`, {
       headers: accessHeaders(result.accessToken || getJobAccessToken(result.jobId)),
@@ -1978,7 +1980,7 @@ function MatchResultPanel({ result: sourceResult, locale, t }) {
       .catch((loadError) => { if (!cancelled) setLlm1CardsError(loadError.message || String(loadError)); })
       .finally(() => { if (!cancelled) setLlm1CardsLoading(false); });
     return () => { cancelled = true; };
-  }, [result?.jobId, result?.updatedAt, cardsReady, prototypeCardsReady]);
+  }, [result?.jobId, result?.updatedAt, cardsReady, prototypeCardsReady, llm1CardLanguage]);
   if (!result) return null;
 
   const isValid = result.status === "valid";
@@ -2689,8 +2691,8 @@ function MatchResultPanel({ result: sourceResult, locale, t }) {
         </div>
         {auditError && <p className="error">{auditError}</p>}
         <p className="llm1-card-notice">
-          <b>{groupedPrototype.processing?.label_es || "Procesamiento completado"}.</b>{" "}
-          {groupedPrototype.externalEvidence?.label_es || "La disponibilidad de fuentes externas quedó registrada para esta ejecución"}.
+          <b>{locale?.startsWith("es") ? (groupedPrototype.processing?.label_es || "Procesamiento completado") : (groupedPrototype.processing?.label_en || "Processing completed")}.</b>{" "}
+          {locale?.startsWith("es") ? (groupedPrototype.externalEvidence?.label_es || "La disponibilidad de fuentes externas quedó registrada para esta ejecución") : (groupedPrototype.externalEvidence?.label_en || "External-source availability was recorded for this run")}.
         </p>
         <p className="llm1-card-notice">
           {locale?.startsWith("es")
@@ -2712,6 +2714,8 @@ function MatchResultPanel({ result: sourceResult, locale, t }) {
         <div className="match-download-actions">
           {artifactReady.groupedPrototypePdf && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("pdf", "HEAL_prototipo_cliente.pdf")}><Download size={17} />{t.groupedPrototypePdf}</button>}
           {artifactReady.groupedPrototypeDocx && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("docx", "HEAL_prototipo_cliente.docx")}><Download size={17} />{t.groupedPrototypeDocx}</button>}
+          {artifactReady.groupedPrototypePdfEn && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("pdf-en", "HEAL_prototype_development_en.pdf")}><Download size={17} />Download English PDF</button>}
+          {artifactReady.groupedPrototypeDocxEn && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("docx-en", "HEAL_prototype_development_en.docx")}><Download size={17} />Download English DOCX</button>}
           {artifactReady.groupedPrototypeCards && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("cards", "HEAL_prototipo_tarjetas.csv")}><Download size={17} />{t.groupedPrototypeCardsDownload}</button>}
           {artifactReady.groupedPrototype && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("coverage", "HEAL_prototipo_cobertura.csv")}><Download size={17} />{t.groupedPrototypeCoverageDownload}</button>}
         </div>
@@ -4563,7 +4567,7 @@ function App() {
     const matchStart = await fetch(`${API_BASE}/api/vcf-canon-matches`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...accessHeaders(upload.accessToken) },
-      body: JSON.stringify({ uploadId: upload.uploadId, accessToken: upload.accessToken, vcfParser, vcfAssembly, analysisMode }),
+      body: JSON.stringify({ uploadId: upload.uploadId, accessToken: upload.accessToken, vcfParser, vcfAssembly, analysisMode, presentationLanguage: language === "en" ? "en" : "es" }),
     });
     const matchJob = await readJsonResponse(matchStart);
     if (!matchStart.ok) throw new Error(matchJob.error || t.matchFailed);

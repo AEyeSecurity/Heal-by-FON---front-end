@@ -62,6 +62,7 @@ llm1 = import_module("heal_grouped_llm1", LLM1_DIR / "interpret_gene_module_grou
 final_report = import_module("heal_final_report", REPORT_PATH)
 contracts = import_module("heal_grouped_prototype_contracts", SCRIPT_DIR / "grouped_contracts.py")
 client_readiness = import_module("heal_grouped_client_readiness", SCRIPT_DIR / "client_readiness.py")
+presentation_translation = import_module("heal_grouped_presentation_translation", SCRIPT_DIR / "grouped_presentation_translation.py")
 
 has_affirmative_pattern = contracts.has_affirmative_pattern
 has_prohibited_language = contracts.has_prohibited_language
@@ -140,6 +141,22 @@ def call_with_one_technical_retry(*, payload: dict, api_key: str, model: str, pr
                 raise RuntimeError(" | ".join(errors)) from error
             time.sleep(2)
     raise AssertionError("unreachable")
+
+
+def create_english_presentation(view: dict, *, api_key: str, timeout_seconds: int) -> tuple[dict, dict, dict]:
+    """Translate visible report prose once, preserving Spanish as the source artifact."""
+    def call(payload: dict, prompt: str, schema: dict) -> tuple[dict, dict]:
+        return llm1.call_openai_structured(
+            payload,
+            api_key=api_key,
+            model=os.environ.get("HEAL_PROTOTYPE_TRANSLATION_MODEL", "gpt-5.6-luna"),
+            system_prompt=prompt,
+            schema=responses_compatible_schema(schema),
+            timeout_seconds=timeout_seconds,
+            reasoning_effort="low",
+            user_instruction="Translate this structured client-report prose from Spanish into English. Return only JSON matching the schema.",
+        )
+    return presentation_translation.translate_with_retry(view, call=call)
 
 
 def sha256_file(path: Path) -> str:
@@ -575,52 +592,80 @@ def report_view_model(llm2_result: dict, cards: list[dict], coverage: dict, sour
     }
 
 
-def write_docx(view: dict, path: Path) -> None:
+def write_docx(view: dict, path: Path, *, language: str = "es") -> None:
+    en = language == "en"
+    labels = {
+        "summary": "General summary", "coverage": "Analysis coverage", "modules": "Summary of the six modules",
+        "findings": "Prioritized findings in this summary", "cannot": "What cannot be inferred",
+        "limits": "VCF limitations", "status": "Validation status", "context": "Relevant contextual findings",
+        "formal": "Formal validation is pending a new independent holdout.",
+    } if en else {
+        "summary": "Resumen general", "coverage": "Cobertura del análisis", "modules": "Resumen de los seis módulos",
+        "findings": "Hallazgos priorizados en este resumen", "cannot": "Qué no puede inferirse",
+        "limits": "Limitaciones del VCF", "status": "Estado de validación", "context": "Hallazgos contextuales relevantes",
+        "formal": "Validación formal pendiente de un nuevo holdout independiente.",
+    }
     sections = [
-        {"section_id": "resumen", "title": "Resumen general", "blocks": [{"type": "paragraph", "text": view["summary"]}]},
-        {"section_id": "cobertura", "title": "Cobertura del análisis", "blocks": [{"type": "paragraph", "text": view["coverage_statement"]}]},
-        {"section_id": "modulos", "title": "Resumen de los seis módulos", "page_break_before": True, "blocks": [
+        {"section_id": "resumen", "title": labels["summary"], "blocks": [{"type": "paragraph", "text": view["summary"]}]},
+        {"section_id": "cobertura", "title": labels["coverage"], "blocks": [{"type": "paragraph", "text": view["coverage_statement"]}]},
+        {"section_id": "modulos", "title": labels["modules"], "page_break_before": True, "blocks": [
             {"type": "client_summary", "title": row["title"], "text": row["summary"]} for row in view["modules"]
         ]},
-        {"section_id": "hallazgos", "title": "Hallazgos priorizados en este resumen", "page_break_before": True, "blocks": [
+        {"section_id": "hallazgos", "title": labels["findings"], "page_break_before": True, "blocks": [
             {"type": "client_finding", "title": f"{row['gene']} — {row['module_name']}",
              "mode": row["client_interpretation_type"], "confidence": row["scientific_relationship_confidence"],
              "applicability": row["individual_applicability"],
              "summary": row["headline_es"], "detail": row["explanation_es"]}
             for row in view["primary_findings"]
         ]},
-        {"section_id": "no_inferir", "title": "Qué no puede inferirse", "blocks": [
+        {"section_id": "no_inferir", "title": labels["cannot"], "blocks": [
             *({"type": "paragraph", "text": value} for value in view["cannot_infer"]),
         ]},
-        {"section_id": "limites", "title": "Limitaciones del VCF", "blocks": [
+        {"section_id": "limites", "title": labels["limits"], "blocks": [
             *({"type": "paragraph", "text": value} for value in view["limitations"]),
         ]},
-        {"section_id": "estado", "title": "Estado de validación", "blocks": [
+        {"section_id": "estado", "title": labels["status"], "blocks": [
             {"type": "paragraph", "text": view["processing_status"]["label_es"] + "."},
             {"type": "paragraph", "text": view["external_evidence_availability"]["label_es"] + "."},
-            {"type": "paragraph", "text": "Validación formal pendiente de un nuevo holdout independiente."},
+            {"type": "paragraph", "text": labels["formal"]},
             {"type": "paragraph", "text": view["disclaimer"]},
         ]},
     ]
     if view["secondary_findings"]:
         sections.insert(4, {
             "section_id": "contexto",
-            "title": "Hallazgos contextuales relevantes",
+            "title": labels["context"],
             "blocks": [
                 {"title": row["group_id"], "resumen": row["headline_es"], "aplicabilidad": "Limitada"}
                 for row in view["secondary_findings"]
             ],
         })
     legacy = {
-        "metadata": {"language_mode": "es", "audience_mode": "family", "disclaimer_required": True,
+        "metadata": {"language_mode": language, "audience_mode": "family", "disclaimer_required": True,
                      "presentation_mode": "client"},
         "global_report": {"report_title": view["title"]},
         "structured_report": {"version": "report_view_model_v3", "sections": sections},
     }
-    final_report.write_docx(path, legacy, {"fileName": view["source_file_name"], "languageMode": "es", "audienceMode": "family"})
+    final_report.write_docx(path, legacy, {"fileName": view["source_file_name"], "languageMode": language, "audienceMode": "family"})
 
 
-def write_pdf(view: dict, path: Path) -> None:
+def write_pdf(view: dict, path: Path, *, language: str = "es") -> None:
+    en = language == "en"
+    labels = {
+        "coverage": "Scientific coverage", "total": "Total groups", "covered": "Covered", "valid": "Valid interpretations",
+        "no_variant": "Covered without focus variant", "outside": "Outside snapshot", "prioritized": "Prioritized findings",
+        "modules": "Summary of the six modules", "findings": "Prioritized findings in this summary",
+        "context": "Relevant contextual findings", "cannot": "What cannot be inferred", "limits": "Limits and validation status",
+        "applicability": "Individual applicability", "relationship": "Scientific relationship",
+        "formal": "Formal validation pending: a new unseen holdout is required.",
+    } if en else {
+        "coverage": "Cobertura científica", "total": "Grupos totales", "covered": "Cubiertos", "valid": "Interpretaciones válidas",
+        "no_variant": "Cubiertos sin variante foco", "outside": "Fuera del snapshot", "prioritized": "Hallazgos priorizados",
+        "modules": "Resumen de los seis módulos", "findings": "Hallazgos priorizados en este resumen",
+        "context": "Hallazgos contextuales relevantes", "cannot": "Qué no puede inferirse", "limits": "Límites y estado de validación",
+        "applicability": "Aplicabilidad individual", "relationship": "Relación científica",
+        "formal": "Validación formal pendiente: se requiere un nuevo holdout unseen.",
+    }
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle(name="HealTitle", parent=styles["Title"], textColor=colors.HexColor("#143A2B"), alignment=TA_CENTER, fontSize=20, leading=24))
     styles.add(ParagraphStyle(name="HealH1", parent=styles["Heading1"], textColor=colors.HexColor("#275D38"), spaceBefore=10, spaceAfter=6))
@@ -635,11 +680,11 @@ def write_pdf(view: dict, path: Path) -> None:
         Paragraph(status_line, styles["BodyText"]), Spacer(1, 4 * mm),
         Paragraph(view["summary"], styles["BodyText"]),
     ]
-    story += [Spacer(1, 5 * mm), Paragraph("Cobertura científica", styles["HealH1"]), Paragraph(view["coverage_statement"], styles["BodyText"])]
+    story += [Spacer(1, 5 * mm), Paragraph(labels["coverage"], styles["HealH1"]), Paragraph(view["coverage_statement"], styles["BodyText"])]
     detail_table = Table([
-        ["Grupos totales", "Cubiertos", "Interpretaciones válidas"],
+        [labels["total"], labels["covered"], labels["valid"]],
         [view["coverage"]["canonical_group_count"], view["coverage"]["scientifically_covered_count"], view["coverage"]["valid_interpretation_count"]],
-        ["Cubiertos sin variante foco", "Fuera del snapshot", "Hallazgos priorizados"],
+        [labels["no_variant"], labels["outside"], labels["prioritized"]],
         [view["coverage"]["covered_no_observed_variant_count"], view["coverage"]["not_covered_count"], view["coverage"]["prioritized_finding_count"]],
     ], colWidths=[50 * mm] * 3)
     detail_table.setStyle(TableStyle([
@@ -649,28 +694,28 @@ def write_pdf(view: dict, path: Path) -> None:
         ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#A0A0A0")),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"), ("PADDING", (0, 0), (-1, -1), 6),
     ]))
-    story += [Spacer(1, 3 * mm), detail_table, PageBreak(), Paragraph("Resumen de los seis módulos", styles["HealH1"])]
+    story += [Spacer(1, 3 * mm), detail_table, PageBreak(), Paragraph(labels["modules"], styles["HealH1"])]
     for module in view["modules"]:
         story.append(KeepTogether([Paragraph(module["title"], styles["Heading2"]), Paragraph(module["summary"], styles["BodyText"]), Spacer(1, 2 * mm)]))
-    story += [PageBreak(), Paragraph("Hallazgos priorizados en este resumen", styles["HealH1"])]
+    story += [PageBreak(), Paragraph(labels["findings"], styles["HealH1"])]
     for row in view["primary_findings"]:
         story.append(KeepTogether([
             Paragraph(f"{row['gene']} — {row['module_name']}: {row['headline_es']}", styles["Heading2"]),
             Paragraph(row["explanation_es"], styles["BodyText"]),
-            Paragraph(f"{row['client_interpretation_type']} | Aplicabilidad individual: {row['individual_applicability']} | Relación científica: {row['scientific_relationship_confidence']}", styles["BodyText"]),
+            Paragraph(f"{row['client_interpretation_type']} | {labels['applicability']}: {row['individual_applicability']} | {labels['relationship']}: {row['scientific_relationship_confidence']}", styles["BodyText"]),
             Spacer(1, 3 * mm),
         ]))
     if view["secondary_findings"]:
-        story += [Paragraph("Hallazgos contextuales relevantes", styles["HealH1"])]
+        story += [Paragraph(labels["context"], styles["HealH1"])]
         for row in view["secondary_findings"]:
             story.append(Paragraph(f"{row['group_id']}: {row['headline_es']}", styles["BodyText"], bulletText="•"))
-    story += [Spacer(1, 5 * mm), Paragraph("Qué no puede inferirse", styles["HealH1"])]
+    story += [Spacer(1, 5 * mm), Paragraph(labels["cannot"], styles["HealH1"])]
     for value in view["cannot_infer"]:
         story.extend([Paragraph(value, styles["BodyText"], bulletText="•"), Spacer(1, 1.5 * mm)])
-    story += [Spacer(1, 5 * mm), Paragraph("Límites y estado de validación", styles["HealH1"])]
+    story += [Spacer(1, 5 * mm), Paragraph(labels["limits"], styles["HealH1"])]
     for value in view["limitations"]:
         story.extend([Paragraph(value, styles["BodyText"], bulletText="•"), Spacer(1, 1.5 * mm)])
-    story += [Spacer(1, 4 * mm), Paragraph(view["disclaimer"], styles["HealNote"]), Spacer(1, 3 * mm), Paragraph("Validación formal pendiente: se requiere un nuevo holdout unseen.", styles["BodyText"])]
+    story += [Spacer(1, 4 * mm), Paragraph(view["disclaimer"], styles["HealNote"]), Spacer(1, 3 * mm), Paragraph(labels["formal"], styles["BodyText"])]
     path.parent.mkdir(parents=True, exist_ok=True)
     SimpleDocTemplate(str(path), pagesize=A4, rightMargin=18 * mm, leftMargin=18 * mm, topMargin=18 * mm, bottomMargin=18 * mm, title=view["title"], author="HEAL by FON").build(story)
 
@@ -730,6 +775,8 @@ def process(request: dict) -> dict:
             planned_envelopes[group_id] = envelope
     projected_cost = sum(estimated_call_cost(envelope, llm1_prompt) for envelope in planned_envelopes.values())
     projected_cost += estimated_call_cost({"planned_valid_cards": len(planned_envelopes)}, (SCRIPT_DIR / "prompt_grouped_llm2_v1.md").read_text(encoding="utf-8"), reserved_output_tokens=8000)
+    if str(request.get("presentationLanguage") or "es").lower() == "en":
+        projected_cost += estimated_call_cost({"translation": "report_view_model_v3"}, presentation_translation.SYSTEM_PROMPT, reserved_output_tokens=8000)
     if not dry_run and projected_cost > estimate_cap:
         raise RuntimeError(f"Prototype projected cost USD {projected_cost:.4f} exceeds start guardrail USD {estimate_cap:.2f}")
     update_progress(progress_path, substage="preflight", processed=1, total=1,
@@ -882,6 +929,47 @@ def process(request: dict) -> dict:
     write_csv(output_dir / "coverage_client.csv", client_readiness.build_client_coverage_rows(client_result))
     write_csv(output_dir / "coverage.csv", coverage["groups"])
     write_csv(output_dir / "telemetry_costs.csv", telemetry)
+    presentation = {"requested_language": str(request.get("presentationLanguage") or "es").lower(), "english": {"status": "not_requested"}}
+    if presentation["requested_language"] == "en":
+        presentation_dir = output_dir / "presentation" / "en"
+        try:
+            if dry_run:
+                raise RuntimeError("presentation_translation_unavailable: dry_run_has_no_translation_call")
+            translation_started = time.perf_counter()
+            english_view, translation_result, translation_metadata = create_english_presentation(
+                view, api_key=api_key, timeout_seconds=timeout_seconds,
+            )
+            english_client = client_readiness.build_client_result(downstream_result, language="en")
+            english_client["presentation_translation"] = {
+                "status": "available", "source_view_sha256": presentation_translation.sha256_json(view),
+                "model": translation_metadata.get("effective_model"),
+            }
+            english_docx = presentation_dir / "HEAL_prototype_development_en.docx"
+            english_pdf = presentation_dir / "HEAL_prototype_development_en.pdf"
+            write_json(presentation_dir / "translation_request.json", presentation_translation.translation_payload(view))
+            write_json(presentation_dir / "translation_result.json", translation_result)
+            write_json(presentation_dir / "report_view_model_v3.en.json", english_view)
+            write_json(presentation_dir / "grouped_client_result_v2_en.json", english_client)
+            write_json(presentation_dir / "audit" / "raw_translation_response.json", translation_metadata.get("raw_response") or {})
+            write_docx(english_view, english_docx, language="en"); write_pdf(english_view, english_pdf, language="en")
+            telemetry.append(usage_row(
+                translation_metadata, stage="presentation_translation", group_id="global", role="english_report_translator",
+                elapsed=time.perf_counter() - translation_started,
+                model=os.environ.get("HEAL_PROTOTYPE_TRANSLATION_MODEL", "gpt-5.6-luna"),
+            ))
+            write_csv(output_dir / "telemetry_costs.csv", telemetry)
+            presentation["english"] = {
+                "status": "available", "source_view_sha256": presentation_translation.sha256_json(view),
+                "client_result": str(presentation_dir / "grouped_client_result_v2_en.json"),
+                "report_view_model": str(presentation_dir / "report_view_model_v3.en.json"),
+                "docx": str(english_docx), "pdf": str(english_pdf),
+            }
+        except Exception as error:  # noqa: BLE001
+            # Spanish remains canonical.  Never substitute it for an English request.
+            presentation["english"] = {"status": "unavailable", "error_code": str(error).split(":", 1)[0]}
+        write_json(output_dir / "presentation_status.json", presentation)
+    if presentation["requested_language"] != "en":
+        write_json(output_dir / "presentation_status.json", presentation)
     registry_after = sha256_file(ACTIVE_REGISTRY)
     if registry_after != registry_before:
         raise RuntimeError("Active registry changed during prototype execution")
@@ -917,7 +1005,8 @@ def process(request: dict) -> dict:
                     "technical_audit": str(output_dir / "raw_responses_audit.json"),
                     "downstream_result": str(output_dir / "grouped_downstream_result_v1.json"),
                     "client_result": str(output_dir / "grouped_client_result_v1.json"),
-                    "report_view_model": str(report_json)},
+                    "report_view_model": str(report_json), "presentation_status": str(output_dir / "presentation_status.json"),
+                    "english": presentation.get("english")},
         "started_at": started, "completed_at": now_iso(),
     }
     write_json(output_dir / "grouped_prototype_run_summary.json", summary)

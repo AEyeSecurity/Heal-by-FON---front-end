@@ -391,6 +391,7 @@ def call_openai_structured(
     schema: dict,
     timeout_seconds: int,
     reasoning_effort: str,
+    user_instruction: str | None = None,
 ) -> tuple[dict, dict]:
     body = {
         "model": model,
@@ -401,8 +402,9 @@ def call_openai_structured(
             {
                 "role": "user",
                 "content": (
-                    "Interpret this grouped gene-module payload. Return only JSON matching the schema.\n\n"
-                    f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+                    (user_instruction or "Interpret this grouped gene-module payload. Return only JSON matching the schema.")
+                    + "\n\n"
+                    + json.dumps(payload, ensure_ascii=False, indent=2)
                 ),
             },
         ],

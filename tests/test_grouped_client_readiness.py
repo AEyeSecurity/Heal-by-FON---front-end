@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "services" / "heal-grouped-prototype" / "client_readiness.py"
 REPLAY_PATH = ROOT / "tools" / "replay_grouped_client_readiness.py"
 RUNNER_PATH = ROOT / "services" / "heal-grouped-prototype" / "run_grouped_prototype.py"
+TRANSLATION_PATH = ROOT / "services" / "heal-grouped-prototype" / "grouped_presentation_translation.py"
 
 
 def load(name, path):
@@ -26,6 +27,7 @@ def load(name, path):
 CLIENT = load("heal_client_readiness_test", MODULE_PATH)
 REPLAY = load("heal_client_replay_test", REPLAY_PATH)
 RUNNER = load("heal_grouped_runner_client_test", RUNNER_PATH)
+TRANSLATION = load("heal_grouped_presentation_translation_test", TRANSLATION_PATH)
 
 
 def card(index, status, module="T1.1"):
@@ -141,6 +143,53 @@ class GroupedClientReadinessTests(unittest.TestCase):
         serialized = json.dumps(rows, ensure_ascii=False)
         self.assertNotIn("not_covered_by_prototype_snapshot", serialized)
         self.assertNotIn("covered_no_observed_variant", serialized)
+
+    def test_english_cards_use_existing_llm1_english_and_safe_template(self):
+        downstream = CLIENT.build_downstream_result(self.cards, self.coverage, self.llm2)
+        english = CLIENT.build_client_result(downstream, language="en")
+        self.assertEqual(english["schema_version"], "grouped_client_result_v2")
+        self.assertEqual(english["presentation_language"], "en")
+        self.assertEqual(english["cards"][0]["interpretation_en"]["summary"], "Valid contextual interpretation.")
+        no_observed = next(row for row in english["cards"] if row["status"] == "covered_no_observed_variant")
+        self.assertEqual(no_observed["interpretation_en"]["summary"], "Valid contextual interpretation.")
+
+    def test_translation_requires_exact_field_projection_and_preserves_facts(self):
+        downstream = CLIENT.build_downstream_result(self.cards, self.coverage, self.llm2)
+        view = CLIENT.build_report_view_model(CLIENT.build_client_result(downstream), self.llm2, "fixture.vcf")
+        request = TRANSLATION.translation_payload(view)
+        result = {
+            "schema_version": "grouped_presentation_translation_v1",
+            "source_view_sha256": request["source_view_sha256"], "target_language": "en",
+            "translations": [{"path": row["path"], "text_en": f"English {index}"} for index, row in enumerate(request["fields"])],
+        }
+        translated = TRANSLATION.apply_translation(view, result, request)
+        self.assertEqual(translated["schema_version"], "report_view_model_v3_en")
+        self.assertEqual(translated["coverage"], view["coverage"])
+        self.assertEqual(translated["primary_findings"][0]["group_id"], view["primary_findings"][0]["group_id"])
+        result["translations"] = result["translations"][:-1]
+        with self.assertRaisesRegex(ValueError, "field_paths_mismatch"):
+            TRANSLATION.apply_translation(view, result, request)
+
+    def test_english_docx_and_pdf_render_from_the_same_translated_view(self):
+        downstream = CLIENT.build_downstream_result(self.cards, self.coverage, self.llm2)
+        view = CLIENT.build_report_view_model(CLIENT.build_client_result(downstream), self.llm2, "fixture.vcf")
+        request = TRANSLATION.translation_payload(view)
+        result = {
+            "schema_version": "grouped_presentation_translation_v1",
+            "source_view_sha256": request["source_view_sha256"], "target_language": "en",
+            "translations": [{"path": row["path"], "text_en": "English client text."} for row in request["fields"]],
+        }
+        english = TRANSLATION.apply_translation(view, result, request)
+        with tempfile.TemporaryDirectory() as temporary:
+            docx, pdf = Path(temporary) / "report.docx", Path(temporary) / "report.pdf"
+            RUNNER.write_docx(english, docx, language="en")
+            RUNNER.write_pdf(english, pdf, language="en")
+            self.assertTrue(docx.exists()); self.assertTrue(pdf.exists())
+            with zipfile.ZipFile(docx) as archive:
+                docx_text = archive.read("word/document.xml").decode("utf-8")
+            pdf_text = " ".join(page.extract_text() or "" for page in PdfReader(pdf).pages)
+        self.assertIn("General summary", docx_text)
+        self.assertIn("Scientific coverage", pdf_text)
 
     def test_coverage_mismatch_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "coverage_"):

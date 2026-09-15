@@ -53,12 +53,15 @@ export function groupedClientSummary(grouped = {}) {
   const noObserved = Number(counts.covered_no_observed_variant || 0);
   const uncovered = Number(counts.not_covered || 0);
   return {
-    processing: { status: "completed", label_es: "Procesamiento completado" },
+    processing: { status: "completed", label_es: "Procesamiento completado", label_en: "Processing completed" },
     externalEvidence: {
       status: grouped.external_evidence_partial ? "partial" : "complete",
       label_es: grouped.external_evidence_partial
         ? "Algunas fuentes externas no estuvieron completamente disponibles"
         : "Fuentes externas disponibles para esta ejecución",
+      label_en: grouped.external_evidence_partial
+        ? "Some external sources were not fully available"
+        : "External sources were available for this run",
     },
     coverage: {
       canonical_group_count: canonical,
@@ -70,6 +73,8 @@ export function groupedClientSummary(grouped = {}) {
     },
     coverageConsistent: covered + uncovered === canonical && valid + noObserved === covered,
     prototypeLabel: "Prototipo de desarrollo",
+    prototypeLabelEn: "Development prototype",
     formalValidationLabel: "Validación formal pendiente de un nuevo holdout independiente",
+    formalValidationLabelEn: "Formal validation is pending a new independent holdout",
   };
 }
