@@ -15,6 +15,7 @@ MODULE_PATH = ROOT / "services" / "heal-grouped-prototype" / "client_readiness.p
 REPLAY_PATH = ROOT / "tools" / "replay_grouped_client_readiness.py"
 RUNNER_PATH = ROOT / "services" / "heal-grouped-prototype" / "run_grouped_prototype.py"
 TRANSLATION_PATH = ROOT / "services" / "heal-grouped-prototype" / "grouped_presentation_translation.py"
+PRESENTATION_REPLAY_PATH = ROOT / "tools" / "replay_grouped_prototype_presentation.py"
 
 
 def load(name, path):
@@ -28,6 +29,7 @@ CLIENT = load("heal_client_readiness_test", MODULE_PATH)
 REPLAY = load("heal_client_replay_test", REPLAY_PATH)
 RUNNER = load("heal_grouped_runner_client_test", RUNNER_PATH)
 TRANSLATION = load("heal_grouped_presentation_translation_test", TRANSLATION_PATH)
+PRESENTATION_REPLAY = load("heal_grouped_presentation_replay_test", PRESENTATION_REPLAY_PATH)
 
 
 def card(index, status, module="T1.1"):
@@ -86,6 +88,29 @@ class GroupedClientReadinessTests(unittest.TestCase):
         self.assertEqual(counts["scientifically_covered_count"], counts["valid_interpretation_count"] + counts["covered_no_observed_variant_count"])
         self.assertEqual(counts["valid_interpretation_count"], 60)
         self.assertEqual(counts["prioritized_finding_count"], 5)
+
+    def test_quarantine_is_counted_as_covered_but_not_valid(self):
+        quarantined = card(999, "quarantined", "T1.1")
+        quarantined["eligible_for_llm2"] = False
+        cards = self.cards[:60] + [quarantined] + self.cards[60:]
+        coverage = {"canonical_group_count": 181, "covered_count": 106, "not_covered_count": 75}
+        downstream = CLIENT.build_downstream_result(cards, coverage, self.llm2)
+        counts = downstream["coverage"]
+        self.assertEqual(counts["valid_interpretation_count"], 60)
+        self.assertEqual(counts["covered_no_observed_variant_count"], 45)
+        self.assertEqual(counts["quarantined_count"], 1)
+        self.assertEqual(counts["scientifically_covered_count"], 106)
+        self.assertEqual(counts["valid_interpretation_count"] + counts["covered_no_observed_variant_count"] + counts["quarantined_count"], 106)
+
+    def test_quarantined_client_card_has_no_interpretive_detail(self):
+        quarantined = card(999, "quarantined", "T1.1")
+        cards = self.cards[:60] + [quarantined] + self.cards[60:]
+        coverage = {"canonical_group_count": 181, "covered_count": 106, "not_covered_count": 75}
+        downstream = CLIENT.build_downstream_result(cards, coverage, self.llm2)
+        client = CLIENT.build_client_result(downstream, language="en")
+        row = next(item for item in client["cards"] if item["status"] == "quarantined")
+        self.assertEqual(row["interpretation_en"]["detail"], "")
+        self.assertIn("isolated", " ".join(row["limitations_en"]).lower())
 
     def test_legacy_authority_removed_but_audit_input_unchanged(self):
         original = json.dumps(self.cards, ensure_ascii=False)
@@ -250,6 +275,18 @@ class GroupedClientReadinessTests(unittest.TestCase):
                 self.assertNotIn("not_reported", rendered_text)
         self.assertEqual(before, {path: REPLAY.sha256(path) for path in source_files})
         self.assertEqual(RUNNER.EXPECTED_REGISTRY_SHA256, RUNNER.sha256_file(RUNNER.ACTIVE_REGISTRY))
+
+    def test_presentation_replay_reuses_state_without_llm1_or_llm2(self):
+        run_dir = Path(r"F:\Heal by FON\data\runs\285e262c-1efb-4828-8e10-f3477704ff99")
+        if not (run_dir / "grouped-prototype" / "grouped_prototype_execution_state.json").exists():
+            self.skipTest("Latest grouped execution state is unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            summary = PRESENTATION_REPLAY.process(run_dir, Path(temporary) / "replay", translate=False)
+            self.assertEqual(summary["telemetry"]["llm_calls"], 0)
+            self.assertEqual(summary["counts"]["valid_interpretation_count"], 57)
+            self.assertEqual(summary["counts"]["quarantined"], 1)
+            self.assertTrue((Path(temporary) / "replay" / "HEAL_prototipo_cliente.pdf").exists())
+            self.assertEqual(summary["registry_sha256_before"], RUNNER.EXPECTED_REGISTRY_SHA256)
 
 
 if __name__ == "__main__":

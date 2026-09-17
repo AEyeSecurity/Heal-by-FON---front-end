@@ -1955,8 +1955,9 @@ function MatchResultPanel({ result: sourceResult, locale, t }) {
   const [llm1CardsLoading, setLlm1CardsLoading] = useState(false);
   const [llm1CardsError, setLlm1CardsError] = useState(null);
   const [llm1CardLanguage, setLlm1CardLanguage] = useState(locale?.startsWith("es") ? "es" : "en");
+  const groupedJob = Boolean(result?.groupedPrototype || result?.artifactsReady?.groupedPrototype || result?.schemaVersion === "gene_module_v2");
   const prototypeCardsReady = Boolean(result?.artifactsReady?.groupedPrototypeCards);
-  const cardsReady = prototypeCardsReady || Boolean(result?.artifactsReady?.groupCardsV7);
+  const cardsReady = groupedJob ? prototypeCardsReady : Boolean(result?.artifactsReady?.groupCardsV7);
   useEffect(() => {
     if (!result?.jobId || !cardsReady) {
       setLlm1Cards([]);
@@ -1965,7 +1966,7 @@ function MatchResultPanel({ result: sourceResult, locale, t }) {
     let cancelled = false;
     setLlm1CardsLoading(true);
     setLlm1CardsError(null);
-    const cardsEndpoint = prototypeCardsReady
+    const cardsEndpoint = groupedJob
       ? `/api/vcf-canon-matches/${result.jobId}/grouped-prototype/cards?languageMode=${llm1CardLanguage}`
       : `/api/vcf-canon-matches/${result.jobId}/llm1-group-cards`;
     fetch(`${API_BASE}${cardsEndpoint}`, {
@@ -1980,7 +1981,7 @@ function MatchResultPanel({ result: sourceResult, locale, t }) {
       .catch((loadError) => { if (!cancelled) setLlm1CardsError(loadError.message || String(loadError)); })
       .finally(() => { if (!cancelled) setLlm1CardsLoading(false); });
     return () => { cancelled = true; };
-  }, [result?.jobId, result?.updatedAt, cardsReady, prototypeCardsReady, llm1CardLanguage]);
+  }, [result?.jobId, result?.updatedAt, cardsReady, prototypeCardsReady, groupedJob, llm1CardLanguage]);
   if (!result) return null;
 
   const isValid = result.status === "valid";
@@ -2206,12 +2207,14 @@ function MatchResultPanel({ result: sourceResult, locale, t }) {
       ]
     : [];
   const clientCoverage = groupedPrototype.coverage || {};
+  const englishReportUnavailable = groupedPrototype.outputs?.english?.status === "unavailable" || result.presentation_language === "en_unavailable";
   const groupedPrototypeCards = (groupedPrototype.status || clientCoverage.canonical_group_count)
     ? [
         [locale?.startsWith("es") ? "Grupos totales" : "Total groups", formatNumber(clientCoverage.canonical_group_count ?? groupedPrototype.counts?.canonical_groups, locale)],
         [t.groupedPrototypeCovered, formatNumber(clientCoverage.scientifically_covered_count ?? groupedPrototype.counts?.scientifically_covered, locale)],
         [t.groupedPrototypeValid, formatNumber(clientCoverage.valid_interpretation_count ?? groupedPrototype.counts?.valid_llm1_cards, locale)],
         [t.groupedPrototypeNoObserved, formatNumber(clientCoverage.covered_no_observed_variant_count ?? groupedPrototype.counts?.covered_no_observed_variant, locale)],
+        [locale?.startsWith("es") ? "Aislados" : "Quarantined", formatNumber(clientCoverage.quarantined_count ?? groupedPrototype.counts?.quarantined, locale)],
         [t.groupedPrototypeNotCovered, formatNumber(clientCoverage.not_covered_count ?? groupedPrototype.counts?.not_covered, locale)],
         [locale?.startsWith("es") ? "Hallazgos priorizados" : "Prioritized findings", formatNumber(clientCoverage.prioritized_finding_count ?? groupedPrototype.counts?.prioritized_finding_count, locale)],
       ]
@@ -2699,6 +2702,9 @@ function MatchResultPanel({ result: sourceResult, locale, t }) {
             ? "Prototipo de desarrollo. La validación formal permanece pendiente de un nuevo holdout independiente."
             : "Development prototype. Formal validation remains pending a new independent holdout."}
         </p>
+        {englishReportUnavailable && locale?.startsWith("en") && (
+          <p className="llm1-card-notice warning">English report translation is unavailable. English cards remain available; the Spanish summary can be downloaded below.</p>
+        )}
         <div className="metrics-grid">
           {groupedPrototypeCards.map(([label, value]) => <MetricCard label={label} value={value} key={label} />)}
         </div>
@@ -2712,7 +2718,7 @@ function MatchResultPanel({ result: sourceResult, locale, t }) {
           t={t}
         />
         <div className="match-download-actions">
-          {artifactReady.groupedPrototypePdf && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("pdf", "HEAL_prototipo_cliente.pdf")}><Download size={17} />{t.groupedPrototypePdf}</button>}
+          {artifactReady.groupedPrototypePdf && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("pdf", "HEAL_prototipo_cliente.pdf")}><Download size={17} />{locale?.startsWith("en") && englishReportUnavailable ? "Download Spanish summary PDF" : t.groupedPrototypePdf}</button>}
           {artifactReady.groupedPrototypeDocx && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("docx", "HEAL_prototipo_cliente.docx")}><Download size={17} />{t.groupedPrototypeDocx}</button>}
           {artifactReady.groupedPrototypePdfEn && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("pdf-en", "HEAL_prototype_development_en.pdf")}><Download size={17} />Download English PDF</button>}
           {artifactReady.groupedPrototypeDocxEn && <button className="secondary-button match-download-button" type="button" onClick={() => downloadGroupedPrototypeArtifact("docx-en", "HEAL_prototype_development_en.docx")}><Download size={17} />Download English DOCX</button>}
