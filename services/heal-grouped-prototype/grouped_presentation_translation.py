@@ -15,6 +15,14 @@ from typing import Any, Callable
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+MODULE_LABELS_EN = {
+    "T1.1": "Core system resilience",
+    "T1.2": "Sleep and circadian rhythms",
+    "T1.3": "Essential nutrients and cofactors",
+    "T1.4": "Immunity and inflammation",
+    "T1.5": "Connective tissue and physical resilience",
+    "T1.6": "Detoxification and oxidative stress management",
+}
 
 
 def sha256_json(value: object) -> str:
@@ -125,6 +133,11 @@ def apply_translation(view: dict, result: dict, request: dict) -> dict:
     translated = copy.deepcopy(view)
     for row in result["translations"]:
         _set_path(translated, row["path"], row["text_en"])
+    for section in ("primary_findings", "secondary_findings"):
+        for finding in translated.get(section) or []:
+            module_id = str(finding.get("module_id") or "")
+            if module_id in MODULE_LABELS_EN:
+                finding["module_name"] = MODULE_LABELS_EN[module_id]
     translated["schema_version"] = "report_view_model_v3_en"
     translated["presentation_language"] = "en"
     translated["translation_source_sha256"] = request["source_view_sha256"]
