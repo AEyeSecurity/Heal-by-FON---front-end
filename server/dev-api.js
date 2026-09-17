@@ -40,6 +40,7 @@ const EVIDENCE_REFINEMENT_ROOT = RUNTIME_PATHS.evidenceRefinement;
 const GROUPED_INTERPRETATION_PREP_ROOT = RUNTIME_PATHS.groupedPrep;
 const GROUPED_INDIVIDUAL_INTERPRETATION_ROOT = RUNTIME_PATHS.groupedInterpretation;
 const GROUPED_PROTOTYPE_ROOT = RUNTIME_PATHS.groupedPrototype;
+const GROUPED_PRESENTATION_REPLAY_SCRIPT = path.join(APP_ROOT, "tools", "replay_grouped_prototype_presentation.py");
 const INDIVIDUAL_INTERPRETATION_ROOT = RUNTIME_PATHS.individualInterpretation;
 const INTERPRETATION_NORMALIZATION_ROOT = RUNTIME_PATHS.interpretationNormalization;
 const GLOBAL_INTERPRETATION_ROOT = RUNTIME_PATHS.globalInterpretation;
@@ -1793,9 +1794,20 @@ async function verifyTurnstile(token, remoteIp) {
 
 function publicErrorMessage(job) {
   if (!job?.error) return null;
-  if (job.stage === "grouped_prototype") return "El prototipo agrupado no pudo completar esta ejecución.";
-  if (isVariantEnrichmentStage(job.stage)) return "El enriquecimiento externo no pudo completar esta ejecución.";
-  return "La ejecución no pudo completarse. Use el Job ID para solicitar soporte.";
+  const english = String(job.presentation_language || "").toLowerCase() === "en";
+  if (job.stage === "grouped_prototype") {
+    return english
+      ? "The grouped prototype could not complete this run."
+      : "El prototipo agrupado no pudo completar esta ejecución.";
+  }
+  if (isVariantEnrichmentStage(job.stage)) {
+    return english
+      ? "External enrichment could not complete this run."
+      : "El enriquecimiento externo no pudo completar esta ejecución.";
+  }
+  return english
+    ? "The run could not be completed. Use the Job ID to request support."
+    : "La ejecución no pudo completarse. Use el Job ID para solicitar soporte.";
 }
 
 function publicJob(job) {
@@ -4078,9 +4090,13 @@ async function runGroupedPrototypeForJob(job, { dryRun = false, languageMode = "
     groupedPrototypeReportViewJson: path.join(outputDir, "report_view_model_v3.json"),
     groupedPrototypePresentationStatusJson: path.join(outputDir, "presentation_status.json"),
   });
-  if (summary.outputs?.english?.status === "available") {
+  if (summary.outputs?.english?.client_result) {
     Object.assign(job.artifacts, {
       groupedPrototypeClientEnJson: summary.outputs.english.client_result,
+    });
+  }
+  if (summary.outputs?.english?.status === "available") {
+    Object.assign(job.artifacts, {
       groupedPrototypeReportViewEnJson: summary.outputs.english.report_view_model,
       groupedPrototypeDocxEn: summary.outputs.english.docx,
       groupedPrototypePdfEn: summary.outputs.english.pdf,
@@ -4162,13 +4178,15 @@ app.post("/api/vcf-canon-matches/:jobId/grouped-prototype", async (req, res) => 
   (async () => {
     try {
       const summary = await runGroupedPrototypeForJob(job, { dryRun, languageMode });
-      job.status = summary.status === "prototype_demo_ready_automatic" ? "complete" : "failed";
+      const groupedFinished = ["prototype_demo_ready_automatic", "prototype_demo_incomplete"].includes(summary.status);
+      job.status = groupedFinished ? "complete" : "failed";
       job.progress = 100;
       job.stageProgress = 100;
       job.message = summary.status === "prototype_demo_ready_automatic"
         ? "Grouped prototype report completed"
         : "Grouped prototype completed with isolated failures";
       if (job.status === "failed") job.error = summary.status;
+      else job.error = null;
     } catch (error) {
       job.status = "failed";
       job.progress = 100;
@@ -4226,6 +4244,46 @@ app.post("/api/vcf-canon-matches/:jobId/grouped-prototype/presentation", async (
     }
   })();
   res.status(202).json({ status: "pending", languageMode: "en" });
+});
+
+// Rebuild a client presentation from an immutable grouped run.  This route
+// never executes LLM1/LLM2 or upstream enrichment; it creates a separate
+// preview job and may call only the explicit English report translator.
+app.post("/api/vcf-canon-matches/:jobId/grouped-prototype/replay-presentation", async (req, res) => {
+  if (!HEAL_PROTOTYPE_TRANSLATION_ENABLED) {
+    res.status(409).json({ error: "English presentation generation is disabled." });
+    return;
+  }
+  const sourceJob = jobs.get(req.params.jobId);
+  if (!sourceJob) return res.status(404).json({ error: "VCF-canon match job not found." });
+  const upload = await loadUpload(sourceJob.uploadId).catch(() => null);
+  if (!hasUploadAccessToken(req, upload)) return res.status(403).json({ error: "Job access denied." });
+  if (!requireCurationAccess(req, res)) return;
+  const sourceRun = path.resolve(RUNTIME_PATHS.runs, sourceJob.id);
+  const statePath = path.join(sourceRun, "grouped-prototype", "grouped_prototype_execution_state.json");
+  if (!isPathInside(RUNTIME_PATHS.runs, statePath) || !existsSync(statePath)) {
+    return res.status(409).json({ error: "Persisted grouped execution state is unavailable for replay." });
+  }
+  const previewId = `preview-${crypto.randomUUID()}`;
+  const outputDir = jobStageDirectory(previewId, "grouped-prototype-replay");
+  const args = [
+    GROUPED_PRESENTATION_REPLAY_SCRIPT,
+    "--source-run", sourceRun,
+    "--output-dir", outputDir,
+    "--preview-job-id", previewId,
+  ];
+  res.status(202).json({ status: "pending", sourceJobId: sourceJob.id, previewJobId: previewId });
+  runPythonJsonCommand(GROUPED_PRESENTATION_REPLAY_SCRIPT, args.slice(1))
+    .then(async () => {
+      const previewPath = vcfCanonJobPath(previewId);
+      const preview = JSON.parse(await readFile(previewPath, "utf8"));
+      const hydrated = hydrateJobArtifacts(preview);
+      jobs.set(previewId, hydrated);
+      appendVcfCanonJobLog(hydrated, "presentation_replay_completed", { sourceJobId: sourceJob.id }).catch(() => {});
+    })
+    .catch(async (error) => {
+      appendVcfCanonJobLog(sourceJob, "presentation_replay_failed", { previewJobId: previewId, message: error.message }).catch(() => {});
+    });
 });
 
 function groupedClientReplayArtifact(job, fileName) {
@@ -4294,9 +4352,6 @@ app.get("/api/vcf-canon-matches/:jobId/grouped-prototype/cards", async (req, res
   }
   const languageMode = String(req.query?.languageMode || req.query?.language || "es").toLowerCase();
   if (!["es", "en"].includes(languageMode)) return res.status(400).json({ error: "languageMode must be es or en." });
-  if (languageMode === "en" && !job.artifacts?.groupedPrototypeClientEnJson) {
-    return res.status(409).json({ error: "English presentation is unavailable; generate it explicitly first." });
-  }
   const replayPath = languageMode === "es" ? groupedClientReplayArtifact(job, "grouped_client_result_v1.json") : "";
   const clientPath = path.resolve(replayPath || (languageMode === "en" ? job.artifacts?.groupedPrototypeClientEnJson : job.artifacts?.groupedPrototypeClientJson) || "");
   if (clientPath && isPathInside(GROUPED_PROTOTYPE_ROOT, clientPath) && existsSync(clientPath)) {
