@@ -51,6 +51,7 @@ export function groupedClientSummary(grouped = {}) {
   const covered = Number(counts.scientifically_covered || 0);
   const valid = Number(counts.valid_interpretation_count ?? counts.valid_llm1_cards ?? 0);
   const noObserved = Number(counts.covered_no_observed_variant || 0);
+  const quarantined = Number(counts.quarantined_count ?? counts.quarantined ?? 0);
   const uncovered = Number(counts.not_covered || 0);
   return {
     processing: { status: "completed", label_es: "Procesamiento completado", label_en: "Processing completed" },
@@ -68,10 +69,13 @@ export function groupedClientSummary(grouped = {}) {
       scientifically_covered_count: covered,
       valid_interpretation_count: valid,
       covered_no_observed_variant_count: noObserved,
+      quarantined_count: quarantined,
       not_covered_count: uncovered,
       prioritized_finding_count: Number(counts.prioritized_finding_count || 0),
     },
-    coverageConsistent: covered + uncovered === canonical && valid + noObserved === covered,
+    coverageConsistent: covered + uncovered === canonical && valid + noObserved + quarantined === covered,
+    status: quarantined > 0 ? "prototype_demo_incomplete" : "prototype_demo_ready_automatic",
+    cardsStatus: "available",
     prototypeLabel: "Prototipo de desarrollo",
     prototypeLabelEn: "Development prototype",
     formalValidationLabel: "Validación formal pendiente de un nuevo holdout independiente",
