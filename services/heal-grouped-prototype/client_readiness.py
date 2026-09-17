@@ -79,6 +79,8 @@ UNRESOLVED_IDENTITY_LIMITATION_EN = (
 SPARSE_VCF_LIMITATION_EN = (
     "The input contains observed variants; absence does not demonstrate homozygous reference status or confirmed callability."
 )
+QUARANTINED_CARD_ES = "Resultado aislado por una validación técnica; no se generó una interpretación para este grupo."
+QUARANTINED_CARD_EN = "Result isolated by a technical validation check; no interpretation was generated for this group."
 
 
 def _sentences(value: str) -> list[str]:
@@ -214,17 +216,19 @@ def normalize_card(card: dict, prioritized: dict[str, int] | None = None) -> dic
 def _coverage_counts(cards: list[dict], canonical: int, covered: int, uncovered: int) -> dict:
     valid = sum(row.get("status") == "valid" for row in cards)
     no_observed = sum(row.get("status") == "covered_no_observed_variant" for row in cards)
+    quarantined = sum(row.get("status") == "quarantined" for row in cards)
     if len(cards) != canonical:
         raise ValueError("client_readiness_coverage_card_count_mismatch")
     if covered + uncovered != canonical:
         raise ValueError("client_readiness_coverage_total_mismatch")
-    if valid + no_observed != covered:
+    if valid + no_observed + quarantined != covered:
         raise ValueError("client_readiness_covered_breakdown_mismatch")
     return {
         "canonical_group_count": canonical,
         "scientifically_covered_count": covered,
         "valid_interpretation_count": valid,
         "covered_no_observed_variant_count": no_observed,
+        "quarantined_count": quarantined,
         "not_covered_count": uncovered,
     }
 
@@ -323,6 +327,8 @@ def build_client_result(downstream: dict, *, language: str = "es") -> dict:
             notices.append(UNRESOLVED_IDENTITY_LIMITATION_EN if language == "en" else UNRESOLVED_IDENTITY_LIMITATION_ES)
         if row.get("status") == "covered_no_observed_variant":
             notices.append(SPARSE_VCF_LIMITATION_EN if language == "en" else SPARSE_VCF_LIMITATION_ES)
+        if row.get("status") == "quarantined":
+            notices.append(QUARANTINED_CARD_EN if language == "en" else QUARANTINED_CARD_ES)
         summary_key = "interpretation_one_sentence_en" if language == "en" else "interpretation_one_sentence_es"
         detail_key = "interpretation_long_en" if language == "en" else "interpretation_long_es"
         interpretation_key = "interpretation_en" if language == "en" else "interpretation_es"
@@ -342,8 +348,13 @@ def build_client_result(downstream: dict, *, language: str = "es") -> dict:
             "scientific_confidence": row.get("final_confidence_level"),
             f"scientific_confidence_label_{language}": confidence_label,
             interpretation_key: {
-                "summary": row.get(summary_key) or (SPARSE_VCF_LIMITATION_EN if language == "en" and row.get("status") == "covered_no_observed_variant" else SPARSE_VCF_LIMITATION_ES if row.get("status") == "covered_no_observed_variant" else ""),
-                "detail": row.get(detail_key) or "",
+                "summary": row.get(summary_key) or (
+                    SPARSE_VCF_LIMITATION_EN if language == "en" and row.get("status") == "covered_no_observed_variant"
+                    else SPARSE_VCF_LIMITATION_ES if row.get("status") == "covered_no_observed_variant"
+                    else QUARANTINED_CARD_EN if language == "en" and row.get("status") == "quarantined"
+                    else QUARANTINED_CARD_ES if row.get("status") == "quarantined" else ""
+                ),
+                "detail": (row.get(detail_key) or "") if row.get("status") != "quarantined" else "",
             },
             "observed_variant_refs": list(row.get("focus_variant_refs") or []),
             "evidence_summary": {"record_count": len(row.get("evidence_used") or []), "sources": source_labels},
@@ -379,6 +390,9 @@ def build_client_coverage_rows(client: dict) -> list[dict]:
         "not_covered_by_prototype_snapshot": (
             "Fuera del snapshot científico", "No evaluado por el prototipo", "No interpretado",
         ),
+        "quarantined": (
+            "Científicamente cubierto", "Variante foco observada", "Resultado aislado por validación técnica",
+        ),
     }
     rows = []
     for card in client.get("cards") or []:
@@ -410,7 +424,7 @@ def build_report_view_model(client: dict, llm2_result: dict, source_name: str) -
     findings: list[dict] = []
     for rank, finding in enumerate(llm2_result.get("key_findings") or [], 1):
         card = by_group.get(finding.get("group_id"), {})
-        if not card:
+        if not card or card.get("status") != "valid":
             continue
         findings.append({
             "group_id": finding.get("group_id"), "gene": card.get("gene"),
@@ -447,7 +461,15 @@ def build_report_view_model(client: dict, llm2_result: dict, source_name: str) -
                 f"{len(valid_in_module)} resultados contextuales válidos en el módulo."
             )
         else:
-            summary = "No se generaron interpretaciones válidas para este módulo en el VCF observado."
+            quarantined_in_module = sum(
+                row.get("status") == "quarantined" for row in cards if row.get("module_id") == module_id
+            )
+            summary = (
+                "No se generaron interpretaciones válidas para este módulo en el VCF observado. "
+                "Existe un resultado aislado por validación técnica."
+                if quarantined_in_module else
+                "No se generaron interpretaciones válidas para este módulo en el VCF observado."
+            )
         modules.append({
             "module_id": module_id, "title": title, "summary": summary,
             "valid_interpretation_count": len(valid_in_module),
@@ -459,7 +481,8 @@ def build_report_view_model(client: dict, llm2_result: dict, source_name: str) -
         f"familiar. Cubre científicamente {counts['scientifically_covered_count']} de "
         f"{counts['canonical_group_count']} grupos: {counts['valid_interpretation_count']} generaron "
         f"interpretaciones válidas, {counts['covered_no_observed_variant_count']} no presentaron una variante "
-        f"foco observada y {counts['not_covered_count']} quedaron fuera del snapshot. "
+        f"foco observada, {counts['quarantined_count']} quedaron aisladas por validación técnica y "
+        f"{counts['not_covered_count']} quedaron fuera del snapshot. "
         f"El resumen prioriza {counts['prioritized_finding_count']} hallazgos; priorización no significa que sean "
         "las únicas interpretaciones válidas. El resultado no establece diagnósticos, causalidad, riesgo "
         "individual ni recomendaciones de tratamiento."
@@ -469,6 +492,7 @@ def build_report_view_model(client: dict, llm2_result: dict, source_name: str) -
         f"{counts['scientifically_covered_count']} científicamente cubiertos; "
         f"{counts['valid_interpretation_count']} con interpretación válida; "
         f"{counts['covered_no_observed_variant_count']} cubiertos sin variante foco observada; "
+        f"{counts['quarantined_count']} aislados por validación técnica; "
         f"{counts['not_covered_count']} fuera del snapshot."
     )
     view = {
@@ -504,8 +528,8 @@ def build_report_view_model(client: dict, llm2_result: dict, source_name: str) -
         "disclaimer": clean_authoritative_text(llm2_result.get("disclaimer_es") or "") or
         "Las inferencias fueron generadas por una LLM y son orientativas; no constituyen diagnóstico ni indicación terapéutica.",
         "readiness": {
-            "prototype_e2e_v1_closed": True,
-            "client_prototype_ready": True,
+            "prototype_e2e_v1_closed": counts["quarantined_count"] == 0,
+            "client_prototype_ready": counts["quarantined_count"] == 0,
             "formal_validation_readiness": "pending_new_unseen_holdout",
         },
     }

@@ -932,6 +932,9 @@ def process(request: dict) -> dict:
     presentation = {"requested_language": str(request.get("presentationLanguage") or "es").lower(), "english": {"status": "not_requested"}}
     if presentation["requested_language"] == "en":
         presentation_dir = output_dir / "presentation" / "en"
+        english_client = client_readiness.build_client_result(downstream_result, language="en")
+        english_client_path = presentation_dir / "grouped_client_result_v2_en.json"
+        write_json(english_client_path, english_client)
         try:
             if dry_run:
                 raise RuntimeError("presentation_translation_unavailable: dry_run_has_no_translation_call")
@@ -939,7 +942,6 @@ def process(request: dict) -> dict:
             english_view, translation_result, translation_metadata = create_english_presentation(
                 view, api_key=api_key, timeout_seconds=timeout_seconds,
             )
-            english_client = client_readiness.build_client_result(downstream_result, language="en")
             english_client["presentation_translation"] = {
                 "status": "available", "source_view_sha256": presentation_translation.sha256_json(view),
                 "model": translation_metadata.get("effective_model"),
@@ -959,14 +961,23 @@ def process(request: dict) -> dict:
             ))
             write_csv(output_dir / "telemetry_costs.csv", telemetry)
             presentation["english"] = {
-                "status": "available", "source_view_sha256": presentation_translation.sha256_json(view),
+                "status": "available", "cards_status": "available", "source_view_sha256": presentation_translation.sha256_json(view),
                 "client_result": str(presentation_dir / "grouped_client_result_v2_en.json"),
                 "report_view_model": str(presentation_dir / "report_view_model_v3.en.json"),
                 "docx": str(english_docx), "pdf": str(english_pdf),
             }
         except Exception as error:  # noqa: BLE001
             # Spanish remains canonical.  Never substitute it for an English request.
-            presentation["english"] = {"status": "unavailable", "error_code": str(error).split(":", 1)[0]}
+            english_client["presentation_translation"] = {
+                "status": "unavailable", "fallback_language": "es",
+                "error_code": str(error).split(":", 1)[0],
+            }
+            write_json(english_client_path, english_client)
+            presentation["english"] = {
+                "status": "unavailable", "cards_status": "available",
+                "client_result": str(english_client_path),
+                "fallback_language": "es", "error_code": str(error).split(":", 1)[0],
+            }
         write_json(output_dir / "presentation_status.json", presentation)
     if presentation["requested_language"] != "en":
         write_json(output_dir / "presentation_status.json", presentation)
